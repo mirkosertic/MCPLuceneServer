@@ -38,11 +38,8 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 ## Table of Contents
 
 - [Quick Start](#quick-start)
-- [Prerequisites](#prerequisites)
-- [Building the Server](#building-the-server)
 - [Configuration Options](#configuration-options)
   - [Document Crawler Configuration](#document-crawler-configuration)
-- [Integrating with Claude Desktop](#integrating-with-claude-desktop)
 - [Available MCP Tools](#available-mcp-tools)
 - [Index Field Schema](#index-field-schema)
 - [Document Crawler Features](#document-crawler-features)
@@ -52,51 +49,16 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 
 ## Quick Start
 
-### Option 1: Configure via MCP Tools (Recommended)
+Get up and running with MCP Lucene Server in three steps.
 
-```bash
-# 1. Build the server
-./mvnw clean package -DskipTests
+### Prerequisites
 
-# 2. Configure in Claude Desktop (see below)
+- **Java 21 or later** - Required to run the server
+- Maven 3.9+ (only if building from source)
 
-# 3. Use Claude to configure directories via MCP tools:
-# "Add /Users/yourname/Documents as a crawlable directory"
-# Claude will call addCrawlableDirectory() for you
-```
+### Step 1: Get the Server
 
-The configuration is automatically saved to `~/.mcplucene/config.yaml` and persists across restarts.
-
-### Option 2: Manual Configuration
-
-```bash
-# 1. Configure directories to index
-# Edit src/main/resources/application.yaml:
-lucene:
-  crawler:
-    directories:
-      - "/path/to/your/documents"
-
-# 2. Build the server
-./mvnw clean package -DskipTests
-
-# 3. The JAR file is created at target/luceneserver-0.0.1-SNAPSHOT.jar
-```
-
-Then configure your MCP client (see [Claude Desktop Integration](#integrating-with-claude-desktop) below).
-
-The crawler will automatically start indexing your documents when the server starts. You can then search through them using Claude or any MCP-compatible client.
-
-## Prerequisites
-
-- Java 21 or later
-- Maven 3.9+ (or use the included Maven wrapper)
-
-## Getting the Server
-
-### Option 1: Download Pre-built JAR (Recommended)
-
-Download the latest pre-built JAR from GitHub Actions:
+**Option A: Download Pre-built JAR (Recommended)**
 
 1. Go to the [Actions tab](https://github.com/mirkosertic/MCPLuceneServer/actions/workflows/build.yml)
 2. Click on the most recent successful workflow run
@@ -105,7 +67,7 @@ Download the latest pre-built JAR from GitHub Actions:
 
 For tagged releases, you can also download from the [Releases page](https://github.com/mirkosertic/MCPLuceneServer/releases).
 
-### Option 2: Build from Source
+**Option B: Build from Source**
 
 ```bash
 ./mvnw clean package -DskipTests
@@ -113,7 +75,55 @@ For tagged releases, you can also download from the [Releases page](https://gith
 
 This creates an executable JAR at `target/luceneserver-0.0.1-SNAPSHOT.jar`.
 
+### Step 2: Configure Claude Desktop
+
+Locate your Claude Desktop configuration file:
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+Add the Lucene MCP server to the `mcpServers` section:
+
+```json
+{
+  "mcpServers": {
+    "lucene-search": {
+      "command": "java",
+      "args": [
+        "-Xmx2g",
+        "-Dspring.profiles.active=deployed",
+        "-jar",
+        "/absolute/path/to/luceneserver-0.0.1-SNAPSHOT.jar"
+      ]
+    }
+  }
+}
+```
+
+**Important:** Replace `/absolute/path/to/luceneserver-0.0.1-SNAPSHOT.jar` with the actual absolute path to your JAR file.
+
+The `-Dspring.profiles.active=deployed` flag is required for clean STDIO communication (disables console logging, web server, and startup banner).
+
+### Step 3: Start Using It
+
+1. **Restart Claude Desktop** to load the new configuration
+2. **Verify** the server is running in Claude Desktop's developer settings
+3. **Tell Claude** to add your documents:
+
+```
+"Add /Users/yourname/Documents as a crawlable directory and start crawling"
+```
+
+That's it! The configuration is saved to `~/.mcplucene/config.yaml` and persists across restarts. You can now search your documents through Claude.
+
+**Example searches:**
+- "Search for machine learning papers"
+- "Find all PDFs by John Doe"
+- "What documents mention quarterly reports?"
+
 ## Configuration Options
+
+> **Note:** The [Quick Start](#quick-start) above uses zero-configuration. This section covers advanced customization options.
 
 The server can be configured via environment variables, `application.yaml`, and Spring Boot profiles:
 
@@ -297,91 +307,6 @@ lucene:
     # No content limit (index full documents)
     max-content-length: -1
 ```
-
-## Integrating with Claude Desktop
-
-This MCP server uses STDIO (standard input/output) transport, which means Claude Desktop launches the server as a subprocess and communicates via stdin/stdout.
-
-### 1. Build the Server
-
-```bash
-./mvnw clean package -DskipTests
-```
-
-### 2. Locate the Claude Desktop Configuration File
-
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-### 3. Edit the Configuration File
-
-Add the Lucene MCP server to the `mcpServers` section:
-
-```json
-{
-  "mcpServers": {
-    "lucene-search": {
-      "command": "java",
-      "args": [
-        "-Dspring.profiles.active=deployed",
-        "-jar",
-        "/absolute/path/to/luceneserver-0.0.1-SNAPSHOT.jar"
-      ],
-      "env": {
-        "LUCENE_INDEX_PATH": "/path/to/your/lucene-index"
-      }
-    }
-  }
-}
-```
-
-**Important:**
-- Replace `/absolute/path/to/luceneserver-0.0.1-SNAPSHOT.jar` with the actual absolute path to your built JAR file
-- You can configure directories at runtime using MCP tools (recommended) or via `application.yaml` (see [Document Crawler Configuration](#document-crawler-configuration))
-- The crawler will start automatically if `crawl-on-startup: true` is set
-
-**Zero-Configuration Setup:**
-
-The server can be distributed and run without any configuration file changes:
-
-```json
-{
-  "mcpServers": {
-    "lucene-search": {
-      "command": "java",
-      "args": [
-        "-Xmx2g",
-        "-Dspring.profiles.active=deployed",
-        "-jar",
-        "/absolute/path/to/luceneserver-0.0.1-SNAPSHOT.jar"
-      ]
-    }
-  }
-}
-```
-
-After starting the server, simply tell Claude:
-```
-"Add /Users/yourname/Documents as a crawlable directory and start crawling"
-```
-
-The configuration will be saved to `~/.mcplucene/config.yaml` and automatically loaded on future restarts.
-
-**Spring Profile Configuration:**
-- `-Dspring.profiles.active=deployed` - Activates the "deployed" profile for STDIO transport
-  - Disables the embedded web server
-  - Disables the Spring Boot startup banner
-  - Disables console logging (critical for clean STDIO communication)
-- When running in the IDE for debugging, omit this argument to get full logging output
-
-### 4. Restart Claude Desktop
-
-After saving the configuration file, fully quit and restart Claude Desktop for the changes to take effect.
-
-### 5. Verify the Connection
-
-Once Claude Desktop restarts, check the MCP server status in Claude Desktop's developer settings. The server should show as "running". You can verify the tools are available by asking Claude to search or get index stats.
 
 ## Available MCP Tools
 
