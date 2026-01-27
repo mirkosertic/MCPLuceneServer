@@ -1,0 +1,15 @@
+# Spring Boot profile for deployed MCP server (running under Claude Desktop)
+# This profile disables logging and banners to ensure clean STDIO communication
+# Activate with: -Dspring.profiles.active=deployed
+
+spring:
+  main:
+    # Disable embedded web server for STDIO transport
+    web-application-type: none
+    # Disable Spring Boot startup banner
+    banner-mode: off
+
+logging:
+  pattern:
+    # Disable console logging to prevent interference with STDIO transport
+    console:
