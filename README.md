@@ -1,6 +1,6 @@
 # MCP Lucene Server
 
-[![Build and Release](https://github.com/YOUR_USERNAME/MCPLuceneServer/actions/workflows/build.yml/badge.svg)](https://github.com/YOUR_USERNAME/MCPLuceneServer/actions/workflows/build.yml)
+[![Build and Release](https://github.com/mirkosertic/MCPLuceneServer/actions/workflows/build.yml/badge.svg)](https://github.com/mirkosertic/MCPLuceneServer/actions/workflows/build.yml)
 
 A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search capabilities with automatic document crawling and indexing. This server uses STDIO transport for communication and can be integrated with Claude Desktop or any other MCP-compatible client.
 
