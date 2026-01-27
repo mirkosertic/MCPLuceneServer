@@ -321,14 +321,28 @@ Search the Lucene fulltext index using **lexical matching** (exact word forms on
 - `page` (optional): Page number, 0-based (default: 0)
 - `pageSize` (optional): Results per page (default: 10, max: 100)
 
-**⚠️ Important Search Limitations:**
+**🤖 AI-Powered Synonym Expansion:**
+
+This server is designed to work with AI assistants like Claude. Instead of using traditional Lucene synonym files, the AI generates context-appropriate synonyms automatically by constructing OR queries.
+
+**Why this is better than traditional synonyms:**
+- **Context-aware**: The AI understands your intent and picks relevant synonyms (e.g., "contract" in legal context vs. "contract" in construction)
+- **No maintenance**: No need to maintain static synonym configuration files
+- **Domain-adaptive**: Works across legal, technical, medical, or casual language automatically
+- **Multilingual**: Generates synonyms in any language without configuration
+
+When you ask Claude to "find documents about cars", it automatically searches for `(car OR automobile OR vehicle)` - giving you better results than a static synonym list.
+
+**⚠️ Technical Details (Lexical Matching):**
 
 The index uses Lucene's `StandardAnalyzer`, which provides:
 - ✅ Tokenization and lowercasing
 - ✅ Standard stopword filtering
-- ❌ **NO automatic synonym expansion** (e.g., "car" won't match "automobile")
-- ❌ **NO phonetic matching** (e.g., "Smith" won't match "Smyth")
-- ❌ **NO stemming** (e.g., "running" won't match "run")
+- ❌ No automatic synonym expansion at the index level
+- ❌ No phonetic matching (e.g., "Smith" won't match "Smyth")
+- ❌ No stemming (e.g., "running" won't match "run")
+
+The AI assistant compensates for these limitations by expanding your queries intelligently.
 
 **💡 Best Practices for Better Results:**
 
@@ -920,6 +934,8 @@ If you set the `LUCENE_CRAWLER_DIRECTORIES` environment variable, it takes prece
 When this is set, `addCrawlableDirectory` and `removeCrawlableDirectory` will return an error message indicating the environment override is active.
 
 ### Example 9: Working with Lexical Search (Synonyms and Variations)
+
+> **Note:** When using this server through Claude or another AI assistant, synonym expansion happens automatically - the AI constructs OR queries for you based on your natural language request. The examples below show the underlying query syntax for reference or direct API usage.
 
 Since the search engine performs **exact lexical matching** without automatic synonym expansion, you need to explicitly include synonyms and word variations in your query:
 
