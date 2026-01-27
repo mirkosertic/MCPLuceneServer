@@ -98,12 +98,12 @@ The crawler will automatically start indexing your documents when the server sta
 
 Download the latest pre-built JAR from GitHub Actions:
 
-1. Go to the [Actions tab](https://github.com/YOUR_USERNAME/MCPLuceneServer/actions/workflows/build.yml)
+1. Go to the [Actions tab](https://github.com/mirkosertic/MCPLuceneServer/actions/workflows/build.yml)
 2. Click on the most recent successful workflow run
 3. Scroll down to "Artifacts" and download `luceneserver-X.X.X-SNAPSHOT`
 4. Extract the ZIP file to get the JAR
 
-For tagged releases, you can also download from the [Releases page](https://github.com/YOUR_USERNAME/MCPLuceneServer/releases).
+For tagged releases, you can also download from the [Releases page](https://github.com/mirkosertic/MCPLuceneServer/releases).
 
 ### Option 2: Build from Source
 
