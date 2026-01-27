@@ -25,6 +25,7 @@ Review code changes and provide constructive, actionable feedback. You cannot ed
 - Blocking code in time-sensitive sections
 - Stack overflow risks (large local arrays)
 - Correct usage of Lucene and Spring Boot APIs
+- Inconsistent or missing documentation (Code, README.md, ...)
 
 ### Important (should fix)
 - Logic errors
