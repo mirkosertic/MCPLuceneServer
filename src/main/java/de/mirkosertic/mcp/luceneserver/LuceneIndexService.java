@@ -7,6 +7,7 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.facet.FacetResult;
 import org.apache.lucene.facet.Facets;
 import org.apache.lucene.facet.FacetsCollector;
+import org.apache.lucene.facet.FacetsCollectorManager;
 import org.apache.lucene.facet.LabelAndValue;
 import org.apache.lucene.facet.sortedset.DefaultSortedSetDocValuesReaderState;
 import org.apache.lucene.facet.sortedset.SortedSetDocValuesFacetCounts;
@@ -15,7 +16,13 @@ import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
-import org.apache.lucene.search.*;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.SearcherManager;
+import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.slf4j.Logger;
@@ -165,18 +172,14 @@ public class LuceneIndexService {
             final int startIndex = page * pageSize;
             final int maxResults = startIndex + pageSize;
 
-            // Create facets collector
-            final FacetsCollector facetsCollector = new FacetsCollector();
+            // Perform combined search and facet collection (Lucene 10+ API)
+            final FacetsCollectorManager facetsCollectorManager = new FacetsCollectorManager();
+            final FacetsCollectorManager.FacetsResult result = FacetsCollectorManager.search(
+                    searcher, finalQuery, maxResults, facetsCollectorManager);
 
-            // Execute search - first get TopDocs
-            final TopDocs topDocs = searcher.search(finalQuery, maxResults);
+            final FacetsCollector facetsCollector = result.facetsCollector();
+            final TopDocs topDocs = result.topDocs();
             final long totalHits = topDocs.totalHits.value();
-
-            // Collect facets from all matching documents
-            // Note: search(Query, Collector) is deprecated in Lucene 10, but there's no
-            // practical alternative for combining TopDocs + Facets collection yet.
-            // Suppressing deprecation until Lucene provides a non-deprecated API (LUCENE-8757)
-            collectFacets(searcher, finalQuery, facetsCollector);
 
             // Collect results for the requested page
             final List<Map<String, Object>> results = new ArrayList<>();
@@ -322,16 +325,6 @@ public class LuceneIndexService {
         }
 
         return snippet;
-    }
-
-    /**
-     * Collects facets for the given query.
-     * Suppresses deprecation warning as search(Query, Collector) is deprecated in Lucene 10,
-     * but there's no practical alternative for faceting use cases yet (see LUCENE-8757).
-     */
-    @SuppressWarnings("deprecation")
-    private void collectFacets(final IndexSearcher searcher, final Query query, final FacetsCollector collector) throws IOException {
-        searcher.search(query, collector);
     }
 
     private Map<String, List<FacetValue>> buildFacets(final IndexSearcher searcher, final FacetsCollector facetsCollector) {
