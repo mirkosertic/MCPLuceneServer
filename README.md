@@ -1023,11 +1023,11 @@ For the full field schema, see the [Index Field Schema](#index-field-schema) sec
 
 ### Technology Stack
 
-- **Spring Boot 3.5** - Application framework
-- **Spring AI MCP Server** - Model Context Protocol implementation
-- **Apache Lucene 10.1** - Full-text search engine
-- **Apache Tika 3.0** - Document content extraction
-- **Guava 33.0** - Utility libraries
+- **Spring Boot 4.0.2** - Application framework
+- **Spring AI MCP Server 1.1.2** - Model Context Protocol implementation
+- **Apache Lucene 10.3.2** - Full-text search engine
+- **Apache Tika 3.2.3** - Document content extraction
+- **Guava 33.0.0** - Utility libraries
 - **Java 21** - Runtime environment
 
 ### Crawler Architecture
