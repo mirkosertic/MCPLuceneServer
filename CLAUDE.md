@@ -611,7 +611,11 @@ This allows Claude to suggest: "I found mostly English documents. Would you like
 **Java Conventions**:
 - Use `final` for parameters and local variables where possible
 - Prefer composition over inheritance
-- Use constructor injection for dependencies
+- **ALWAYS use constructor injection** for all dependencies (beans and `@Value` properties). NEVER use field injection with `@Autowired` or `@Value` on fields. This ensures:
+  - Dependencies are explicit and visible in the constructor signature
+  - Required dependencies can be marked as `final` (immutable after construction)
+  - Classes are easier to test (dependencies can be passed directly in tests)
+  - No hidden dependencies or initialization order issues
 - Annotate nullability with `@Nullable` / `@NotNull` if using
 
 **Logging**:

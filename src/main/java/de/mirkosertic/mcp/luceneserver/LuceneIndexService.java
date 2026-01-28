@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
@@ -46,20 +47,23 @@ public class LuceneIndexService {
 
     private static final Logger logger = LoggerFactory.getLogger(LuceneIndexService.class);
 
-    @Value("${lucene.index.path}")
-    private String indexPath;
-
-    @Value("${lucene.nrt.refresh.interval.ms:100}")
+    private final String indexPath;
     private volatile long nrtRefreshIntervalMs;
 
     private Directory directory;
     private IndexWriter indexWriter;
     private SearcherManager searcherManager;
     private ScheduledExecutorService refreshScheduler;
-    private final StandardAnalyzer analyzer = new StandardAnalyzer();
-    private final de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer documentIndexer;
+    private final StandardAnalyzer analyzer;
+    private final DocumentIndexer documentIndexer;
 
-    public LuceneIndexService(final de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer documentIndexer) {
+    public LuceneIndexService(
+            @Value("${lucene.index.path}") final String indexPath,
+            @Value("${lucene.nrt.refresh.interval.ms:100}") final long nrtRefreshIntervalMs,
+            final DocumentIndexer documentIndexer) {
+        this.analyzer = new StandardAnalyzer();
+        this.indexPath = indexPath;
+        this.nrtRefreshIntervalMs = nrtRefreshIntervalMs;
         this.documentIndexer = documentIndexer;
     }
 
