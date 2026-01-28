@@ -14,7 +14,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,14 +25,12 @@ public class LuceneSearchTools {
     private static final Logger logger = LoggerFactory.getLogger(LuceneSearchTools.class);
 
     private final LuceneIndexService indexService;
-    private final NotificationService notificationService;
     private final DocumentCrawlerService crawlerService;
     private final CrawlerConfigurationManager configManager;
 
-    public LuceneSearchTools(final LuceneIndexService indexService, final NotificationService notificationService,
+    public LuceneSearchTools(final LuceneIndexService indexService,
                              final DocumentCrawlerService crawlerService, final CrawlerConfigurationManager configManager) {
         this.indexService = indexService;
-        this.notificationService = notificationService;
         this.crawlerService = crawlerService;
         this.configManager = configManager;
     }
@@ -178,11 +175,6 @@ public class LuceneSearchTools {
             response.put("megabytesPerSecond", stats.megabytesPerSecond());
             response.put("elapsedTimeMs", stats.elapsedTimeMs());
             response.put("perDirectoryStats", stats.perDirectoryStats());
-
-            // Trigger notification
-            notificationService.notify("Crawler Stats",
-                    String.format("Processed %d/%d files (%.1f files/sec)",
-                            stats.filesProcessed(), stats.filesFound(), stats.filesPerSecond()));
 
             logger.info("Crawler stats: processed={}, indexed={}, failed={}",
                     stats.filesProcessed(), stats.filesIndexed(), stats.filesFailed());
