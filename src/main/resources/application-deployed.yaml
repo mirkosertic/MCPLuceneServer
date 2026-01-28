@@ -1,5 +1,6 @@
 # Spring Boot profile for deployed MCP server (running under Claude Desktop)
-# This profile disables logging and banners to ensure clean STDIO communication
+# This profile disables console logging and banners to ensure clean STDIO communication
+# Logging is written to files in ~/.mcplucene/log/ (configured in logback-spring.xml)
 # Activate with: -Dspring.profiles.active=deployed
 
 spring:
@@ -9,7 +10,7 @@ spring:
     # Disable Spring Boot startup banner
     banner-mode: off
 
-logging:
-  pattern:
-    # Disable console logging to prevent interference with STDIO transport
-    console:
+# Logging configuration is handled by logback-spring.xml
+# - Console output is disabled (required for STDIO transport)
+# - File logging to ~/.mcplucene/log/ at INFO level
+# - Rolling logs: max 10MB per file, keeps latest 5 files

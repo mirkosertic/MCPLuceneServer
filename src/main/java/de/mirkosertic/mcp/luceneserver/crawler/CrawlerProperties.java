@@ -26,7 +26,8 @@ public class CrawlerProperties {
             "*.pptx",
             "*.xls",
             "*.xlsx",
-            "*.ods"
+            "*.ods",
+            "*.txt"
     );
     private List<String> excludePatterns = List.of(
             "**/node_modules/**",
@@ -57,7 +58,7 @@ public class CrawlerProperties {
         // Only load from config file if directories not already set
         // (env var or application.yaml take precedence via Spring's binding)
         if (directories.isEmpty()) {
-            List<String> configDirs = configManager.loadDirectories();
+            final List<String> configDirs = configManager.loadDirectories();
             if (!configDirs.isEmpty()) {
                 this.directories = new ArrayList<>(configDirs);
                 logger.info("Loaded {} directories from {}",

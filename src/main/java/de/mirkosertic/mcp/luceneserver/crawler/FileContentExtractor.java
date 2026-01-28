@@ -86,7 +86,7 @@ public class FileContentExtractor {
 
             // Detect language if enabled
             String detectedLanguage = null;
-            if (properties.isDetectLanguage() && content != null && !content.isEmpty()) {
+            if (properties.isDetectLanguage() && !content.isEmpty()) {
                 try {
                     final LanguageResult result = languageDetector.detect(content);
                     if (result.isReasonablyCertain()) {

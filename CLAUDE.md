@@ -24,7 +24,7 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
 
 ### Key Capabilities
 
-1. **Automatic Document Indexing**: Crawls configured directories and indexes PDFs, Office documents, and OpenOffice files
+1. **Automatic Document Indexing**: Crawls configured directories and indexes PDFs, Office documents, OpenOffice files, and plain text files
 2. **Full-Text Search**: Provides Lucene query syntax with field-specific filtering and faceted search
 3. **Real-Time Monitoring**: Watches directories for changes and automatically updates the index
 4. **Runtime Configuration**: Allows users to manage crawlable directories through conversational MCP tools
@@ -125,7 +125,7 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
   - Detect document language automatically
   - Extract metadata (author, title, creation date, etc.)
   - Compute content hash (SHA-256) for change detection
-- **Supported Formats**: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, ODT, ODS, ODP
+- **Supported Formats**: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, ODT, ODS, ODP, TXT
 
 #### 5. **DocumentIndexer** (`DocumentIndexer.java`)
 - **Role**: Lucene document builder
@@ -543,17 +543,17 @@ This allows Claude to suggest: "I found mostly English documents. Would you like
 
 ### 4. **Limited File Format Support**
 
-**Supported**: PDF, Office (DOC, DOCX, XLS, XLSX, PPT, PPTX), OpenOffice (ODT, ODS, ODP)
+**Supported**: PDF, Office (DOC, DOCX, XLS, XLSX, PPT, PPTX), OpenOffice (ODT, ODS, ODP), Plain text (TXT)
 
-**Not Supported**: Plain text, Markdown, HTML, source code, custom formats
+**Not Supported**: Markdown, HTML, source code, custom formats
 
 **Impact**:
-- Source code files ignored
 - README.md files ignored
 - HTML pages ignored
+- Source code files without .txt extension ignored
 
 **Workaround**:
-- Add include patterns: `*.txt`, `*.md`, `*.html`
+- Add include patterns: `*.md`, `*.html`
 - Tika can parse many formats, just not enabled by default
 
 **Why Not Fix?**:
@@ -686,13 +686,13 @@ public Map<String, Object> myNewTool(
 
 ### Extending File Format Support
 
-**To add new file types** (e.g., plain text, Markdown):
+**To add new file types** (e.g., Markdown, HTML):
 
 1. **Update `CrawlerProperties.java`**:
    ```yaml
    include-patterns:
-     - "*.txt"
      - "*.md"
+     - "*.html"
    ```
 
 2. **No code changes needed** - Apache Tika automatically handles most text formats

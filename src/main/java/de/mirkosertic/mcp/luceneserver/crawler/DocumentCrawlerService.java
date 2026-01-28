@@ -397,7 +397,7 @@ public class DocumentCrawlerService implements FileChangeListener {
         return statisticsTracker.getStatistics();
     }
 
-    public synchronized void updateDirectories(List<String> newDirectories) throws IOException {
+    public synchronized void updateDirectories(final List<String> newDirectories) throws IOException {
         logger.info("Updating crawler directories to: {}", newDirectories);
 
         // Stop existing watchers if in WATCHING state
