@@ -269,6 +269,7 @@ lucene:
 - PDF documents (`.pdf`)
 - Microsoft Office: Word (`.doc`, `.docx`), Excel (`.xls`, `.xlsx`), PowerPoint (`.ppt`, `.pptx`)
 - OpenOffice/LibreOffice: Writer (`.odt`), Calc (`.ods`), Impress (`.odp`)
+- Plain text files (`.txt`)
 
 **Complete Configuration Example:**
 
@@ -714,6 +715,52 @@ With directory watching enabled (`watch-enabled: true`):
 - Corrupted or inaccessible files are skipped gracefully
 
 ## Troubleshooting
+
+### Where to find logs?
+
+When running with the `deployed` profile, console logging is disabled to ensure clean STDIO communication with MCP clients. Instead, logs are written to files in:
+
+```
+~/.mcplucene/log/mcplucene.log
+```
+
+The log directory is `${user.home}/.mcplucene/log` by default (configured in `logback-spring.xml`). Log files are automatically rotated:
+- Maximum 10MB per file
+- Up to 5 log files retained
+- Total size capped at 50MB
+
+**To view recent logs:**
+```bash
+# View the current log file
+cat ~/.mcplucene/log/mcplucene.log
+
+# Follow logs in real-time
+tail -f ~/.mcplucene/log/mcplucene.log
+
+# View last 100 lines
+tail -n 100 ~/.mcplucene/log/mcplucene.log
+```
+
+**When developing** (without the `deployed` profile), logs are written to the console instead of files.
+
+### Index lock file prevents startup (write.lock)
+
+**Symptom:** The server fails to start with an error like `Lock held by another program` or `LockObtainFailedException`.
+
+**Cause:** When the MCP server doesn't shut down cleanly (e.g., the process was forcefully killed, the system crashed, or Claude Desktop was terminated abruptly), Lucene may leave behind a `write.lock` file in the index directory. This lock file is used to prevent multiple processes from writing to the same index simultaneously. When it's left behind after an unclean shutdown, it blocks the server from starting because Lucene thinks another process is still using the index.
+
+**Solution:** Delete the lock file manually:
+
+```bash
+# Remove the write.lock file from the index directory
+rm ~/.mcplucene/luceneindex/write.lock
+```
+
+After removing the lock file, the server should start normally.
+
+**Prevention:** Try to shut down Claude Desktop gracefully when possible. If you need to force-quit, be aware that you may need to remove the lock file before the next startup.
+
+**Note:** The default index path is `~/.mcplucene/luceneindex`. If you've configured a custom index path via `LUCENE_INDEX_PATH` or `application.yaml`, look for the `write.lock` file in that directory instead.
 
 ### Server shows as "running" but tools don't work
 

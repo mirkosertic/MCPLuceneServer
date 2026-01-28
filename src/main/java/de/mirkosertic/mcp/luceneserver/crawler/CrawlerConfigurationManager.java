@@ -36,7 +36,7 @@ public class CrawlerConfigurationManager {
     private final Yaml yaml;
 
     public CrawlerConfigurationManager() {
-        DumperOptions options = new DumperOptions();
+        final DumperOptions options = new DumperOptions();
         options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
         options.setPrettyFlow(true);
         this.yaml = new Yaml(options);
@@ -57,12 +57,12 @@ public class CrawlerConfigurationManager {
      */
     public synchronized List<String> loadDirectories() {
         // Priority 1: Check environment variable
-        String envDirs = System.getenv(ENV_DIRECTORIES);
+        final String envDirs = System.getenv(ENV_DIRECTORIES);
         if (envDirs != null && !envDirs.trim().isEmpty()) {
             logger.info("Loading directories from environment variable {}", ENV_DIRECTORIES);
-            List<String> dirs = new ArrayList<>();
-            for (String dir : envDirs.split(",")) {
-                String trimmed = dir.trim();
+            final List<String> dirs = new ArrayList<>();
+            for (final String dir : envDirs.split(",")) {
+                final String trimmed = dir.trim();
                 if (!trimmed.isEmpty()) {
                     dirs.add(trimmed);
                 }
@@ -71,26 +71,26 @@ public class CrawlerConfigurationManager {
         }
 
         // Priority 2: Load from config file
-        Path configPath = getConfigPath();
+        final Path configPath = getConfigPath();
         if (!Files.exists(configPath)) {
             logger.debug("Config file does not exist: {}", configPath);
             return new ArrayList<>();
         }
 
-        try (Reader reader = Files.newBufferedReader(configPath)) {
-            Map<String, Object> config = yaml.load(reader);
+        try (final Reader reader = Files.newBufferedReader(configPath)) {
+            final Map<String, Object> config = yaml.load(reader);
             if (config == null) {
                 logger.debug("Config file is empty: {}", configPath);
                 return new ArrayList<>();
             }
 
-            List<String> directories = extractDirectories(config);
+            final List<String> directories = extractDirectories(config);
             logger.info("Loaded {} directories from {}", directories.size(), configPath);
             return directories;
-        } catch (IOException e) {
+        } catch (final IOException e) {
             logger.error("Failed to load config file: {}", configPath, e);
             return new ArrayList<>();
-        } catch (Exception e) {
+        } catch (final Exception e) {
             logger.error("Failed to parse config file: {}", configPath, e);
             return new ArrayList<>();
         }
@@ -102,19 +102,19 @@ public class CrawlerConfigurationManager {
      * @param directories List of directory paths to persist
      * @throws IOException if save operation fails
      */
-    public synchronized void saveDirectories(List<String> directories) throws IOException {
-        Path configPath = getConfigPath();
+    public synchronized void saveDirectories(final List<String> directories) throws IOException {
+        final Path configPath = getConfigPath();
         ensureConfigDirectoryExists();
 
-        Map<String, Object> config = new HashMap<>();
-        Map<String, Object> luceneConfig = new HashMap<>();
-        Map<String, Object> crawlerConfig = new HashMap<>();
+        final Map<String, Object> config = new HashMap<>();
+        final Map<String, Object> luceneConfig = new HashMap<>();
+        final Map<String, Object> crawlerConfig = new HashMap<>();
 
         crawlerConfig.put("directories", new ArrayList<>(directories));
         luceneConfig.put("crawler", crawlerConfig);
         config.put("lucene", luceneConfig);
 
-        try (Writer writer = Files.newBufferedWriter(configPath,
+        try (final Writer writer = Files.newBufferedWriter(configPath,
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
             yaml.dump(config, writer);
@@ -128,8 +128,8 @@ public class CrawlerConfigurationManager {
      * @param path Directory path to add
      * @throws IOException if save operation fails
      */
-    public synchronized void addDirectory(String path) throws IOException {
-        List<String> directories = loadDirectories();
+    public synchronized void addDirectory(final String path) throws IOException {
+        final List<String> directories = loadDirectories();
 
         // Avoid duplicates
         if (!directories.contains(path)) {
@@ -147,8 +147,8 @@ public class CrawlerConfigurationManager {
      * @param path Directory path to remove
      * @throws IOException if save operation fails
      */
-    public synchronized void removeDirectory(String path) throws IOException {
-        List<String> directories = loadDirectories();
+    public synchronized void removeDirectory(final String path) throws IOException {
+        final List<String> directories = loadDirectories();
 
         if (directories.remove(path)) {
             saveDirectories(directories);
@@ -164,7 +164,7 @@ public class CrawlerConfigurationManager {
      * @return true if LUCENE_CRAWLER_DIRECTORIES is set
      */
     public boolean isEnvironmentOverrideActive() {
-        String envDirs = System.getenv(ENV_DIRECTORIES);
+        final String envDirs = System.getenv(ENV_DIRECTORIES);
         return envDirs != null && !envDirs.trim().isEmpty();
     }
 
@@ -181,13 +181,13 @@ public class CrawlerConfigurationManager {
      * Ensure config file exists, creating it with defaults if needed
      */
     private void ensureConfigFileExists() {
-        Path configPath = getConfigPath();
+        final Path configPath = getConfigPath();
         if (!Files.exists(configPath)) {
             try {
                 ensureConfigDirectoryExists();
                 saveDirectories(new ArrayList<>());
                 logger.info("Created default config file: {}", configPath);
-            } catch (IOException e) {
+            } catch (final IOException e) {
                 logger.warn("Failed to create default config file: {}", configPath, e);
             }
         }
@@ -197,7 +197,7 @@ public class CrawlerConfigurationManager {
      * Ensure config directory exists
      */
     private void ensureConfigDirectoryExists() throws IOException {
-        Path configDir = getConfigPath().getParent();
+        final Path configDir = getConfigPath().getParent();
         if (!Files.exists(configDir)) {
             Files.createDirectories(configDir);
             logger.debug("Created config directory: {}", configDir);
@@ -208,25 +208,25 @@ public class CrawlerConfigurationManager {
      * Extract directories list from parsed YAML config
      */
     @SuppressWarnings("unchecked")
-    private List<String> extractDirectories(Map<String, Object> config) {
+    private List<String> extractDirectories(final Map<String, Object> config) {
         try {
-            Map<String, Object> luceneConfig = (Map<String, Object>) config.get("lucene");
+            final Map<String, Object> luceneConfig = (Map<String, Object>) config.get("lucene");
             if (luceneConfig == null) {
                 return new ArrayList<>();
             }
 
-            Map<String, Object> crawlerConfig = (Map<String, Object>) luceneConfig.get("crawler");
+            final Map<String, Object> crawlerConfig = (Map<String, Object>) luceneConfig.get("crawler");
             if (crawlerConfig == null) {
                 return new ArrayList<>();
             }
 
-            Object directoriesObj = crawlerConfig.get("directories");
+            final Object directoriesObj = crawlerConfig.get("directories");
             if (directoriesObj instanceof List) {
                 return new ArrayList<>((List<String>) directoriesObj);
             }
 
             return new ArrayList<>();
-        } catch (ClassCastException e) {
+        } catch (final ClassCastException e) {
             logger.error("Invalid config structure", e);
             return new ArrayList<>();
         }

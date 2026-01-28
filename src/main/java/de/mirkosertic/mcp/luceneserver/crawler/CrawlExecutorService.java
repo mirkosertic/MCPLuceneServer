@@ -64,7 +64,7 @@ public class CrawlExecutorService {
         logger.info("Shutting down CrawlExecutorService");
         executor.shutdown();
         try {
-            if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
                 logger.warn("CrawlExecutorService did not terminate in time, forcing shutdown");
                 executor.shutdownNow();
             }
