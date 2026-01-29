@@ -446,4 +446,47 @@ public class LuceneSearchTools {
 
         return response;
     }
+
+    @McpTool(name = "getDocumentDetails", description = "Retrieve all stored fields and content of a document from the Lucene index by its file path. " +
+            "This tool retrieves document details and extracted content directly from the index without requiring filesystem access. " +
+            "Returns all metadata fields (file_path, file_name, file_extension, file_type, file_size, title, author, creator, subject, keywords, language, " +
+            "created_date, modified_date, indexed_date, content_hash) and the full document content. " +
+            "Content is limited to 500,000 characters (500KB) to keep response size safe - use the contentTruncated field to check if content was truncated.")
+    public Map<String, Object> getDocumentDetails(
+            @McpToolParam(description = "Absolute path to the file (must match exactly the file_path stored in the index)", required = true) final String filePath
+    ) {
+        logger.info("Get document details request: filePath='{}'", filePath);
+
+        final Map<String, Object> response = new HashMap<>();
+
+        try {
+            final Map<String, Object> document = indexService.getDocumentByFilePath(filePath);
+
+            if (document == null) {
+                response.put("success", false);
+                response.put("error", "Document not found in index: " + filePath);
+                logger.warn("Document not found in index: {}", filePath);
+                return response;
+            }
+
+            response.put("success", true);
+            response.put("document", document);
+
+            logger.info("Retrieved document details for: {} (content length: {}, truncated: {})",
+                    filePath,
+                    document.containsKey("content") ? ((String) document.get("content")).length() : 0,
+                    document.getOrDefault("contentTruncated", false));
+
+        } catch (final IOException e) {
+            logger.error("Error retrieving document details", e);
+            response.put("success", false);
+            response.put("error", "Error retrieving document: " + e.getMessage());
+        } catch (final Exception e) {
+            logger.error("Unexpected error retrieving document details", e);
+            response.put("success", false);
+            response.put("error", "Unexpected error: " + e.getMessage());
+        }
+
+        return response;
+    }
 }
