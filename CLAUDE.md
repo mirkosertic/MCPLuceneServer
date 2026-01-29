@@ -67,7 +67,7 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
            │                           │
            ▼                           ▼
 ┌─────────────────────────────────────────────────────┐
-│              Apache Lucene 10.1                     │
+│              Apache Lucene 10.3                     │
 │  - IndexWriter                                      │
 │  - IndexSearcher (NRT)                              │
 │  - StandardAnalyzer                                 │
