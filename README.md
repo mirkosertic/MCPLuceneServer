@@ -538,6 +538,65 @@ Ask Claude: "Stop crawling /Users/yourname/Downloads"
 Ask Claude: "Remove /path/to/old/archive from the crawler"
 ```
 
+### `getDocumentDetails`
+
+Retrieve all stored fields and full content of a document from the Lucene index by its file path. This tool retrieves document details directly from the index **without requiring filesystem access** - useful for examining indexed content even if the original file has been moved or deleted.
+
+**Parameters:**
+- `filePath` (required): Absolute path to the file (must match exactly the `file_path` stored in the index)
+
+**Returns:**
+- `success`: Boolean indicating operation success
+- `document`: Object containing all stored fields:
+  - `file_path`: Full path to the file
+  - `file_name`: Name of the file
+  - `file_extension`: File extension (e.g., `pdf`, `docx`)
+  - `file_type`: MIME type
+  - `file_size`: File size in bytes
+  - `title`: Document title
+  - `author`: Author name
+  - `creator`: Creator application
+  - `subject`: Document subject
+  - `keywords`: Document keywords/tags
+  - `language`: Detected language code
+  - `created_date`: Creation timestamp
+  - `modified_date`: Modification timestamp
+  - `indexed_date`: Indexing timestamp
+  - `content_hash`: SHA-256 hash of content
+  - `content`: Full extracted text content (limited to 500KB)
+  - `contentTruncated`: Boolean indicating if content was truncated
+  - `originalContentLength`: Original content length (only present if truncated)
+
+**Content Size Limit:**
+The `content` field is limited to 500,000 characters (500KB) to ensure the response stays safely below the 1MB MCP response limit. Check the `contentTruncated` field to determine if the full content was returned.
+
+**Example:**
+```
+Ask Claude: "Show me the indexed details of /Users/yourname/Documents/report.pdf"
+Ask Claude: "What content was extracted from /path/to/contract.docx?"
+```
+
+**Example response:**
+```json
+{
+  "success": true,
+  "document": {
+    "file_path": "/Users/yourname/Documents/report.pdf",
+    "file_name": "report.pdf",
+    "file_extension": "pdf",
+    "file_type": "application/pdf",
+    "file_size": "125432",
+    "title": "Annual Report 2024",
+    "author": "John Doe",
+    "language": "en",
+    "indexed_date": "1706540400000",
+    "content_hash": "a1b2c3d4...",
+    "content": "This is the full extracted text content of the document...",
+    "contentTruncated": false
+  }
+}
+```
+
 ## Index Field Schema
 
 When documents are indexed by the crawler, the following fields are automatically extracted and stored:

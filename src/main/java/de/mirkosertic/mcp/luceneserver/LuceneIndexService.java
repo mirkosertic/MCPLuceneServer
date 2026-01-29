@@ -243,16 +243,6 @@ public class LuceneIndexService {
         logger.info("NRT refresh interval changed to {}ms", intervalMs);
     }
 
-    public void addDocuments(final List<Document> documents) throws IOException {
-        for (final Document document : documents) {
-            indexWriter.addDocument(document);
-        }
-    }
-
-    public void deleteDocuments(final String field, final String value) throws IOException {
-        indexWriter.deleteDocuments(new org.apache.lucene.index.Term(field, value));
-    }
-
     public void commit() throws IOException {
         indexWriter.commit();
     }
@@ -267,6 +257,66 @@ public class LuceneIndexService {
                 }
             }
             return fields;
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    public Map<String, Object> getDocumentByFilePath(final String filePath) throws IOException {
+        if (filePath == null || filePath.isBlank()) {
+            return null;
+        }
+
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            // Create exact match query for file_path field
+            final Query query = new org.apache.lucene.search.TermQuery(
+                    new org.apache.lucene.index.Term("file_path", filePath));
+
+            // Search for the document
+            final TopDocs topDocs = searcher.search(query, 1);
+
+            if (topDocs.totalHits.value() == 0) {
+                return null; // Document not found
+            }
+
+            // Retrieve the document
+            final Document doc = searcher.storedFields().document(topDocs.scoreDocs[0].doc);
+            final Map<String, Object> result = new HashMap<>();
+
+            // Add all stored fields
+            addFieldIfPresent(doc, result, "file_path");
+            addFieldIfPresent(doc, result, "file_name");
+            addFieldIfPresent(doc, result, "file_extension");
+            addFieldIfPresent(doc, result, "file_type");
+            addFieldIfPresent(doc, result, "file_size");
+            addFieldIfPresent(doc, result, "title");
+            addFieldIfPresent(doc, result, "author");
+            addFieldIfPresent(doc, result, "creator");
+            addFieldIfPresent(doc, result, "subject");
+            addFieldIfPresent(doc, result, "keywords");
+            addFieldIfPresent(doc, result, "language");
+            addFieldIfPresent(doc, result, "created_date");
+            addFieldIfPresent(doc, result, "modified_date");
+            addFieldIfPresent(doc, result, "indexed_date");
+            addFieldIfPresent(doc, result, "content_hash");
+
+            // Add content field with truncation to keep response size safe
+            final String content = doc.get("content");
+            if (content != null && !content.isEmpty()) {
+                final int maxContentLength = 500_000; // 500KB limit
+                if (content.length() > maxContentLength) {
+                    result.put("content", content.substring(0, maxContentLength));
+                    result.put("contentTruncated", true);
+                    result.put("originalContentLength", content.length());
+                } else {
+                    result.put("content", content);
+                    result.put("contentTruncated", false);
+                }
+            }
+
+            return result;
+
         } finally {
             searcherManager.release(searcher);
         }

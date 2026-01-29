@@ -91,6 +91,7 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
   - `listCrawlableDirectories()`: Show configured directories
   - `addCrawlableDirectory()`: Add directory at runtime
   - `removeCrawlableDirectory()`: Remove directory at runtime
+  - `getDocumentDetails()`: Retrieve full document details and content from index by file path
 
 #### 2. **LuceneIndexService** (`LuceneIndexService.java`)
 - **Role**: Core Lucene operations manager
@@ -99,6 +100,7 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
   - Provide NRT (Near Real-Time) search
   - Handle commits and refreshes
   - Manage faceted search configuration
+  - Retrieve individual documents by file path with content truncation for safe response sizes
 - **Key Concepts**:
   - **NRT Refresh**: Controls how quickly new documents appear in search results
   - **Dynamic NRT Interval**: Slows refresh during bulk indexing to reduce overhead
