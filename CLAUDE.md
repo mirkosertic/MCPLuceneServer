@@ -50,7 +50,7 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
                  │ (JSON-RPC over stdin/stdout)
                  ▼
 ┌─────────────────────────────────────────────────────┐
-│         Spring AI MCP Server Framework              │
+│           MCP Java SDK (STDIO Transport)            │
 │  ┌──────────────────────────────────────────────┐   │
 │  │        LuceneSearchTools (MCP Tools)         │   │
 │  └──────────────────────────────────────────────┘   │
@@ -80,7 +80,8 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
 #### 1. **LuceneSearchTools** (`LuceneSearchTools.java`)
 - **Role**: MCP tool endpoints - the interface between Claude and the system
 - **Responsibilities**:
-  - Expose MCP tools (`@McpTool` annotations)
+  - Expose MCP tools via `McpServerFeatures.SyncToolSpecification`
+  - Define tool input schemas as JSON
   - Validate user inputs
   - Format responses for MCP clients
   - Handle errors and return user-friendly messages
@@ -274,14 +275,14 @@ When `LUCENE_CRAWLER_DIRECTORIES` is set, the MCP tools `addCrawlableDirectory` 
 
 ## Configuration System
 
-### Spring Boot Profiles
+### Logging Profiles
 
-| Profile | Purpose | Config File | Logging | Web Server |
-|---------|---------|-------------|---------|------------|
-| **default** | Development | `application.yaml` | Full | Enabled |
-| **deployed** | Production | `application-deployed.yaml` | Disabled | Disabled |
+| Profile | Purpose | Logging |
+|---------|---------|---------|
+| **default** | Development | Console logging enabled |
+| **deployed** | Production | File logging only (console disabled) |
 
-**Critical for MCP**: The `deployed` profile disables console logging, which is required for clean STDIO communication. Without this, JSON-RPC messages get corrupted by log output.
+**Critical for MCP**: The `deployed` profile (set via `-Dspring.profiles.active=deployed` for backwards compatibility) disables console logging, which is required for clean STDIO communication. Without this, JSON-RPC messages get corrupted by log output.
 
 ### External Configuration File
 
@@ -304,7 +305,7 @@ lucene:
 
 ### Configuration Properties
 
-See `CrawlerProperties.java` for all available settings. Key properties:
+See `ApplicationConfig.java` for all available settings. Key properties:
 
 **Performance Tuning**:
 - `thread-pool-size`: 4 (parallel crawlers)
@@ -572,8 +573,8 @@ This allows Claude to suggest: "I found mostly English documents. Would you like
 - Can't use with clients that only support HTTP
 
 **Workaround**:
-- Spring AI MCP Server supports SSE transport - could be added
-- Would require separate configuration profile
+- MCP Java SDK supports SSE transport - could be added
+- Would require separate transport provider configuration
 
 **Why Not Fix?**:
 - STDIO is the primary MCP transport for desktop clients
@@ -613,12 +614,12 @@ This allows Claude to suggest: "I found mostly English documents. Would you like
 **Java Conventions**:
 - Use `final` for parameters and local variables where possible
 - Prefer composition over inheritance
-- **ALWAYS use constructor injection** for all dependencies (beans and `@Value` properties). NEVER use field injection with `@Autowired` or `@Value` on fields. This ensures:
+- **ALWAYS use constructor injection** for all dependencies. This ensures:
   - Dependencies are explicit and visible in the constructor signature
   - Required dependencies can be marked as `final` (immutable after construction)
   - Classes are easier to test (dependencies can be passed directly in tests)
   - No hidden dependencies or initialization order issues
-- Annotate nullability with `@Nullable` / `@NotNull` if using
+- Annotate nullability with `@Nullable` / `@NonNull` (JSpecify) if using
 
 **Logging**:
 - Use SLF4J: `private static final Logger logger = LoggerFactory.getLogger(ClassName.class);`
@@ -652,10 +653,10 @@ This allows Claude to suggest: "I found mostly English documents. Would you like
 ### Adding New MCP Tools
 
 **Checklist**:
-1. Add method to `LuceneSearchTools.java`
-2. Annotate with `@McpTool(name="...", description="...")`
-3. Use `@McpToolParam` for all parameters with clear descriptions
-4. Return `Map<String, Object>` with consistent structure:
+1. Add implementation method to `LuceneSearchTools.java`
+2. Create JSON schema method for input parameters
+3. Register tool in `getToolSpecifications()` method
+4. Return `McpSchema.CallToolResult` with `TextContent` containing JSON response:
    - Always include `"success": boolean`
    - On error, include `"error": string` message
    - On success, include relevant data fields
@@ -665,40 +666,71 @@ This allows Claude to suggest: "I found mostly English documents. Would you like
 8. Update CLAUDE.md with design rationale
 
 **Example Template**:
+
+1. **Add the input schema method**:
 ```java
-@McpTool(name = "myNewTool", description = "Clear description of what this does")
-public Map<String, Object> myNewTool(
-    @McpToolParam(description = "What this parameter does", required = true)
-    String param1
-) {
+private String createMyNewToolInputSchema() {
+    return """
+            {
+                "type": "object",
+                "properties": {
+                    "param1": {
+                        "type": "string",
+                        "description": "What this parameter does"
+                    }
+                },
+                "required": ["param1"]
+            }
+            """;
+}
+```
+
+2. **Add the tool implementation method**:
+```java
+private McpSchema.CallToolResult myNewTool(final Map<String, Object> args) {
+    final String param1 = (String) args.get("param1");
     logger.info("My new tool called with param1={}", param1);
 
-    Map<String, Object> response = new HashMap<>();
+    final Map<String, Object> response = new HashMap<>();
 
     try {
         // Implementation
         response.put("success", true);
         response.put("result", someResult);
 
-    } catch (Exception e) {
+    } catch (final Exception e) {
         logger.error("Error in myNewTool", e);
         response.put("success", false);
         response.put("error", "User-friendly error: " + e.getMessage());
     }
 
-    return response;
+    return createResult(response);
 }
+```
+
+3. **Register in getToolSpecifications()**:
+```java
+tools.add(new McpServerFeatures.SyncToolSpecification(
+        new McpSchema.Tool(
+                "myNewTool",
+                "Clear description of what this does",
+                createMyNewToolInputSchema()
+        ),
+        (exchange, args) -> myNewTool(args)
+));
 ```
 
 ### Extending File Format Support
 
 **To add new file types** (e.g., Markdown, HTML):
 
-1. **Update `CrawlerProperties.java`**:
+1. **Update `application.yaml`**:
    ```yaml
-   include-patterns:
-     - "*.md"
-     - "*.html"
+   lucene:
+     crawler:
+       include-patterns:
+         - "*.md"
+         - "*.html"
    ```
 
 2. **No code changes needed** - Apache Tika automatically handles most text formats
@@ -755,7 +787,7 @@ public Map<String, Object> myNewTool(
 
 ### Task: Change Default Batch Size
 
-1. **Update `CrawlerProperties.java`**:
+1. **Update `ApplicationConfig.java`**:
    ```java
    private int batchSize = 200; // Changed from 100
    ```
@@ -803,7 +835,7 @@ public Map<String, Object> myNewTool(
 3. **Test manually**:
    ```bash
    java -Dspring.profiles.active=deployed -jar target/luceneserver-*.jar
-   # Should see only MCP initialization message, no Spring logs
+   # Should see only MCP initialization message, no debug logs
    ```
 
 4. **Check for stdout pollution**:
@@ -816,9 +848,18 @@ public Map<String, Object> myNewTool(
 
 1. **Add optimization tool** (currently missing):
    ```java
-   @McpTool(name = "optimizeIndex",
-       description = "Optimize index for faster searches (slow operation)")
-   public Map<String, Object> optimizeIndex() {
+   // In getToolSpecifications():
+   tools.add(new McpServerFeatures.SyncToolSpecification(
+           new McpSchema.Tool(
+                   "optimizeIndex",
+                   "Optimize index for faster searches (slow operation)",
+                   "{\"type\": \"object\", \"properties\": {}}"
+           ),
+           (exchange, args) -> optimizeIndex()
+   ));
+
+   // Implementation:
+   private McpSchema.CallToolResult optimizeIndex() {
        // Call indexWriter.forceMerge(1)
        // This merges all segments into one, improving search speed
    }
@@ -830,20 +871,21 @@ public Map<String, Object> myNewTool(
 
 ## Architectural Decisions and Rationale
 
-### Why Spring Boot?
+### Why Plain Java with MCP SDK?
 
 **Pros**:
-- Dependency injection simplifies component wiring
-- Configuration management (profiles, properties)
-- Auto-configuration reduces boilerplate
-- Well-documented, widely used
+- Lightweight - minimal dependencies
+- Fast startup time (~1 second)
+- Smaller JAR size (~45MB)
+- Direct control over initialization and lifecycle
+- Simpler debugging without framework magic
 
 **Cons**:
-- Heavyweight for a simple search server
-- Startup time ~2-3 seconds
-- Large JAR size (~50MB)
+- Manual dependency wiring in `LuceneserverApplication`
+- Manual configuration loading via `ApplicationConfig`
+- No auto-configuration conveniences
 
-**Decision**: Accepted trade-off. Developer productivity and maintainability > binary size
+**Decision**: Simplicity and performance are more important for an MCP server that runs as a subprocess
 
 ### Why STDIO Transport?
 
@@ -933,7 +975,7 @@ public Map<String, Object> myNewTool(
 **Current**: STDIO only
 **Proposed**: Add HTTP/SSE transport option
 **Benefit**: Use from web browsers, HTTP-only MCP clients
-**Complexity**: Low - Spring AI MCP Server already supports it
+**Complexity**: Low - MCP Java SDK provides SSE transport provider
 
 ### 6. Index Statistics Dashboard
 **Current**: Basic document count

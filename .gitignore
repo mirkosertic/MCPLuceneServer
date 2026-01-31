@@ -36,3 +36,6 @@ build/
 .claude/*
 !.claude/agents/
 !.claude/settings.json
+
+node_modules
+dist

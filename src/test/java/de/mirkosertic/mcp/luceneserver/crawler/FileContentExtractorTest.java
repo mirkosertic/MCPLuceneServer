@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
@@ -33,12 +34,12 @@ class FileContentExtractorTest {
         when(configManager.loadDirectories()).thenReturn(java.util.List.of());
         when(configManager.getConfigPath()).thenReturn(Path.of("/mock/config.yaml"));
 
-        final CrawlerProperties properties = new CrawlerProperties(configManager);
-        properties.setExtractMetadata(true);
-        properties.setDetectLanguage(true);
-        properties.setMaxContentLength(-1); // Unlimited
+        final ApplicationConfig config = mock(ApplicationConfig.class);
+        when(config.isExtractMetadata()).thenReturn(true);
+        when(config.isDetectLanguage()).thenReturn(true);
+        when(config.getMaxContentLength()).thenReturn(-1L);
 
-        extractor = new FileContentExtractor(properties);
+        extractor = new FileContentExtractor(config);
     }
 
     /**
