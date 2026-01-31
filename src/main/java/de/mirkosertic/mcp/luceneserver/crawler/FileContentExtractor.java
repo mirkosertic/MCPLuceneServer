@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.apache.tika.Tika;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.langdetect.optimaize.OptimaizeLangDetector;
@@ -13,7 +14,6 @@ import org.apache.tika.parser.Parser;
 import org.apache.tika.sax.BodyContentHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import org.xml.sax.SAXException;
 
 import java.io.IOException;
@@ -23,18 +23,21 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
-@Component
+/**
+ * Extracts text content and metadata from documents using Apache Tika.
+ * Supports PDF, Office documents, OpenOffice documents, and plain text.
+ */
 public class FileContentExtractor {
 
     private static final Logger logger = LoggerFactory.getLogger(FileContentExtractor.class);
 
-    private final CrawlerProperties properties;
+    private final ApplicationConfig config;
     private final Tika tika;
     private final Parser parser;
     private final LanguageDetector languageDetector;
 
-    public FileContentExtractor(final CrawlerProperties properties) {
-        this.properties = properties;
+    public FileContentExtractor(final ApplicationConfig config) {
+        this.config = config;
         this.tika = new Tika();
         this.parser = new AutoDetectParser();
         this.languageDetector = new OptimaizeLangDetector().loadModels();
@@ -51,11 +54,11 @@ public class FileContentExtractor {
             // Create content handler with max length limit
             // -1 means unlimited (extract full content regardless of size)
             final BodyContentHandler handler;
-            if (properties.getMaxContentLength() <= 0) {
+            if (config.getMaxContentLength() <= 0) {
                 handler = new BodyContentHandler(-1);
                 logger.debug("Using unlimited content extraction for file: {}", file);
             } else {
-                handler = new BodyContentHandler((int) properties.getMaxContentLength());
+                handler = new BodyContentHandler((int) config.getMaxContentLength());
             }
 
             // Parse the document
@@ -75,7 +78,7 @@ public class FileContentExtractor {
 
             // Extract metadata if enabled
             final Map<String, String> metadataMap = new HashMap<>();
-            if (properties.isExtractMetadata()) {
+            if (config.isExtractMetadata()) {
                 for (final String name : metadata.names()) {
                     final String value = metadata.get(name);
                     if (value != null && !value.isEmpty()) {
@@ -86,7 +89,7 @@ public class FileContentExtractor {
 
             // Detect language if enabled
             String detectedLanguage = null;
-            if (properties.isDetectLanguage() && !content.isEmpty()) {
+            if (config.isDetectLanguage() && !content.isEmpty()) {
                 try {
                     final LanguageResult result = languageDetector.detect(content);
                     if (result.isReasonablyCertain()) {

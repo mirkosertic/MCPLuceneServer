@@ -1,13 +1,18 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
-import org.apache.lucene.document.*;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.document.Field;
+import org.apache.lucene.document.FieldType;
+import org.apache.lucene.document.LongPoint;
+import org.apache.lucene.document.StoredField;
+import org.apache.lucene.document.StringField;
+import org.apache.lucene.document.TextField;
 import org.apache.lucene.facet.FacetsConfig;
 import org.apache.lucene.facet.sortedset.SortedSetDocValuesFacetField;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.Term;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -15,9 +20,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.List;
 
-@Component
+/**
+ * Creates and indexes Lucene documents with consistent field schema and faceting support.
+ */
 public class DocumentIndexer {
 
     private static final Logger logger = LoggerFactory.getLogger(DocumentIndexer.class);
@@ -155,12 +161,6 @@ public class DocumentIndexer {
             writer.updateDocument(new Term("file_path", filePath), facetedDoc);
         } else {
             writer.addDocument(facetedDoc);
-        }
-    }
-
-    public void indexDocuments(final IndexWriter writer, final List<Document> documents) throws IOException {
-        for (final Document document : documents) {
-            indexDocument(writer, document);
         }
     }
 

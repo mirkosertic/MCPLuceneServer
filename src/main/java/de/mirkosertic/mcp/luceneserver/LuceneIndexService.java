@@ -1,8 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.facet.FacetResult;
@@ -28,21 +26,24 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-@Service
+/**
+ * Core Lucene index service that manages IndexWriter and SearcherManager.
+ * Provides NRT (Near Real-Time) search capabilities with configurable refresh intervals.
+ */
 public class LuceneIndexService {
 
     private static final Logger logger = LoggerFactory.getLogger(LuceneIndexService.class);
@@ -57,17 +58,17 @@ public class LuceneIndexService {
     private final StandardAnalyzer analyzer;
     private final DocumentIndexer documentIndexer;
 
-    public LuceneIndexService(
-            @Value("${lucene.index.path}") final String indexPath,
-            @Value("${lucene.nrt.refresh.interval.ms:100}") final long nrtRefreshIntervalMs,
-            final DocumentIndexer documentIndexer) {
+    public LuceneIndexService(final String indexPath, final long nrtRefreshIntervalMs,
+                              final DocumentIndexer documentIndexer) {
         this.analyzer = new StandardAnalyzer();
         this.indexPath = indexPath;
         this.nrtRefreshIntervalMs = nrtRefreshIntervalMs;
         this.documentIndexer = documentIndexer;
     }
 
-    @PostConstruct
+    /**
+     * Initialize the Lucene index. Must be called before using the service.
+     */
     public void init() throws IOException {
         final Path path = Path.of(indexPath);
         if (!Files.exists(path)) {
@@ -109,7 +110,9 @@ public class LuceneIndexService {
         }
     }
 
-    @PreDestroy
+    /**
+     * Close the index service and release all resources.
+     */
     public void close() throws IOException {
         // Stop background refresh first
         if (refreshScheduler != null) {
@@ -247,10 +250,10 @@ public class LuceneIndexService {
         indexWriter.commit();
     }
 
-    public java.util.Set<String> getIndexedFields() throws IOException {
+    public Set<String> getIndexedFields() throws IOException {
         final IndexSearcher searcher = searcherManager.acquire();
         try {
-            final java.util.Set<String> fields = new java.util.HashSet<>();
+            final Set<String> fields = new HashSet<>();
             for (final var leafReaderContext : searcher.getIndexReader().leaves()) {
                 for (final var fieldInfo : leafReaderContext.reader().getFieldInfos()) {
                     fields.add(fieldInfo.name);
@@ -320,6 +323,10 @@ public class LuceneIndexService {
         } finally {
             searcherManager.release(searcher);
         }
+    }
+
+    public String getIndexPath() {
+        return indexPath;
     }
 
     private void addFieldIfPresent(final Document doc, final Map<String, Object> map, final String fieldName) {

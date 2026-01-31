@@ -90,6 +90,7 @@ Add the Lucene MCP server to the `mcpServers` section:
     "lucene-search": {
       "command": "java",
       "args": [
+        "--enable-native-access=ALL-UNNAMED",
         "-Xmx2g",
         "-Dspring.profiles.active=deployed",
         "-jar",
@@ -125,26 +126,24 @@ That's it! The configuration is saved to `~/.mcplucene/config.yaml` and persists
 
 > **Note:** The [Quick Start](#quick-start) above uses zero-configuration. This section covers advanced customization options.
 
-The server can be configured via environment variables, `application.yaml`, and Spring Boot profiles:
+The server can be configured via environment variables and `application.yaml`:
 
-### Spring Boot Profiles
+### Logging Profiles
 
-The server supports two profiles:
+The server supports two logging profiles (for backwards compatibility, uses the same system property as Spring Boot):
 
-| Profile | Usage | Configuration File |
-|---------|-------|-------------------|
-| **default** | Development in IDE | `application.yaml` |
-| **deployed** | Production/Claude Desktop | `application-deployed.yaml` |
+| Profile | Usage | Logging Output |
+|---------|-------|---------------|
+| **default** | Development in IDE | Console logging enabled |
+| **deployed** | Production/Claude Desktop | File logging only |
 
 **Default profile (no profile specified):**
-- Full logging enabled
-- Spring Boot banner visible
+- Full logging enabled to console
 - Suitable for debugging and development
 
 **Deployed profile (`-Dspring.profiles.active=deployed`):**
 - Console logging disabled (required for STDIO transport)
-- Spring Boot banner disabled
-- Web server disabled
+- File logging enabled (`~/.mcplucene/log/mcplucene.log`)
 - Used when running under Claude Desktop or other MCP clients
 
 ### Environment Variables
@@ -783,7 +782,7 @@ When running with the `deployed` profile, console logging is disabled to ensure 
 ~/.mcplucene/log/mcplucene.log
 ```
 
-The log directory is `${user.home}/.mcplucene/log` by default (configured in `logback-spring.xml`). Log files are automatically rotated:
+The log directory is `${user.home}/.mcplucene/log` by default (configured in `logback.xml`). Log files are automatically rotated:
 - Maximum 10MB per file
 - Up to 5 log files retained
 - Total size capped at 50MB
@@ -1084,20 +1083,14 @@ When developing and debugging in your IDE, run the server **without** the "deplo
 **In your IDE (IntelliJ, Eclipse, VS Code):**
 ```bash
 # Just run the main class directly - no profile needed
-# You'll see full Spring Boot logs, banner, and debug output
+# You'll see full console logging and debug output
 java -jar target/luceneserver-0.0.1-SNAPSHOT.jar
 ```
 
-**Or set environment variable:**
-```bash
-SPRING_PROFILES_ACTIVE=default java -jar target/luceneserver-0.0.1-SNAPSHOT.jar
-```
-
 This gives you:
-- ✅ Full Spring Boot startup banner
 - ✅ Complete logging output for debugging
-- ✅ Web server enabled (if needed for testing)
-- ✅ All debug information visible
+- ✅ Configuration loaded from classpath and user config
+- ✅ All debug information visible in console
 
 **For production/Claude Desktop deployment:**
 ```bash
@@ -1112,8 +1105,8 @@ java -Dspring.profiles.active=deployed -jar target/luceneserver-0.0.1-SNAPSHOT.j
 **Programmatic approach:** For custom document types or direct indexing:
 
 ```java
-@Autowired
-private LuceneIndexService indexService;
+// Get the LuceneIndexService instance from your application
+LuceneIndexService indexService = // ... from your application
 
 public void addDocument(String title, String content) throws IOException {
     Document doc = new Document();
@@ -1129,11 +1122,12 @@ For the full field schema, see the [Index Field Schema](#index-field-schema) sec
 
 ### Technology Stack
 
-- **Spring Boot 4.0.2** - Application framework
-- **Spring AI MCP Server 1.1.2** - Model Context Protocol implementation
+- **MCP Java SDK 0.12.1** - Model Context Protocol implementation (STDIO transport)
 - **Apache Lucene 10.3.2** - Full-text search engine
 - **Apache Tika 3.2.3** - Document content extraction
-- **Guava 33.0.0** - Utility libraries
+- **SnakeYAML 2.3** - Configuration loading
+- **Logback 1.5.15** - Logging framework
+- **Guava 33.5.0** - Utility libraries
 - **Java 21** - Runtime environment
 
 ### Crawler Architecture

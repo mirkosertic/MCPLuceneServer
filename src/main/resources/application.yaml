@@ -1,26 +1,19 @@
-spring:
-  application:
-    name: luceneserver
-  ai:
-    mcp:
-      server:
-        name: lucene-search-server
-        version: 1.0.0
-        type: SYNC
-        stdio: true
-        annotation-scanner:
-          enabled: true
+# MCP Lucene Server Configuration
+# This file provides default configuration values.
+# Override with environment variables or ~/.mcplucene/config.yaml
 
 lucene:
   index:
     # Default index location in user's home directory
     # Override with: -Dlucene.index.path=/custom/path or LUCENE_INDEX_PATH env var
     path: ${LUCENE_INDEX_PATH:${user.home}/.mcplucene/luceneindex}
+
   crawler:
     # Comma-separated list of directories to crawl
     # Override with: LUCENE_CRAWLER_DIRECTORIES=/path1,/path2,/path3 env var
     # or: -Dlucene.crawler.directories=/path1,/path2,/path3
     directories: ${LUCENE_CRAWLER_DIRECTORIES:}
+
     include-patterns:
       - "*.pdf"
       - "*.doc"
@@ -32,11 +25,13 @@ lucene:
       - "*.xlsx"
       - "*.ods"
       - "*.txt"
+
     exclude-patterns:
       - "**/node_modules/**"
       - "**/.git/**"
       - "**/target/**"
       - "**/build/**"
+
     thread-pool-size: 4
     batch-size: 100
     batch-timeout-ms: 5000

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Logback configuration for MCP Lucene Server - Deployed Mode.
+
+    This configuration outputs to file only - NO console output.
+    Required for STDIO transport where stdout is used for MCP JSON-RPC.
+
+    Log files are written to: ~/.mcplucene/log/mcplucene.log
+
+    Activated with: -Dspring.profiles.active=deployed
+-->
+<configuration>
+
+    <!-- Log directory and file properties -->
+    <property name="LOG_DIR" value="${user.home}/.mcplucene/log"/>
+    <property name="LOG_FILE" value="${LOG_DIR}/mcplucene"/>
+
+    <!-- Rolling file appender -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_FILE}-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>5</maxHistory>
+            <totalSizeCap>50MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- MCP SDK logging -->
+    <logger name="io.modelcontextprotocol" level="DEBUG"/>
+
+    <!-- Application logging -->
+    <logger name="de.mirkosertic.mcp.luceneserver" level="DEBUG"/>
+
+    <!-- Apache Lucene - reduce noise -->
+    <logger name="org.apache.lucene" level="WARN"/>
+
+    <!-- Apache Tika - reduce noise -->
+    <logger name="org.apache.tika" level="WARN"/>
+    <logger name="org.apache.pdfbox" level="WARN"/>
+    <logger name="org.apache.fontbox" level="WARN"/>
+
+    <!-- Root logger - FILE only, no console -->
+    <root level="INFO">
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>

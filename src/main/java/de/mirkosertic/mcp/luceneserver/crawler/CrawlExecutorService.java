@@ -1,21 +1,27 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
-import jakarta.annotation.PreDestroy;
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
-import java.util.concurrent.*;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-@Component
+/**
+ * Manages thread pool for crawler operations.
+ * Provides configurable parallelism for directory crawling.
+ */
 public class CrawlExecutorService {
 
     private static final Logger logger = LoggerFactory.getLogger(CrawlExecutorService.class);
 
     private final ThreadPoolExecutor executor;
 
-    public CrawlExecutorService(final CrawlerProperties properties) {
+    public CrawlExecutorService(final ApplicationConfig config) {
         final AtomicInteger threadCounter = new AtomicInteger(0);
         final ThreadFactory threadFactory = r -> {
             final Thread thread = new Thread(r, "crawler-" + threadCounter.getAndIncrement());
@@ -24,22 +30,18 @@ public class CrawlExecutorService {
         };
 
         this.executor = new ThreadPoolExecutor(
-                properties.getThreadPoolSize(),
-                properties.getThreadPoolSize(),
+                config.getThreadPoolSize(),
+                config.getThreadPoolSize(),
                 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<>(10000),
                 threadFactory,
                 new ThreadPoolExecutor.CallerRunsPolicy()
         );
 
-        logger.info("CrawlExecutorService initialized with {} threads", properties.getThreadPoolSize());
+        logger.info("CrawlExecutorService initialized with {} threads", config.getThreadPoolSize());
     }
 
     public Future<?> submit(final Runnable task) {
-        return executor.submit(task);
-    }
-
-    public <T> Future<T> submit(final Callable<T> task) {
         return executor.submit(task);
     }
 
@@ -47,19 +49,9 @@ public class CrawlExecutorService {
         executor.execute(task);
     }
 
-    public boolean isTerminated() {
-        return executor.isTerminated();
-    }
-
-    public boolean isShutdown() {
-        return executor.isShutdown();
-    }
-
-    public void awaitTermination(final long timeout, final TimeUnit unit) throws InterruptedException {
-        executor.awaitTermination(timeout, unit);
-    }
-
-    @PreDestroy
+    /**
+     * Shutdown the executor service. Should be called on application shutdown.
+     */
     public void shutdown() {
         logger.info("Shutting down CrawlExecutorService");
         executor.shutdown();

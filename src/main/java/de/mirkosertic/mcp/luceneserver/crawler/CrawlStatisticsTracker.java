@@ -1,20 +1,23 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
 import de.mirkosertic.mcp.luceneserver.NotificationService;
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-@Component
+/**
+ * Tracks crawler progress statistics and sends notifications.
+ * Thread-safe for use from multiple crawler threads.
+ */
 public class CrawlStatisticsTracker {
 
     private static final Logger logger = LoggerFactory.getLogger(CrawlStatisticsTracker.class);
 
-    private final CrawlerProperties properties;
+    private final ApplicationConfig config;
     private final NotificationService notificationService;
 
     private final AtomicLong filesFound = new AtomicLong(0);
@@ -29,8 +32,8 @@ public class CrawlStatisticsTracker {
     private volatile long lastNotificationTime = 0;
     private volatile long lastNotifiedFileCount = 0;
 
-    public CrawlStatisticsTracker(final CrawlerProperties properties, final NotificationService notificationService) {
-        this.properties = properties;
+    public CrawlStatisticsTracker(final ApplicationConfig config, final NotificationService notificationService) {
+        this.config = config;
         this.notificationService = notificationService;
     }
 
@@ -76,8 +79,8 @@ public class CrawlStatisticsTracker {
         final long filesProcessedNow = filesProcessed.get();
         final long timeSinceLastNotification = System.currentTimeMillis() - lastNotificationTime;
 
-        if (filesProcessedNow - lastNotifiedFileCount >= properties.getProgressNotificationFiles() ||
-            timeSinceLastNotification >= properties.getProgressNotificationIntervalMs()) {
+        if (filesProcessedNow - lastNotifiedFileCount >= config.getProgressNotificationFiles() ||
+            timeSinceLastNotification >= config.getProgressNotificationIntervalMs()) {
             sendProgressNotification();
             lastNotificationTime = System.currentTimeMillis();
             lastNotifiedFileCount = filesProcessedNow;

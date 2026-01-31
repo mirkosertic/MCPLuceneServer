@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Logback configuration for MCP Lucene Server - Development Mode.
+
+    This configuration outputs to console for development and debugging.
+
+    For deployed mode (STDIO transport), use logback-deployed.xml which
+    disables console output to prevent interference with MCP JSON-RPC.
+
+    Activate deployed mode with: -Dspring.profiles.active=deployed
+-->
+<configuration>
+
+    <!-- Console appender for development -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- MCP SDK logging -->
+    <logger name="io.modelcontextprotocol" level="DEBUG"/>
+
+    <!-- Application logging -->
+    <logger name="de.mirkosertic.mcp.luceneserver" level="DEBUG"/>
+
+    <!-- Apache Lucene - reduce noise -->
+    <logger name="org.apache.lucene" level="WARN"/>
+
+    <!-- Apache Tika - reduce noise -->
+    <logger name="org.apache.tika" level="WARN"/>
+    <logger name="org.apache.pdfbox" level="WARN"/>
+    <logger name="org.apache.fontbox" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+</configuration>
