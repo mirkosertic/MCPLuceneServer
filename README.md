@@ -596,6 +596,139 @@ Ask Claude: "What content was extracted from /path/to/contract.docx?"
 }
 ```
 
+### `unlockIndex`
+
+Remove the `write.lock` file from the Lucene index directory. This is a **dangerous recovery operation** - only use if you are certain no other process is using the index.
+
+**Parameters:**
+- `confirm` (required): Must be set to `true` to proceed. This is a safety measure.
+
+**Returns:**
+- `success`: Boolean indicating operation success
+- `message`: Confirmation message
+- `lockFileExisted`: Boolean indicating if a lock file was present
+- `lockFilePath`: Path to the lock file
+
+**When to use:**
+Use this tool when the server fails to start with a `LockObtainFailedException` after an unclean shutdown. See [Troubleshooting](#index-lock-file-prevents-startup-writelock) for details.
+
+**Example:**
+```
+Ask Claude: "Unlock the Lucene index - I confirm this is safe"
+```
+
+**⚠️ Warning:** Unlocking an index that is actively being written to by another process can cause data corruption. Only use this when you are certain the lock is stale.
+
+### `optimizeIndex`
+
+Optimize the Lucene index by merging segments. This is a **long-running operation** that runs in the background.
+
+**Parameters:**
+- `maxSegments` (optional): Target number of segments after optimization (default: 1 for maximum optimization)
+
+**Returns:**
+- `success`: Boolean indicating the operation was started
+- `operationId`: UUID to track the operation
+- `targetSegments`: The target segment count
+- `currentSegments`: The current segment count before optimization
+- `message`: Status message
+
+**Behavior:**
+- Returns immediately after starting the background operation
+- Use `getIndexAdminStatus` to poll for progress
+- Cannot run while the crawler is actively crawling
+- Only one admin operation can run at a time
+
+**Example:**
+```
+Ask Claude: "Optimize the search index"
+Ask Claude: "What's the status of the optimization?"
+```
+
+**Performance Notes:**
+- Optimization improves search performance by reducing the number of segments
+- Temporarily increases disk usage during the merge
+- For large indices, this can take several minutes to hours
+
+### `purgeIndex`
+
+Delete all documents from the Lucene index. This is a **destructive, long-running operation** that runs in the background.
+
+**Parameters:**
+- `confirm` (required): Must be set to `true` to proceed. This is a safety measure.
+- `fullPurge` (optional): If `true`, also deletes index files and reinitializes (default: `false`)
+
+**Returns:**
+- `success`: Boolean indicating the operation was started
+- `operationId`: UUID to track the operation
+- `documentsDeleted`: Number of documents that will be deleted
+- `fullPurge`: Whether a full purge was requested
+- `message`: Status message
+
+**Behavior:**
+- Returns immediately after starting the background operation
+- Use `getIndexAdminStatus` to poll for progress
+- Only one admin operation can run at a time
+
+**Purge Modes:**
+- **Standard purge** (`fullPurge=false`): Deletes all documents but keeps index files. Disk space is reclaimed gradually during future merges.
+- **Full purge** (`fullPurge=true`): Deletes all documents AND index files, then reinitializes an empty index. Disk space is reclaimed immediately.
+
+**Example:**
+```
+Ask Claude: "Delete all documents from the index - I confirm this"
+Ask Claude: "Purge the index completely and reclaim disk space - I confirm this"
+```
+
+**⚠️ Warning:** This operation cannot be undone. All indexed documents will be permanently deleted. You will need to re-crawl directories to repopulate the index.
+
+### `getIndexAdminStatus`
+
+Get the status of long-running index administration operations (optimize, purge).
+
+**Parameters:** None
+
+**Returns:**
+- `success`: Boolean indicating the status was retrieved
+- `state`: Current state: `IDLE`, `OPTIMIZING`, `PURGING`, `COMPLETED`, or `FAILED`
+- `operationId`: UUID of the current/last operation
+- `progressPercent`: Progress percentage (0-100)
+- `progressMessage`: Human-readable progress message
+- `elapsedTimeMs`: Time elapsed since operation started (in milliseconds)
+- `lastOperationResult`: Result message from the last completed operation
+
+**Example response (during optimization):**
+```json
+{
+  "success": true,
+  "state": "OPTIMIZING",
+  "operationId": "a1b2c3d4-...",
+  "progressPercent": 45,
+  "progressMessage": "Merging segments...",
+  "elapsedTimeMs": 12500,
+  "lastOperationResult": null
+}
+```
+
+**Example response (idle after completion):**
+```json
+{
+  "success": true,
+  "state": "IDLE",
+  "operationId": null,
+  "progressPercent": null,
+  "progressMessage": "No admin operation running",
+  "elapsedTimeMs": null,
+  "lastOperationResult": "Optimization completed successfully. Merged to 1 segment(s)."
+}
+```
+
+**Example:**
+```
+Ask Claude: "What's the status of the index optimization?"
+Ask Claude: "Is the purge operation complete?"
+```
+
 ## Index Field Schema
 
 When documents are indexed by the crawler, the following fields are automatically extracted and stored:
@@ -1095,7 +1228,7 @@ This gives you:
 **For production/Claude Desktop deployment:**
 ```bash
 # Use the deployed profile for clean STDIO
-java -Dspring.profiles.active=deployed -jar target/luceneserver-0.0.1-SNAPSHOT.jar
+java --enable-native-access=ALL-UNNAMED -Xmx2g -Dspring.profiles.active=deployed -jar target/luceneserver-0.0.1-SNAPSHOT.jar
 ```
 
 ### Adding Documents to the Index
