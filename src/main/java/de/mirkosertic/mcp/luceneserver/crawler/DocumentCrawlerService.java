@@ -1,26 +1,33 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
 import de.mirkosertic.mcp.luceneserver.LuceneIndexService;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.apache.lucene.document.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.nio.file.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
-@Service
+/**
+ * Orchestrates document crawling, content extraction, and indexing.
+ * Manages crawler lifecycle: start, pause, resume, and directory watching.
+ */
 public class DocumentCrawlerService implements FileChangeListener {
 
     private static final Logger logger = LoggerFactory.getLogger(DocumentCrawlerService.class);
 
-    private final CrawlerProperties properties;
+    private final ApplicationConfig config;
     private final LuceneIndexService indexService;
     private final FileContentExtractor contentExtractor;
     private final DocumentIndexer documentIndexer;
@@ -37,14 +44,14 @@ public class DocumentCrawlerService implements FileChangeListener {
     private volatile CrawlerState state = CrawlerState.IDLE;
 
     public DocumentCrawlerService(
-            final CrawlerProperties properties,
+            final ApplicationConfig config,
             final LuceneIndexService indexService,
             final FileContentExtractor contentExtractor,
             final DocumentIndexer documentIndexer,
             final CrawlExecutorService crawlExecutor,
             final CrawlStatisticsTracker statisticsTracker,
             final DirectoryWatcherService watcherService) {
-        this.properties = properties;
+        this.config = config;
         this.indexService = indexService;
         this.contentExtractor = contentExtractor;
         this.documentIndexer = documentIndexer;
@@ -53,9 +60,11 @@ public class DocumentCrawlerService implements FileChangeListener {
         this.watcherService = watcherService;
     }
 
-    @PostConstruct
+    /**
+     * Initialize the crawler service. May trigger auto-crawl on startup.
+     */
     public void init() {
-        if (properties.isCrawlOnStartup() && !properties.getDirectories().isEmpty()) {
+        if (config.isCrawlOnStartup() && !config.getDirectories().isEmpty()) {
             logger.info("Auto-crawl on startup is enabled");
             crawlExecutor.execute(() -> {
                 try {
@@ -73,7 +82,7 @@ public class DocumentCrawlerService implements FileChangeListener {
             state = CrawlerState.CRAWLING;
             paused.set(false);
 
-            if (properties.getDirectories().isEmpty()) {
+            if (config.getDirectories().isEmpty()) {
                 logger.warn("No directories configured for crawling");
                 crawling.set(false);
                 state = CrawlerState.IDLE;
@@ -91,7 +100,7 @@ public class DocumentCrawlerService implements FileChangeListener {
 
             // Reset statistics
             statisticsTracker.reset();
-            statisticsTracker.sendStartNotification(properties.getDirectories().size());
+            statisticsTracker.sendStartNotification(config.getDirectories().size());
 
             // Start batch processor
             batchProcessorFuture = crawlExecutor.submit(this::processBatches);
@@ -101,16 +110,16 @@ public class DocumentCrawlerService implements FileChangeListener {
             logger.info("Found approximately {} files to process", totalFiles);
 
             // Adjust NRT refresh interval if bulk indexing
-            if (totalFiles >= properties.getBulkIndexThreshold()) {
+            if (totalFiles >= config.getBulkIndexThreshold()) {
                 logger.info("Bulk indexing mode: slowing NRT refresh to {}ms",
-                        properties.getSlowNrtRefreshIntervalMs());
+                        config.getSlowNrtRefreshIntervalMs());
                 originalNrtRefreshInterval = 100; // Default value
-                indexService.setNrtRefreshInterval(properties.getSlowNrtRefreshIntervalMs());
+                indexService.setNrtRefreshInterval(config.getSlowNrtRefreshIntervalMs());
             }
 
             // Crawl each directory in parallel
             final List<Future<?>> futures = new ArrayList<>();
-            for (final String directory : properties.getDirectories()) {
+            for (final String directory : config.getDirectories()) {
                 final Future<?> future = crawlExecutor.submit(() -> crawlDirectory(directory));
                 futures.add(future);
             }
@@ -131,7 +140,7 @@ public class DocumentCrawlerService implements FileChangeListener {
                     }
 
                     // Restore original NRT refresh interval
-                    if (totalFiles >= properties.getBulkIndexThreshold()) {
+                    if (totalFiles >= config.getBulkIndexThreshold()) {
                         indexService.setNrtRefreshInterval(originalNrtRefreshInterval);
                         logger.info("Restored NRT refresh interval to {}ms", originalNrtRefreshInterval);
                     }
@@ -143,7 +152,7 @@ public class DocumentCrawlerService implements FileChangeListener {
                     statisticsTracker.sendCompleteNotification();
 
                     // Setup directory watching if enabled
-                    if (properties.isWatchEnabled()) {
+                    if (config.isWatchEnabled()) {
                         setupWatchers();
                         state = CrawlerState.WATCHING;
                     } else {
@@ -165,11 +174,11 @@ public class DocumentCrawlerService implements FileChangeListener {
     private long countTotalFiles() {
         long count = 0;
         final FilePatternMatcher matcher = new FilePatternMatcher(
-                properties.getIncludePatterns(),
-                properties.getExcludePatterns()
+                config.getIncludePatterns(),
+                config.getExcludePatterns()
         );
 
-        for (final String directory : properties.getDirectories()) {
+        for (final String directory : config.getDirectories()) {
             final Path dirPath = Paths.get(directory);
             if (!Files.exists(dirPath) || !Files.isDirectory(dirPath)) {
                 continue;
@@ -203,8 +212,8 @@ public class DocumentCrawlerService implements FileChangeListener {
         }
 
         final FilePatternMatcher matcher = new FilePatternMatcher(
-                properties.getIncludePatterns(),
-                properties.getExcludePatterns()
+                config.getIncludePatterns(),
+                config.getExcludePatterns()
         );
 
         try (final Stream<Path> paths = Files.walk(dirPath)) {
@@ -256,7 +265,7 @@ public class DocumentCrawlerService implements FileChangeListener {
     }
 
     private void processBatches() {
-        final List<Document> batch = new ArrayList<>(properties.getBatchSize());
+        final List<Document> batch = new ArrayList<>(config.getBatchSize());
         long lastBatchTime = System.currentTimeMillis();
 
         while (crawling.get() || !batchQueue.isEmpty()) {
@@ -270,8 +279,8 @@ public class DocumentCrawlerService implements FileChangeListener {
 
                 // Check if we should process the batch
                 final long timeSinceLastBatch = System.currentTimeMillis() - lastBatchTime;
-                if (batch.size() >= properties.getBatchSize() ||
-                        (timeSinceLastBatch >= properties.getBatchTimeoutMs() && !batch.isEmpty())) {
+                if (batch.size() >= config.getBatchSize() ||
+                        (timeSinceLastBatch >= config.getBatchTimeoutMs() && !batch.isEmpty())) {
 
                     // Index the batch
                     indexBatch(batch);
@@ -324,7 +333,7 @@ public class DocumentCrawlerService implements FileChangeListener {
 
     private void setupWatchers() {
         logger.info("Setting up directory watchers");
-        for (final String directory : properties.getDirectories()) {
+        for (final String directory : config.getDirectories()) {
             try {
                 watcherService.watchDirectory(Paths.get(directory), this);
                 logger.info("Watching directory: {}", directory);
@@ -338,8 +347,8 @@ public class DocumentCrawlerService implements FileChangeListener {
     public void onFileCreated(final Path file) {
         logger.debug("File created: {}", file);
         final FilePatternMatcher matcher = new FilePatternMatcher(
-                properties.getIncludePatterns(),
-                properties.getExcludePatterns()
+                config.getIncludePatterns(),
+                config.getExcludePatterns()
         );
 
         if (matcher.shouldInclude(file)) {
@@ -405,8 +414,8 @@ public class DocumentCrawlerService implements FileChangeListener {
             watcherService.stopAll();
         }
 
-        // Update properties
-        properties.setDirectories(new ArrayList<>(newDirectories));
+        // Update config
+        config.setDirectories(new ArrayList<>(newDirectories));
 
         // Restart watchers if needed
         if (state == CrawlerState.WATCHING && !newDirectories.isEmpty()) {
@@ -417,7 +426,9 @@ public class DocumentCrawlerService implements FileChangeListener {
         logger.info("Directories updated successfully");
     }
 
-    @PreDestroy
+    /**
+     * Shutdown the crawler service. Should be called on application shutdown.
+     */
     public void shutdown() {
         logger.info("Shutting down DocumentCrawlerService");
         crawling.set(false);

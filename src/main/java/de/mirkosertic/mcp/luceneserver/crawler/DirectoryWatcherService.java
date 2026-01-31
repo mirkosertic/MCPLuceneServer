@@ -1,23 +1,39 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
-import jakarta.annotation.PreDestroy;
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.nio.file.*;
+import java.nio.file.ClosedWatchServiceException;
+import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
-import static java.nio.file.StandardWatchEventKinds.*;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
+import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
 
-@Service
+/**
+ * Monitors directories for file system changes and triggers indexing updates.
+ * Uses Java WatchService for efficient file change detection.
+ */
 public class DirectoryWatcherService {
 
     private static final Logger logger = LoggerFactory.getLogger(DirectoryWatcherService.class);
 
-    private final CrawlerProperties properties;
+    private final ApplicationConfig config;
     private final Map<WatchKey, WatchInfo> watchKeys = new ConcurrentHashMap<>();
     private final ExecutorService watchExecutor = Executors.newCachedThreadPool(r -> {
         Thread thread = new Thread(r, "directory-watcher");
@@ -27,8 +43,8 @@ public class DirectoryWatcherService {
 
     private volatile WatchService watchService;
 
-    public DirectoryWatcherService(final CrawlerProperties properties) {
-        this.properties = properties;
+    public DirectoryWatcherService(final ApplicationConfig config) {
+        this.config = config;
     }
 
     public void watchDirectory(final Path directory, final FileChangeListener listener) throws IOException {
@@ -62,7 +78,7 @@ public class DirectoryWatcherService {
             final WatchKey key;
             try {
                 // Wait for events with timeout
-                key = watchService.poll(properties.getWatchPollIntervalMs(), TimeUnit.MILLISECONDS);
+                key = watchService.poll(config.getWatchPollIntervalMs(), TimeUnit.MILLISECONDS);
                 if (key == null) {
                     continue;
                 }
@@ -134,7 +150,9 @@ public class DirectoryWatcherService {
         watchKeys.clear();
     }
 
-    @PreDestroy
+    /**
+     * Shutdown the watcher service. Should be called on application shutdown.
+     */
     public void shutdown() {
         try {
             stopAll();

@@ -2,11 +2,13 @@ package de.mirkosertic.mcp.luceneserver;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 
-@Service
+/**
+ * Service for sending desktop notifications across different operating systems.
+ * Supports macOS Notification Center, Windows Toast, and Linux notify-send.
+ */
 public class NotificationService {
 
     private static final Logger logger = LoggerFactory.getLogger(NotificationService.class);

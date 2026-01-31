@@ -1,9 +1,7 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
-import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
@@ -25,7 +23,6 @@ import java.util.Map;
  * Handles loading/saving crawlable directories with thread-safe operations and
  * graceful error handling. Supports environment variable override via LUCENE_CRAWLER_DIRECTORIES.
  */
-@Component
 public class CrawlerConfigurationManager {
 
     private static final Logger logger = LoggerFactory.getLogger(CrawlerConfigurationManager.class);
@@ -42,8 +39,10 @@ public class CrawlerConfigurationManager {
         this.yaml = new Yaml(options);
     }
 
-    @PostConstruct
-    void init() {
+    /**
+     * Initialize the configuration manager. Ensures config file exists.
+     */
+    public void init() {
         ensureConfigFileExists();
     }
 
