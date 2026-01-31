@@ -93,6 +93,10 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
   - `addCrawlableDirectory()`: Add directory at runtime
   - `removeCrawlableDirectory()`: Remove directory at runtime
   - `getDocumentDetails()`: Retrieve full document details and content from index by file path
+  - `unlockIndex()`: Remove stale write.lock file (dangerous recovery operation)
+  - `optimizeIndex()`: Merge index segments via forceMerge (long-running, async)
+  - `purgeIndex()`: Delete all documents from index (destructive, long-running, async)
+  - `getIndexAdminStatus()`: Poll progress of optimize/purge operations
 
 #### 2. **LuceneIndexService** (`LuceneIndexService.java`)
 - **Role**: Core Lucene operations manager
@@ -102,10 +106,14 @@ MCP Lucene Server is a **Model Context Protocol (MCP) server** that exposes Apac
   - Handle commits and refreshes
   - Manage faceted search configuration
   - Retrieve individual documents by file path with content truncation for safe response sizes
+  - Execute long-running admin operations (optimize, purge) asynchronously
+  - Manage write.lock file for recovery scenarios
 - **Key Concepts**:
   - **NRT Refresh**: Controls how quickly new documents appear in search results
   - **Dynamic NRT Interval**: Slows refresh during bulk indexing to reduce overhead
   - **Facets**: Efficient category-based filtering using SortedSetDocValues
+  - **Admin Operations**: Single-threaded executor ensures only one admin operation runs at a time
+  - **AdminOperationState**: Enum tracking IDLE, OPTIMIZING, PURGING, COMPLETED, FAILED states
 
 #### 3. **DocumentCrawlerService** (`DocumentCrawlerService.java`)
 - **Role**: Document discovery and indexing orchestrator
@@ -844,28 +852,78 @@ tools.add(new McpServerFeatures.SyncToolSpecification(
 
 ### Task: Optimize Index for Production
 
-**After initial bulk indexing**, optimize the index:
+**After initial bulk indexing**, optimize the index using the `optimizeIndex` MCP tool:
 
-1. **Add optimization tool** (currently missing):
-   ```java
-   // In getToolSpecifications():
-   tools.add(new McpServerFeatures.SyncToolSpecification(
-           new McpSchema.Tool(
-                   "optimizeIndex",
-                   "Optimize index for faster searches (slow operation)",
-                   "{\"type\": \"object\", \"properties\": {}}"
-           ),
-           (exchange, args) -> optimizeIndex()
-   ));
+```
+Ask Claude: "Optimize the search index"
+```
 
-   // Implementation:
-   private McpSchema.CallToolResult optimizeIndex() {
-       // Call indexWriter.forceMerge(1)
-       // This merges all segments into one, improving search speed
-   }
-   ```
+**What happens:**
+1. The tool starts an async optimization (returns immediately)
+2. Lucene's `forceMerge()` merges all segments into 1 (or specified number)
+3. Poll progress with `getIndexAdminStatus`
+4. After completion, searches are faster
 
-2. **Warning**: Very slow for large indices, blocks indexing during operation
+**Parameters:**
+- `maxSegments` (optional): Target number of segments (default: 1 for maximum optimization)
+
+**Constraints:**
+- Cannot run while crawler is active
+- Only one admin operation can run at a time
+- Very slow for large indices (can take minutes to hours)
+
+**Example workflow:**
+```
+User: "Optimize the search index"
+Claude: [calls optimizeIndex()] -> Returns operationId
+User: "What's the status?"
+Claude: [calls getIndexAdminStatus()] -> Shows progress %
+```
+
+### Task: Purge Index and Start Fresh
+
+**To delete all documents and start with a clean index:**
+
+```
+Ask Claude: "Delete all documents from the index - I confirm this"
+```
+
+**What happens:**
+1. The tool requires explicit confirmation (`confirm=true`)
+2. Deletes all documents asynchronously
+3. Poll progress with `getIndexAdminStatus`
+
+**Parameters:**
+- `confirm` (required): Must be `true` to proceed
+- `fullPurge` (optional): If `true`, also deletes index files and reclaims disk space immediately
+
+**Example workflow:**
+```
+User: "Purge the index completely and reclaim disk space - I confirm this"
+Claude: [calls purgeIndex(confirm=true, fullPurge=true)] -> Returns operationId
+User: "Is it done?"
+Claude: [calls getIndexAdminStatus()] -> Shows "COMPLETED" or progress
+```
+
+### Task: Recover from Stale Lock File
+
+**If the server fails to start with a lock error:**
+
+```
+Ask Claude: "Unlock the Lucene index - I confirm this is safe"
+```
+
+**What happens:**
+1. The tool requires explicit confirmation (`confirm=true`)
+2. Checks if `write.lock` file exists
+3. Deletes the lock file if present
+
+**When to use:**
+- Server crashed or was force-killed
+- Lock file left behind after unclean shutdown
+- `LockObtainFailedException` on startup
+
+**Safety warning:** Only use if you are CERTAIN no other process is using the index
 
 ---
 
@@ -1010,7 +1068,7 @@ tools.add(new McpServerFeatures.SyncToolSpecification(
 
 **For AI Assistants Working on This Project**:
 
-1. **Use the `implement-review-loop` agent** for all code changes
+1. **You MUST use the `implement-review-loop` agent** for all code changes
 2. **Read this document** before making architectural changes
 3. **Update this document** when adding features or changing design decisions
 4. **Maintain backward compatibility** in MCP tool interfaces

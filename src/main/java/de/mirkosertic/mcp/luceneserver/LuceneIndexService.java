@@ -36,6 +36,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -47,6 +49,18 @@ import java.util.concurrent.TimeUnit;
 public class LuceneIndexService {
 
     private static final Logger logger = LoggerFactory.getLogger(LuceneIndexService.class);
+    private static final String WRITE_LOCK_FILE = "write.lock";
+
+    /**
+     * States for long-running admin operations.
+     */
+    public enum AdminOperationState {
+        IDLE,
+        OPTIMIZING,
+        PURGING,
+        COMPLETED,
+        FAILED
+    }
 
     private final String indexPath;
     private volatile long nrtRefreshIntervalMs;
@@ -57,6 +71,21 @@ public class LuceneIndexService {
     private ScheduledExecutorService refreshScheduler;
     private final StandardAnalyzer analyzer;
     private final DocumentIndexer documentIndexer;
+
+    // Admin operation state (volatile for thread-safe reads)
+    private volatile AdminOperationState adminState = AdminOperationState.IDLE;
+    private volatile String currentOperationId;
+    private volatile int operationProgressPercent;
+    private volatile String operationProgressMessage;
+    private volatile long operationStartTime;
+    private volatile String lastOperationResult;
+
+    // Single-threaded executor for admin operations (ensures only one runs at a time)
+    private final ExecutorService adminExecutor = Executors.newSingleThreadExecutor(r -> {
+        final Thread t = new Thread(r, "lucene-admin-ops");
+        t.setDaemon(true);
+        return t;
+    });
 
     public LuceneIndexService(final String indexPath, final long nrtRefreshIntervalMs,
                               final DocumentIndexer documentIndexer) {
@@ -125,6 +154,17 @@ public class LuceneIndexService {
                 refreshScheduler.shutdownNow();
                 Thread.currentThread().interrupt();
             }
+        }
+
+        // Stop admin executor
+        adminExecutor.shutdown();
+        try {
+            if (!adminExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                adminExecutor.shutdownNow();
+            }
+        } catch (final InterruptedException e) {
+            adminExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
 
         // Close SearcherManager before IndexWriter
@@ -327,6 +367,284 @@ public class LuceneIndexService {
 
     public String getIndexPath() {
         return indexPath;
+    }
+
+    // ==================== Admin Operation Methods ====================
+
+    /**
+     * Check if the write.lock file exists.
+     */
+    public boolean isLockFilePresent() {
+        final Path lockPath = Path.of(indexPath, WRITE_LOCK_FILE);
+        return Files.exists(lockPath);
+    }
+
+    /**
+     * Get the path to the lock file.
+     */
+    public Path getLockFilePath() {
+        return Path.of(indexPath, WRITE_LOCK_FILE);
+    }
+
+    /**
+     * Remove the write.lock file.
+     * WARNING: Only use this if you are certain no other process is using the index.
+     *
+     * @return true if the lock file was deleted, false if it didn't exist
+     * @throws IOException if deletion fails
+     */
+    public boolean removeLockFile() throws IOException {
+        final Path lockPath = getLockFilePath();
+        if (Files.exists(lockPath)) {
+            Files.delete(lockPath);
+            logger.warn("Removed lock file: {}", lockPath);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Get the current number of index segments.
+     */
+    public int getSegmentCount() throws IOException {
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            return searcher.getIndexReader().leaves().size();
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    /**
+     * Get the current admin operation status.
+     */
+    public AdminOperationStatus getAdminStatus() {
+        final AdminOperationState state = this.adminState;
+        if (state == AdminOperationState.IDLE) {
+            return new AdminOperationStatus(state, null, null, null, null, lastOperationResult);
+        }
+        final long elapsed = System.currentTimeMillis() - operationStartTime;
+        return new AdminOperationStatus(state, currentOperationId, operationProgressPercent,
+                operationProgressMessage, elapsed, lastOperationResult);
+    }
+
+    /**
+     * Check if an admin operation is currently running.
+     */
+    public boolean isAdminOperationRunning() {
+        final AdminOperationState state = this.adminState;
+        return state == AdminOperationState.OPTIMIZING || state == AdminOperationState.PURGING;
+    }
+
+    /**
+     * Start an asynchronous index optimization (forceMerge).
+     *
+     * @param maxSegments the target number of segments (1 = maximum optimization)
+     * @return the operation ID, or null if another operation is already running
+     */
+    public synchronized String startOptimization(final int maxSegments) {
+        if (isAdminOperationRunning()) {
+            return null;
+        }
+
+        final String operationId = UUID.randomUUID().toString();
+        this.currentOperationId = operationId;
+        this.adminState = AdminOperationState.OPTIMIZING;
+        this.operationProgressPercent = 0;
+        this.operationProgressMessage = "Starting optimization...";
+        this.operationStartTime = System.currentTimeMillis();
+
+        adminExecutor.submit(() -> {
+            try {
+                logger.info("Starting index optimization: operationId={}, maxSegments={}", operationId, maxSegments);
+                operationProgressMessage = "Merging segments...";
+                operationProgressPercent = 10;
+
+                // forceMerge is a blocking operation that merges all segments
+                indexWriter.forceMerge(maxSegments);
+
+                operationProgressPercent = 80;
+                operationProgressMessage = "Committing changes...";
+
+                indexWriter.commit();
+
+                operationProgressPercent = 90;
+                operationProgressMessage = "Refreshing searcher...";
+
+                searcherManager.maybeRefresh();
+
+                operationProgressPercent = 100;
+                operationProgressMessage = "Optimization completed";
+                adminState = AdminOperationState.COMPLETED;
+                lastOperationResult = "Optimization completed successfully. Merged to " + maxSegments + " segment(s).";
+
+                logger.info("Index optimization completed: operationId={}", operationId);
+
+            } catch (final Exception e) {
+                logger.error("Index optimization failed: operationId={}", operationId, e);
+                adminState = AdminOperationState.FAILED;
+                operationProgressMessage = "Optimization failed: " + e.getMessage();
+                lastOperationResult = "Optimization failed: " + e.getMessage();
+            } finally {
+                // Reset to IDLE after a short delay so clients can see the final status
+                try {
+                    Thread.sleep(1000);
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                if (adminState == AdminOperationState.COMPLETED || adminState == AdminOperationState.FAILED) {
+                    adminState = AdminOperationState.IDLE;
+                }
+            }
+        });
+
+        return operationId;
+    }
+
+    /**
+     * Start an asynchronous index purge (delete all documents).
+     *
+     * @param fullPurge if true, also deletes index files and reinitializes
+     * @return the result containing operation ID and document count
+     */
+    public synchronized PurgeResult startPurge(final boolean fullPurge) {
+        if (isAdminOperationRunning()) {
+            return null;
+        }
+
+        final String operationId = UUID.randomUUID().toString();
+        this.currentOperationId = operationId;
+        this.adminState = AdminOperationState.PURGING;
+        this.operationProgressPercent = 0;
+        this.operationProgressMessage = "Starting purge...";
+        this.operationStartTime = System.currentTimeMillis();
+
+        // Get document count before purge
+        long documentCount;
+        try {
+            documentCount = getDocumentCount();
+        } catch (final IOException e) {
+            documentCount = -1;
+        }
+        final long finalDocumentCount = documentCount;
+
+        adminExecutor.submit(() -> {
+            try {
+                logger.info("Starting index purge: operationId={}, fullPurge={}, documentsToDelete={}",
+                        operationId, fullPurge, finalDocumentCount);
+
+                operationProgressPercent = 10;
+                operationProgressMessage = "Deleting all documents...";
+
+                // Delete all documents
+                indexWriter.deleteAll();
+
+                operationProgressPercent = 40;
+                operationProgressMessage = "Committing deletion...";
+
+                indexWriter.commit();
+
+                if (fullPurge) {
+                    operationProgressPercent = 50;
+                    operationProgressMessage = "Closing index for file deletion...";
+
+                    // Close everything
+                    searcherManager.close();
+                    indexWriter.close();
+                    directory.close();
+
+                    operationProgressPercent = 60;
+                    operationProgressMessage = "Deleting index files...";
+
+                    // Delete all files in the index directory
+                    final Path indexDir = Path.of(indexPath);
+                    try (final var files = Files.list(indexDir)) {
+                        files.forEach(file -> {
+                            try {
+                                Files.deleteIfExists(file);
+                            } catch (final IOException e) {
+                                logger.warn("Failed to delete index file: {}", file, e);
+                            }
+                        });
+                    }
+
+                    operationProgressPercent = 80;
+                    operationProgressMessage = "Reinitializing index...";
+
+                    // Reinitialize
+                    reinitializeIndex();
+                } else {
+                    operationProgressPercent = 80;
+                    operationProgressMessage = "Refreshing searcher...";
+
+                    searcherManager.maybeRefresh();
+                }
+
+                operationProgressPercent = 100;
+                operationProgressMessage = "Purge completed";
+                adminState = AdminOperationState.COMPLETED;
+                lastOperationResult = "Purge completed. Deleted " + finalDocumentCount + " document(s)." +
+                        (fullPurge ? " Index files deleted and reinitialized." : "");
+
+                logger.info("Index purge completed: operationId={}", operationId);
+
+            } catch (final Exception e) {
+                logger.error("Index purge failed: operationId={}", operationId, e);
+                adminState = AdminOperationState.FAILED;
+                operationProgressMessage = "Purge failed: " + e.getMessage();
+                lastOperationResult = "Purge failed: " + e.getMessage();
+            } finally {
+                // Reset to IDLE after a short delay so clients can see the final status
+                try {
+                    Thread.sleep(1000);
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                if (adminState == AdminOperationState.COMPLETED || adminState == AdminOperationState.FAILED) {
+                    adminState = AdminOperationState.IDLE;
+                }
+            }
+        });
+
+        return new PurgeResult(operationId, documentCount);
+    }
+
+    /**
+     * Reinitialize the index after a full purge.
+     */
+    private void reinitializeIndex() throws IOException {
+        final Path path = Path.of(indexPath);
+        if (!Files.exists(path)) {
+            Files.createDirectories(path);
+        }
+
+        directory = FSDirectory.open(path);
+        final IndexWriterConfig config = new IndexWriterConfig(analyzer);
+        config.setOpenMode(IndexWriterConfig.OpenMode.CREATE);
+        indexWriter = new IndexWriter(directory, config);
+        indexWriter.commit();
+        searcherManager = new SearcherManager(indexWriter, null);
+
+        logger.info("Index reinitialized at: {}", path.toAbsolutePath());
+    }
+
+    /**
+     * Result of a purge start operation.
+     */
+    public record PurgeResult(String operationId, long documentsDeleted) {
+    }
+
+    /**
+     * Current admin operation status.
+     */
+    public record AdminOperationStatus(
+            AdminOperationState state,
+            String operationId,
+            Integer progressPercent,
+            String progressMessage,
+            Long elapsedTimeMs,
+            String lastOperationResult
+    ) {
     }
 
     private void addFieldIfPresent(final Document doc, final Map<String, Object> map, final String fieldName) {

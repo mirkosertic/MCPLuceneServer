@@ -249,6 +249,57 @@ public class LuceneSearchTools {
                 .callHandler((exchange, request) -> getDocumentDetails(request.arguments()))
                 .build());
 
+        // Unlock index tool (dangerous recovery operation)
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("unlockIndex")
+                        .description("Remove the write.lock file from the Lucene index directory. " +
+                                "WARNING: This is a dangerous recovery operation. Only use if you are CERTAIN no other process is using the index. " +
+                                "Unlocking an index that is actively being written to can cause data corruption. " +
+                                "Requires explicit confirmation (confirm=true) to proceed.")
+                        .inputSchema(SchemaGenerator.generateSchema(UnlockIndexRequest.class))
+                        .build())
+                .callHandler((exchange, request) -> unlockIndex(request.arguments()))
+                .build());
+
+        // Optimize index tool (long-running)
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("optimizeIndex")
+                        .description("Optimize the Lucene index by merging segments. This is a long-running operation that runs in the background. " +
+                                "Use getIndexAdminStatus to poll for progress. " +
+                                "Optimization improves search performance but temporarily increases disk usage during the merge. " +
+                                "Cannot run while the crawler is active.")
+                        .inputSchema(SchemaGenerator.generateSchema(OptimizeIndexRequest.class))
+                        .build())
+                .callHandler((exchange, request) -> optimizeIndex(request.arguments()))
+                .build());
+
+        // Purge index tool (destructive, long-running)
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("purgeIndex")
+                        .description("Delete all documents from the Lucene index. This is a destructive operation that runs in the background. " +
+                                "Use getIndexAdminStatus to poll for progress. " +
+                                "Requires explicit confirmation (confirm=true) to proceed. " +
+                                "Set fullPurge=true to also delete index files and reinitialize (reclaims disk space immediately).")
+                        .inputSchema(SchemaGenerator.generateSchema(PurgeIndexRequest.class))
+                        .build())
+                .callHandler((exchange, request) -> purgeIndex(request.arguments()))
+                .build());
+
+        // Get index admin status tool
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("getIndexAdminStatus")
+                        .description("Get the status of long-running index administration operations (optimize, purge). " +
+                                "Returns the current state (IDLE, OPTIMIZING, PURGING, COMPLETED, FAILED), progress percentage, " +
+                                "progress message, elapsed time, and the result of the last completed operation.")
+                        .inputSchema(SchemaGenerator.emptySchema())
+                        .build())
+                .callHandler((exchange, request) -> getIndexAdminStatus())
+                .build());
+
         return tools;
     }
 
@@ -571,6 +622,166 @@ public class LuceneSearchTools {
         } catch (final Exception e) {
             logger.error("Unexpected error retrieving document details", e);
             return ToolResultHelper.createResult(GetDocumentDetailsResponse.error("Unexpected error: " + e.getMessage()));
+        }
+    }
+
+    // ==================== Index Administration Tools ====================
+
+    private McpSchema.CallToolResult unlockIndex(final Map<String, Object> args) {
+        final UnlockIndexRequest request = UnlockIndexRequest.fromMap(args);
+
+        logger.info("Unlock index request: confirm={}", request.confirm());
+
+        // Require explicit confirmation
+        if (!request.isConfirmed()) {
+            logger.warn("Unlock index request not confirmed");
+            return ToolResultHelper.createResult(UnlockIndexResponse.notConfirmed());
+        }
+
+        try {
+            final boolean lockFileExisted = indexService.isLockFilePresent();
+            final String lockFilePath = indexService.getLockFilePath().toString();
+
+            if (!lockFileExisted) {
+                logger.info("No lock file present at: {}", lockFilePath);
+                return ToolResultHelper.createResult(UnlockIndexResponse.success(
+                        "No lock file present. Index is not locked.", false, lockFilePath));
+            }
+
+            final boolean removed = indexService.removeLockFile();
+
+            if (removed) {
+                logger.warn("Lock file removed: {}", lockFilePath);
+                return ToolResultHelper.createResult(UnlockIndexResponse.success(
+                        "Lock file removed successfully. WARNING: Ensure no other process was using the index.",
+                        true, lockFilePath));
+            } else {
+                return ToolResultHelper.createResult(UnlockIndexResponse.error(
+                        "Failed to remove lock file. It may have been removed by another process."));
+            }
+
+        } catch (final IOException e) {
+            logger.error("Error unlocking index", e);
+            return ToolResultHelper.createResult(UnlockIndexResponse.error("Error unlocking index: " + e.getMessage()));
+        } catch (final Exception e) {
+            logger.error("Unexpected error unlocking index", e);
+            return ToolResultHelper.createResult(UnlockIndexResponse.error("Unexpected error: " + e.getMessage()));
+        }
+    }
+
+    private McpSchema.CallToolResult optimizeIndex(final Map<String, Object> args) {
+        final OptimizeIndexRequest request = OptimizeIndexRequest.fromMap(args);
+
+        logger.info("Optimize index request: maxSegments={}", request.maxSegments());
+
+        try {
+            // Check if crawler is active
+            final DocumentCrawlerService.CrawlerState crawlerState = crawlerService.getState();
+            if (crawlerState == DocumentCrawlerService.CrawlerState.CRAWLING) {
+                logger.warn("Cannot optimize while crawler is active");
+                return ToolResultHelper.createResult(OptimizeIndexResponse.crawlerActive());
+            }
+
+            // Check if another admin operation is running
+            if (indexService.isAdminOperationRunning()) {
+                final LuceneIndexService.AdminOperationStatus status = indexService.getAdminStatus();
+                logger.warn("Another admin operation is running: {}", status.state());
+                return ToolResultHelper.createResult(OptimizeIndexResponse.alreadyRunning(status.operationId()));
+            }
+
+            // Get current segment count
+            final int currentSegments = indexService.getSegmentCount();
+            final int targetSegments = request.effectiveMaxSegments();
+
+            // Start optimization
+            final String operationId = indexService.startOptimization(targetSegments);
+
+            if (operationId == null) {
+                logger.warn("Failed to start optimization - another operation may have started");
+                return ToolResultHelper.createResult(OptimizeIndexResponse.error(
+                        "Failed to start optimization. Another operation may have started."));
+            }
+
+            logger.info("Optimization started: operationId={}, currentSegments={}, targetSegments={}",
+                    operationId, currentSegments, targetSegments);
+
+            return ToolResultHelper.createResult(OptimizeIndexResponse.started(
+                    operationId, targetSegments, currentSegments));
+
+        } catch (final IOException e) {
+            logger.error("Error starting optimization", e);
+            return ToolResultHelper.createResult(OptimizeIndexResponse.error("Error starting optimization: " + e.getMessage()));
+        } catch (final Exception e) {
+            logger.error("Unexpected error starting optimization", e);
+            return ToolResultHelper.createResult(OptimizeIndexResponse.error("Unexpected error: " + e.getMessage()));
+        }
+    }
+
+    private McpSchema.CallToolResult purgeIndex(final Map<String, Object> args) {
+        final PurgeIndexRequest request = PurgeIndexRequest.fromMap(args);
+
+        logger.info("Purge index request: confirm={}, fullPurge={}", request.confirm(), request.fullPurge());
+
+        // Require explicit confirmation
+        if (!request.isConfirmed()) {
+            logger.warn("Purge index request not confirmed");
+            return ToolResultHelper.createResult(PurgeIndexResponse.notConfirmed());
+        }
+
+        try {
+            // Check if another admin operation is running
+            if (indexService.isAdminOperationRunning()) {
+                final LuceneIndexService.AdminOperationStatus status = indexService.getAdminStatus();
+                logger.warn("Another admin operation is running: {}", status.state());
+                return ToolResultHelper.createResult(PurgeIndexResponse.alreadyRunning(status.operationId()));
+            }
+
+            // Start purge
+            final LuceneIndexService.PurgeResult result = indexService.startPurge(request.effectiveFullPurge());
+
+            if (result == null) {
+                logger.warn("Failed to start purge - another operation may have started");
+                return ToolResultHelper.createResult(PurgeIndexResponse.error(
+                        "Failed to start purge. Another operation may have started."));
+            }
+
+            logger.info("Purge started: operationId={}, documentsToDelete={}, fullPurge={}",
+                    result.operationId(), result.documentsDeleted(), request.effectiveFullPurge());
+
+            return ToolResultHelper.createResult(PurgeIndexResponse.started(
+                    result.operationId(), result.documentsDeleted(), request.effectiveFullPurge()));
+
+        } catch (final Exception e) {
+            logger.error("Error starting purge", e);
+            return ToolResultHelper.createResult(PurgeIndexResponse.error("Error starting purge: " + e.getMessage()));
+        }
+    }
+
+    private McpSchema.CallToolResult getIndexAdminStatus() {
+        logger.info("Get index admin status request");
+
+        try {
+            final LuceneIndexService.AdminOperationStatus status = indexService.getAdminStatus();
+
+            logger.info("Index admin status: state={}, operationId={}, progress={}%",
+                    status.state(), status.operationId(), status.progressPercent());
+
+            if (status.state() == LuceneIndexService.AdminOperationState.IDLE) {
+                return ToolResultHelper.createResult(IndexAdminStatusResponse.idle(status.lastOperationResult()));
+            }
+
+            return ToolResultHelper.createResult(IndexAdminStatusResponse.success(
+                    status.state().name(),
+                    status.operationId(),
+                    status.progressPercent(),
+                    status.progressMessage(),
+                    status.elapsedTimeMs(),
+                    status.lastOperationResult()
+            ));
+
+        } catch (final Exception e) {
+            logger.error("Error getting index admin status", e);
+            return ToolResultHelper.createResult(IndexAdminStatusResponse.error("Error getting status: " + e.getMessage()));
         }
     }
 }
