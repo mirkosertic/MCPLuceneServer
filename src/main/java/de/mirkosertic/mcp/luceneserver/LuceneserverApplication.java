@@ -216,6 +216,8 @@ public class LuceneserverApplication {
             app.init();
             app.start();
 
+            logger.info("MCP Lucene Server finished.");
+
         } catch (final Exception e) {
             // In deployed mode, we can't log to console, so write to stderr
             System.err.println("Failed to start MCP Lucene Server: " + e.getMessage());
