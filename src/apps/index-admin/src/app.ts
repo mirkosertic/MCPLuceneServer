@@ -5,7 +5,7 @@ import {
     applyHostStyleVariables,
     type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
-//import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "./global.css";
 import "./app.css";
 
@@ -32,9 +32,20 @@ function handleHostContextChanged(ctx: McpUiHostContext) {
     }
 }
 
+function updateStatusUnlock(result: CallToolResult) {
+    // result.content maps to UnlockIndexResponse.java
+}
+
+function updateStatusOptimize(result: CallToolResult) {
+    // result.content maps to OptimizeIndexResponse.java
+}
+
+function updateStatusPurge(result: CallToolResult) {
+    // result.content maps to PurgeIndexResponse.java}
+}
+
 // 1. Create app instance
 const app = new App({ name: "Lucene Admin App", version: "1.0.0" });
-
 
 // 2. Register handlers BEFORE connecting
 app.onteardown = async () => {
@@ -63,12 +74,10 @@ unlockEl.addEventListener("click", async () => {
     try {
         console.info("Calling unlockIndex tool...");
         const result = await app.callServerTool({ name: "unlockIndex", arguments: {"confirm": true} });
+        updateStatusUnlock(result);
         console.info("unlockIndex result:", result);
-
-        //serverTimeEl.textContent = extractTime(result);
     } catch (e) {
         console.error(e);
-        //serverTimeEl.textContent = "[ERROR]";
     }
 });
 
@@ -76,12 +85,10 @@ optimizeEl.addEventListener("click", async () => {
     try {
         console.info("Calling optimizeIndex tool...");
         const result = await app.callServerTool({ name: "optimizeIndex", arguments: {} });
+        updateStatusOptimize(result);
         console.info("optimizeIndex result:", result);
-
-        //serverTimeEl.textContent = extractTime(result);
     } catch (e) {
         console.error(e);
-        //serverTimeEl.textContent = "[ERROR]";
     }
 });
 
@@ -89,12 +96,10 @@ purgeEl.addEventListener("click", async () => {
     try {
         console.info("Calling purgeIndex tool...");
         const result = await app.callServerTool({ name: "purgeIndex", arguments: {"confirm": true} });
+        updateStatusPurge(result);
         console.info("purgeIndex result:", result);
-
-        //serverTimeEl.textContent = extractTime(result);
     } catch (e) {
         console.error(e);
-        //serverTimeEl.textContent = "[ERROR]";
     }
 });
 
