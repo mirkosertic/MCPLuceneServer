@@ -186,6 +186,10 @@
 	<build>
 		<resources>
 			<resource>
+				<directory>${basedir}/src/main/resources</directory>
+				<filtering>false</filtering>
+			</resource>
+			<resource>
 				<directory>${basedir}/src/apps/index-admin/dist</directory>
 				<filtering>false</filtering>
 			</resource>

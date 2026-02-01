@@ -151,6 +151,8 @@ public class LuceneserverApplication {
             Thread.currentThread().interrupt();
             logger.info("Main thread interrupted, shutting down...");
         }
+
+        logger.info("Main thread finished, shutting down...");
     }
 
     /**
