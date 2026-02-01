@@ -72,13 +72,16 @@ public class LuceneIndexService {
     private final StandardAnalyzer analyzer;
     private final DocumentIndexer documentIndexer;
 
-    // Admin operation state (volatile for thread-safe reads)
-    private volatile AdminOperationState adminState = AdminOperationState.IDLE;
-    private volatile String currentOperationId;
-    private volatile int operationProgressPercent;
-    private volatile String operationProgressMessage;
-    private volatile long operationStartTime;
-    private volatile String lastOperationResult;
+    // Lock object for admin operation state transitions
+    private final Object adminStateLock = new Object();
+
+    // Admin operation state (all access must be synchronized on adminStateLock)
+    private AdminOperationState adminState = AdminOperationState.IDLE;
+    private String currentOperationId;
+    private int operationProgressPercent;
+    private String operationProgressMessage;
+    private long operationStartTime;
+    private String lastOperationResult;
 
     // Single-threaded executor for admin operations (ensures only one runs at a time)
     private final ExecutorService adminExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -419,21 +422,23 @@ public class LuceneIndexService {
      * Get the current admin operation status.
      */
     public AdminOperationStatus getAdminStatus() {
-        final AdminOperationState state = this.adminState;
-        if (state == AdminOperationState.IDLE) {
-            return new AdminOperationStatus(state, null, null, null, null, lastOperationResult);
+        synchronized (adminStateLock) {
+            if (adminState == AdminOperationState.IDLE) {
+                return new AdminOperationStatus(adminState, null, null, null, null, lastOperationResult);
+            }
+            final long elapsed = System.currentTimeMillis() - operationStartTime;
+            return new AdminOperationStatus(adminState, currentOperationId, operationProgressPercent,
+                    operationProgressMessage, elapsed, lastOperationResult);
         }
-        final long elapsed = System.currentTimeMillis() - operationStartTime;
-        return new AdminOperationStatus(state, currentOperationId, operationProgressPercent,
-                operationProgressMessage, elapsed, lastOperationResult);
     }
 
     /**
      * Check if an admin operation is currently running.
      */
     public boolean isAdminOperationRunning() {
-        final AdminOperationState state = this.adminState;
-        return state == AdminOperationState.OPTIMIZING || state == AdminOperationState.PURGING;
+        synchronized (adminStateLock) {
+            return adminState == AdminOperationState.OPTIMIZING || adminState == AdminOperationState.PURGING;
+        }
     }
 
     /**
@@ -442,49 +447,64 @@ public class LuceneIndexService {
      * @param maxSegments the target number of segments (1 = maximum optimization)
      * @return the operation ID, or null if another operation is already running
      */
-    public synchronized String startOptimization(final int maxSegments) {
-        if (isAdminOperationRunning()) {
-            return null;
-        }
+    public String startOptimization(final int maxSegments) {
+        final String operationId;
 
-        final String operationId = UUID.randomUUID().toString();
-        this.currentOperationId = operationId;
-        this.adminState = AdminOperationState.OPTIMIZING;
-        this.operationProgressPercent = 0;
-        this.operationProgressMessage = "Starting optimization...";
-        this.operationStartTime = System.currentTimeMillis();
+        synchronized (adminStateLock) {
+            if (adminState == AdminOperationState.OPTIMIZING || adminState == AdminOperationState.PURGING) {
+                return null;
+            }
+
+            operationId = UUID.randomUUID().toString();
+            this.currentOperationId = operationId;
+            this.adminState = AdminOperationState.OPTIMIZING;
+            this.operationProgressPercent = 0;
+            this.operationProgressMessage = "Starting optimization...";
+            this.operationStartTime = System.currentTimeMillis();
+        }
 
         adminExecutor.submit(() -> {
             try {
                 logger.info("Starting index optimization: operationId={}, maxSegments={}", operationId, maxSegments);
-                operationProgressMessage = "Merging segments...";
-                operationProgressPercent = 10;
+
+                synchronized (adminStateLock) {
+                    operationProgressMessage = "Merging segments...";
+                    operationProgressPercent = 10;
+                }
 
                 // forceMerge is a blocking operation that merges all segments
                 indexWriter.forceMerge(maxSegments);
 
-                operationProgressPercent = 80;
-                operationProgressMessage = "Committing changes...";
+                synchronized (adminStateLock) {
+                    operationProgressPercent = 80;
+                    operationProgressMessage = "Committing changes...";
+                }
 
                 indexWriter.commit();
 
-                operationProgressPercent = 90;
-                operationProgressMessage = "Refreshing searcher...";
+                synchronized (adminStateLock) {
+                    operationProgressPercent = 90;
+                    operationProgressMessage = "Refreshing searcher...";
+                }
 
                 searcherManager.maybeRefresh();
 
-                operationProgressPercent = 100;
-                operationProgressMessage = "Optimization completed";
-                adminState = AdminOperationState.COMPLETED;
-                lastOperationResult = "Optimization completed successfully. Merged to " + maxSegments + " segment(s).";
+                synchronized (adminStateLock) {
+                    operationProgressPercent = 100;
+                    operationProgressMessage = "Optimization completed";
+                    adminState = AdminOperationState.COMPLETED;
+                    lastOperationResult = "Optimization completed successfully. Merged to " + maxSegments + " segment(s).";
+                }
 
                 logger.info("Index optimization completed: operationId={}", operationId);
 
             } catch (final Exception e) {
                 logger.error("Index optimization failed: operationId={}", operationId, e);
-                adminState = AdminOperationState.FAILED;
-                operationProgressMessage = "Optimization failed: " + e.getMessage();
-                lastOperationResult = "Optimization failed: " + e.getMessage();
+                synchronized (adminStateLock) {
+                    adminState = AdminOperationState.FAILED;
+                    operationProgressMessage = "Optimization failed: " + e.getMessage();
+                    lastOperationResult = "Optimization failed: " + e.getMessage();
+                }
             } finally {
                 // Reset to IDLE after a short delay so clients can see the final status
                 try {
@@ -492,8 +512,12 @@ public class LuceneIndexService {
                 } catch (final InterruptedException ignored) {
                     Thread.currentThread().interrupt();
                 }
-                if (adminState == AdminOperationState.COMPLETED || adminState == AdminOperationState.FAILED) {
-                    adminState = AdminOperationState.IDLE;
+                synchronized (adminStateLock) {
+                    // Only reset if this is still our operation (prevents race with new operation)
+                    if (operationId.equals(currentOperationId) &&
+                            (adminState == AdminOperationState.COMPLETED || adminState == AdminOperationState.FAILED)) {
+                        adminState = AdminOperationState.IDLE;
+                    }
                 }
             }
         });
@@ -507,54 +531,67 @@ public class LuceneIndexService {
      * @param fullPurge if true, also deletes index files and reinitializes
      * @return the result containing operation ID and document count
      */
-    public synchronized PurgeResult startPurge(final boolean fullPurge) {
-        if (isAdminOperationRunning()) {
-            return null;
+    public PurgeResult startPurge(final boolean fullPurge) {
+        final String operationId;
+        final long documentCount;
+
+        synchronized (adminStateLock) {
+            if (adminState == AdminOperationState.OPTIMIZING || adminState == AdminOperationState.PURGING) {
+                return null;
+            }
+
+            operationId = UUID.randomUUID().toString();
+            this.currentOperationId = operationId;
+            this.adminState = AdminOperationState.PURGING;
+            this.operationProgressPercent = 0;
+            this.operationProgressMessage = "Starting purge...";
+            this.operationStartTime = System.currentTimeMillis();
         }
 
-        final String operationId = UUID.randomUUID().toString();
-        this.currentOperationId = operationId;
-        this.adminState = AdminOperationState.PURGING;
-        this.operationProgressPercent = 0;
-        this.operationProgressMessage = "Starting purge...";
-        this.operationStartTime = System.currentTimeMillis();
-
-        // Get document count before purge
-        long documentCount;
+        // Get document count before purge (outside lock - getDocumentCount is safe)
+        long docCount;
         try {
-            documentCount = getDocumentCount();
+            docCount = getDocumentCount();
         } catch (final IOException e) {
-            documentCount = -1;
+            docCount = -1;
         }
-        final long finalDocumentCount = documentCount;
+        documentCount = docCount;
 
         adminExecutor.submit(() -> {
             try {
                 logger.info("Starting index purge: operationId={}, fullPurge={}, documentsToDelete={}",
-                        operationId, fullPurge, finalDocumentCount);
+                        operationId, fullPurge, documentCount);
 
-                operationProgressPercent = 10;
-                operationProgressMessage = "Deleting all documents...";
+                synchronized (adminStateLock) {
+                    operationProgressPercent = 10;
+                    operationProgressMessage = "Deleting all documents...";
+                }
 
                 // Delete all documents
                 indexWriter.deleteAll();
 
-                operationProgressPercent = 40;
-                operationProgressMessage = "Committing deletion...";
+                synchronized (adminStateLock) {
+                    operationProgressPercent = 40;
+                    operationProgressMessage = "Committing deletion...";
+                }
 
                 indexWriter.commit();
 
                 if (fullPurge) {
-                    operationProgressPercent = 50;
-                    operationProgressMessage = "Closing index for file deletion...";
+                    synchronized (adminStateLock) {
+                        operationProgressPercent = 50;
+                        operationProgressMessage = "Closing index for file deletion...";
+                    }
 
                     // Close everything
                     searcherManager.close();
                     indexWriter.close();
                     directory.close();
 
-                    operationProgressPercent = 60;
-                    operationProgressMessage = "Deleting index files...";
+                    synchronized (adminStateLock) {
+                        operationProgressPercent = 60;
+                        operationProgressMessage = "Deleting index files...";
+                    }
 
                     // Delete all files in the index directory
                     final Path indexDir = Path.of(indexPath);
@@ -568,31 +605,39 @@ public class LuceneIndexService {
                         });
                     }
 
-                    operationProgressPercent = 80;
-                    operationProgressMessage = "Reinitializing index...";
+                    synchronized (adminStateLock) {
+                        operationProgressPercent = 80;
+                        operationProgressMessage = "Reinitializing index...";
+                    }
 
                     // Reinitialize
                     reinitializeIndex();
                 } else {
-                    operationProgressPercent = 80;
-                    operationProgressMessage = "Refreshing searcher...";
+                    synchronized (adminStateLock) {
+                        operationProgressPercent = 80;
+                        operationProgressMessage = "Refreshing searcher...";
+                    }
 
                     searcherManager.maybeRefresh();
                 }
 
-                operationProgressPercent = 100;
-                operationProgressMessage = "Purge completed";
-                adminState = AdminOperationState.COMPLETED;
-                lastOperationResult = "Purge completed. Deleted " + finalDocumentCount + " document(s)." +
-                        (fullPurge ? " Index files deleted and reinitialized." : "");
+                synchronized (adminStateLock) {
+                    operationProgressPercent = 100;
+                    operationProgressMessage = "Purge completed";
+                    adminState = AdminOperationState.COMPLETED;
+                    lastOperationResult = "Purge completed. Deleted " + documentCount + " document(s)." +
+                            (fullPurge ? " Index files deleted and reinitialized." : "");
+                }
 
                 logger.info("Index purge completed: operationId={}", operationId);
 
             } catch (final Exception e) {
                 logger.error("Index purge failed: operationId={}", operationId, e);
-                adminState = AdminOperationState.FAILED;
-                operationProgressMessage = "Purge failed: " + e.getMessage();
-                lastOperationResult = "Purge failed: " + e.getMessage();
+                synchronized (adminStateLock) {
+                    adminState = AdminOperationState.FAILED;
+                    operationProgressMessage = "Purge failed: " + e.getMessage();
+                    lastOperationResult = "Purge failed: " + e.getMessage();
+                }
             } finally {
                 // Reset to IDLE after a short delay so clients can see the final status
                 try {
@@ -600,8 +645,12 @@ public class LuceneIndexService {
                 } catch (final InterruptedException ignored) {
                     Thread.currentThread().interrupt();
                 }
-                if (adminState == AdminOperationState.COMPLETED || adminState == AdminOperationState.FAILED) {
-                    adminState = AdminOperationState.IDLE;
+                synchronized (adminStateLock) {
+                    // Only reset if this is still our operation (prevents race with new operation)
+                    if (operationId.equals(currentOperationId) &&
+                            (adminState == AdminOperationState.COMPLETED || adminState == AdminOperationState.FAILED)) {
+                        adminState = AdminOperationState.IDLE;
+                    }
                 }
             }
         });

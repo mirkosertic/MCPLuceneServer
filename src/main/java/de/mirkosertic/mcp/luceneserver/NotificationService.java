@@ -62,7 +62,9 @@ public class NotificationService {
                 escapeForPowerShell(message)
         );
         final ProcessBuilder pb = new ProcessBuilder("powershell", "-Command", script);
-        pb.inheritIO();
+        // Redirect output to prevent interference with STDIO transport
+        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+        pb.redirectError(ProcessBuilder.Redirect.DISCARD);
         final Process p = pb.start();
         p.waitFor();
     }
@@ -70,7 +72,9 @@ public class NotificationService {
     private void notifyLinux(final String title, final String message) throws IOException, InterruptedException {
         // Use notify-send (available on most Linux desktops)
         final ProcessBuilder pb = new ProcessBuilder("notify-send", title, message);
-        pb.inheritIO();
+        // Redirect output to prevent interference with STDIO transport
+        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+        pb.redirectError(ProcessBuilder.Redirect.DISCARD);
         final Process p = pb.start();
         p.waitFor();
     }
