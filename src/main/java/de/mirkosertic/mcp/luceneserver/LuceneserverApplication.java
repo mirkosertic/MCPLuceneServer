@@ -134,7 +134,6 @@ public class LuceneserverApplication {
                 .capabilities(capabilities)
                 .tools(searchTools.getToolSpecifications())
                 .resources(searchTools.getResourceSpecifications())
-                .resources()
                 .build();
 
         logger.info("MCP server started successfully");

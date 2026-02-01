@@ -18,8 +18,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Map;
 
 /**
  * Creates and indexes Lucene documents with consistent field schema and faceting support.
@@ -80,7 +82,9 @@ public class DocumentIndexer {
 
         // Timestamps
         try {
-            final long createdDate = Files.getAttribute(filePath, "creationTime", java.nio.file.LinkOption.NOFOLLOW_LINKS).hashCode();
+            final FileTime creationTime = (FileTime) Files.getAttribute(filePath, "creationTime",
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            final long createdDate = creationTime.toMillis();
             final long modifiedDate = Files.getLastModifiedTime(filePath).toMillis();
             final long indexedDate = System.currentTimeMillis();
 
@@ -96,37 +100,39 @@ public class DocumentIndexer {
             logger.warn("Failed to read file timestamps for: {}", filePath, e);
         }
 
-        // Metadata fields
+        // Metadata fields - use Tika standard keys with fallbacks to legacy keys
         if (extracted.metadata() != null) {
-            // title
-            final String title = extracted.metadata().get("title");
+            final Map<String, String> meta = extracted.metadata();
+
+            // title: dc:title > title > Title
+            final String title = getMetadataWithFallback(meta, "dc:title", "title", "Title");
             if (title != null && !title.isEmpty()) {
                 doc.add(new TextField("title", title, Field.Store.YES));
             }
 
-            // author (faceted)
-            final String author = extracted.metadata().get("Author");
+            // author (faceted): dc:creator > meta:author > Author > author
+            final String author = getMetadataWithFallback(meta, "dc:creator", "meta:author", "Author", "author");
             if (author != null && !author.isEmpty()) {
                 doc.add(new TextField("author", author, Field.Store.YES));
                 doc.add(new SortedSetDocValuesFacetField("author", author));
             }
 
-            // creator (faceted)
-            final String creator = extracted.metadata().get("creator");
+            // creator (faceted): xmp:CreatorTool > creator > Creator > Application-Name
+            final String creator = getMetadataWithFallback(meta, "xmp:CreatorTool", "creator", "Creator", "Application-Name");
             if (creator != null && !creator.isEmpty()) {
                 doc.add(new TextField("creator", creator, Field.Store.YES));
                 doc.add(new SortedSetDocValuesFacetField("creator", creator));
             }
 
-            // subject (faceted)
-            final String subject = extracted.metadata().get("subject");
+            // subject (faceted): dc:subject > subject > Subject
+            final String subject = getMetadataWithFallback(meta, "dc:subject", "subject", "Subject");
             if (subject != null && !subject.isEmpty()) {
                 doc.add(new TextField("subject", subject, Field.Store.YES));
                 doc.add(new SortedSetDocValuesFacetField("subject", subject));
             }
 
-            // keywords
-            final String keywords = extracted.metadata().get("Keywords");
+            // keywords: meta:keyword > Keywords > keywords
+            final String keywords = getMetadataWithFallback(meta, "meta:keyword", "Keywords", "keywords");
             if (keywords != null && !keywords.isEmpty()) {
                 doc.add(new TextField("keywords", keywords, Field.Store.YES));
             }
@@ -180,5 +186,23 @@ public class DocumentIndexer {
             hexString.append(hex);
         }
         return hexString.toString();
+    }
+
+    /**
+     * Get metadata value trying multiple keys in order.
+     * Returns the first non-null, non-empty value found, or null if none found.
+     *
+     * @param metadata the metadata map
+     * @param keys     the keys to try in order (first match wins)
+     * @return the first non-empty value, or null
+     */
+    private String getMetadataWithFallback(final Map<String, String> metadata, final String... keys) {
+        for (final String key : keys) {
+            final String value = metadata.get(key);
+            if (value != null && !value.isEmpty()) {
+                return value;
+            }
+        }
+        return null;
     }
 }
