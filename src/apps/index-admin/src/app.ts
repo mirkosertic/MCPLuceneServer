@@ -1,8 +1,3 @@
-/**
- * @file App that demonstrates a few features using MCP Apps SDK with vanilla JS.
- *
- * TODO: Implement Lucene specific tooling here...
- */
 import {
     App,
     applyDocumentTheme,
@@ -14,12 +9,10 @@ import {
 import "./global.css";
 import "./app.css";
 
-/*function extractTime(result: CallToolResult): string {
-    const { time } = (result.structuredContent as { time?: string }) ?? {};
-    return time ?? "[ERROR]";
-}*/
-
 const mainEl = document.querySelector(".main") as HTMLElement;
+const unlockEl = document.querySelector("#btn-unlock") as HTMLElement;
+const optimizeEl = document.querySelector("#btn-optimize") as HTMLElement;
+const purgeEl = document.querySelector("#btn-purge") as HTMLElement;
 
 function handleHostContextChanged(ctx: McpUiHostContext) {
     if (ctx.theme) {
@@ -66,44 +59,44 @@ app.onerror = console.error;
 
 app.onhostcontextchanged = handleHostContextChanged;
 
-/*
-getTimeBtn.addEventListener("click", async () => {
+unlockEl.addEventListener("click", async () => {
     try {
-        console.info("Calling get-time tool...");
-        const result = await app.callServerTool({ name: "get-time", arguments: {} });
-        console.info("get-time result:", result);
-        serverTimeEl.textContent = extractTime(result);
+        console.info("Calling unlockIndex tool...");
+        const result = await app.callServerTool({ name: "unlockIndex", arguments: {"confirm": true} });
+        console.info("unlockIndex result:", result);
+
+        //serverTimeEl.textContent = extractTime(result);
     } catch (e) {
         console.error(e);
-        serverTimeEl.textContent = "[ERROR]";
+        //serverTimeEl.textContent = "[ERROR]";
     }
 });
 
-sendMessageBtn.addEventListener("click", async () => {
-    const signal = AbortSignal.timeout(5000);
+optimizeEl.addEventListener("click", async () => {
     try {
-        console.info("Sending message text to Host:", messageText.value);
-        const { isError } = await app.sendMessage(
-            { role: "user", content: [{ type: "text", text: messageText.value }] },
-            { signal },
-        );
-        console.info("Message", isError ? "rejected" : "accepted");
+        console.info("Calling optimizeIndex tool...");
+        const result = await app.callServerTool({ name: "optimizeIndex", arguments: {} });
+        console.info("optimizeIndex result:", result);
+
+        //serverTimeEl.textContent = extractTime(result);
     } catch (e) {
-        console.error("Message send error:", signal.aborted ? "timed out" : e);
+        console.error(e);
+        //serverTimeEl.textContent = "[ERROR]";
     }
 });
 
-sendLogBtn.addEventListener("click", async () => {
-    console.info("Sending log text to Host:", logText.value);
-    await app.sendLog({ level: "info", data: logText.value });
+purgeEl.addEventListener("click", async () => {
+    try {
+        console.info("Calling purgeIndex tool...");
+        const result = await app.callServerTool({ name: "purgeIndex", arguments: {"confirm": true} });
+        console.info("purgeIndex result:", result);
+
+        //serverTimeEl.textContent = extractTime(result);
+    } catch (e) {
+        console.error(e);
+        //serverTimeEl.textContent = "[ERROR]";
+    }
 });
-
-openLinkBtn.addEventListener("click", async () => {
-    console.info("Sending open link request to Host:", linkUrl.value);
-    const { isError } = await app.openLink({ url: linkUrl.value });
-    console.info("Open link request", isError ? "rejected" : "accepted");
-});*/
-
 
 // 3. Connect to host
 app.connect().then(() => {
