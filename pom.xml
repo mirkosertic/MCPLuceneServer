@@ -34,7 +34,7 @@
 		<logback.version>1.5.26</logback.version>
 		<slf4j.version>2.0.17</slf4j.version>
 		<snakeyaml.version>2.3</snakeyaml.version>
-		<jackson.version>2.18.2</jackson.version>
+		<jackson.version>2.21.0</jackson.version>
 		<junit.version>5.11.4</junit.version>
 	</properties>
 
