@@ -14,6 +14,8 @@ This document contains instructions and context for AI assistants working on thi
    - Troubleshooting information
 3. **NEVER duplicate README content here** - this file is for development context only
 4. **Test with real documents** before considering a feature complete
+5. Always use Context7 MCP when I need library/API documentation, code generation, setup or configuration steps without me having to explicitly ask.
+
 
 ---
 

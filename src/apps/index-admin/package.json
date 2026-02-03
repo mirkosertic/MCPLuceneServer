@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && cross-env INPUT=indexadmin-app.html vite build"
+    "build": "tsc --noEmit && cross-env INPUT=indexadmin-app.html vite build",
+    "dev": "tsc --noEmit && cross-env INPUT=indexadmin-app.html vite dev"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.0.0"
