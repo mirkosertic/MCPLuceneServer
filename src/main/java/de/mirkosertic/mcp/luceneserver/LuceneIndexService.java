@@ -15,12 +15,15 @@ import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.SearcherManager;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
@@ -370,6 +373,68 @@ public class LuceneIndexService {
 
     public String getIndexPath() {
         return indexPath;
+    }
+
+    // ==================== Reconciliation Support Methods ====================
+
+    /**
+     * Retrieve every indexed document's file path and its stored {@code modified_date}
+     * (epoch millis).  Used by the reconciliation phase to build the "index snapshot"
+     * that is diffed against the current filesystem state.
+     *
+     * @return map of file_path to modified_date; never null, may be empty
+     * @throws IOException if the index cannot be read
+     */
+    public Map<String, Long> getAllIndexedDocuments() throws IOException {
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            // MatchAllDocsQuery returns every document in the index
+            final TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), Integer.MAX_VALUE);
+            final Map<String, Long> result = new HashMap<>(topDocs.scoreDocs.length * 2);
+
+            for (final ScoreDoc scoreDoc : topDocs.scoreDocs) {
+                final Document doc = searcher.storedFields().document(scoreDoc.doc);
+                final String filePath = doc.get("file_path");
+                if (filePath == null) {
+                    continue;
+                }
+
+                // modified_date is stored as a long via StoredField
+                final String modifiedDateStr = doc.get("modified_date");
+                final long modifiedDate = modifiedDateStr != null ? Long.parseLong(modifiedDateStr) : 0L;
+                result.put(filePath, modifiedDate);
+            }
+
+            logger.info("Retrieved {} indexed documents for reconciliation", result.size());
+            return result;
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    /**
+     * Efficiently delete a set of documents identified by their {@code file_path} values.
+     * Builds a single {@link BooleanQuery} with one {@link TermQuery} per path so that
+     * the IndexWriter can batch the deletions internally.
+     *
+     * @param filePaths the set of file paths to remove; must not be null
+     * @throws IOException if the deletion or commit fails
+     */
+    public void bulkDeleteByFilePaths(final Set<String> filePaths) throws IOException {
+        if (filePaths == null || filePaths.isEmpty()) {
+            return;
+        }
+
+        final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+        for (final String filePath : filePaths) {
+            builder.add(new TermQuery(new Term("file_path", filePath)), BooleanClause.Occur.SHOULD);
+        }
+
+        indexWriter.deleteDocuments(builder.build());
+        indexWriter.commit();
+        searcherManager.maybeRefresh();
+
+        logger.info("Bulk-deleted {} documents from index", filePaths.size());
     }
 
     // ==================== Admin Operation Methods ====================

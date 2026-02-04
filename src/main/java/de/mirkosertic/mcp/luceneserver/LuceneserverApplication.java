@@ -10,6 +10,7 @@ import de.mirkosertic.mcp.luceneserver.crawler.DirectoryWatcherService;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentCrawlerService;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.crawler.FileContentExtractor;
+import de.mirkosertic.mcp.luceneserver.crawler.IndexReconciliationService;
 import de.mirkosertic.mcp.luceneserver.mcp.LatestProtocolStdioServerTransportProvider;
 import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
@@ -64,6 +65,8 @@ public class LuceneserverApplication {
 
         final CrawlStatisticsTracker statisticsTracker = new CrawlStatisticsTracker(config, notificationService);
 
+        final IndexReconciliationService reconciliationService = new IndexReconciliationService(indexService);
+
         this.crawlerService = new DocumentCrawlerService(
                 config,
                 indexService,
@@ -71,7 +74,9 @@ public class LuceneserverApplication {
                 documentIndexer,
                 crawlExecutor,
                 statisticsTracker,
-                watcherService
+                watcherService,
+                reconciliationService,
+                configManager
         );
 
         this.searchTools = new LuceneSearchTools(
