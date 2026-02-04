@@ -11,7 +11,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -22,6 +24,11 @@ import java.util.stream.Stream;
 /**
  * Orchestrates document crawling, content extraction, and indexing.
  * Manages crawler lifecycle: start, pause, resume, and directory watching.
+ * <p>
+ * When reconciliation is enabled and a full reindex is <em>not</em> requested,
+ * an incremental crawl is performed: only new or modified files are indexed,
+ * and orphan documents (files that have been deleted from disk) are removed
+ * from the index before the crawl begins.
  */
 public class DocumentCrawlerService implements FileChangeListener {
 
@@ -34,6 +41,8 @@ public class DocumentCrawlerService implements FileChangeListener {
     private final CrawlExecutorService crawlExecutor;
     private final CrawlStatisticsTracker statisticsTracker;
     private final DirectoryWatcherService watcherService;
+    private final IndexReconciliationService reconciliationService;
+    private final CrawlerConfigurationManager configManager;
 
     private final BlockingQueue<Document> batchQueue = new LinkedBlockingQueue<>();
     private final AtomicBoolean crawling = new AtomicBoolean(false);
@@ -43,6 +52,13 @@ public class DocumentCrawlerService implements FileChangeListener {
     private volatile long originalNrtRefreshInterval;
     private volatile CrawlerState state = CrawlerState.IDLE;
 
+    /**
+     * When non-null, the incremental crawl is active and only files whose paths
+     * are contained in this set should be processed.  {@code null} means all files
+     * are processed (full crawl mode).
+     */
+    private volatile Set<String> filesToProcess;
+
     public DocumentCrawlerService(
             final ApplicationConfig config,
             final LuceneIndexService indexService,
@@ -50,7 +66,9 @@ public class DocumentCrawlerService implements FileChangeListener {
             final DocumentIndexer documentIndexer,
             final CrawlExecutorService crawlExecutor,
             final CrawlStatisticsTracker statisticsTracker,
-            final DirectoryWatcherService watcherService) {
+            final DirectoryWatcherService watcherService,
+            final IndexReconciliationService reconciliationService,
+            final CrawlerConfigurationManager configManager) {
         this.config = config;
         this.indexService = indexService;
         this.contentExtractor = contentExtractor;
@@ -58,6 +76,8 @@ public class DocumentCrawlerService implements FileChangeListener {
         this.crawlExecutor = crawlExecutor;
         this.statisticsTracker = statisticsTracker;
         this.watcherService = watcherService;
+        this.reconciliationService = reconciliationService;
+        this.configManager = configManager;
     }
 
     /**
@@ -89,17 +109,57 @@ public class DocumentCrawlerService implements FileChangeListener {
                 return;
             }
 
-            logger.info("Starting crawl with fullReindex={}", fullReindex);
+            // Determine crawl mode and perform reconciliation if appropriate
+            final boolean useIncrementalCrawl = !fullReindex && config.isReconciliationEnabled();
+            final ReconciliationResult reconciliationResult;
 
-            // Clear index if full reindex requested
-            if (fullReindex) {
+            if (useIncrementalCrawl) {
+                reconciliationResult = performReconciliation();
+            } else {
+                reconciliationResult = null;
+            }
+
+            // If reconciliation failed (returned null) we fall back to full crawl behaviour
+            final boolean effectiveFullReindex = fullReindex || (useIncrementalCrawl && reconciliationResult == null);
+
+            logger.info("Starting crawl with fullReindex={}, effectiveFullReindex={}, incrementalMode={}",
+                    fullReindex, effectiveFullReindex, reconciliationResult != null);
+
+            // Clear index if full reindex is in effect
+            if (effectiveFullReindex) {
                 logger.info("Performing full reindex - clearing existing index");
                 indexService.getIndexWriter().deleteAll();
                 indexService.commit();
+                filesToProcess = null; // process all files
+            } else {
+                // Incremental mode: restrict crawl to only ADD + UPDATE files
+                filesToProcess = new HashSet<>(reconciliationResult.filesToAdd());
+                filesToProcess.addAll(reconciliationResult.filesToUpdate());
+
+                // Apply orphan deletions before we start indexing new content
+                try {
+                    reconciliationService.applyDeletions(reconciliationResult.filesToDelete());
+                } catch (final IOException e) {
+                    logger.error("Failed to apply orphan deletions, falling back to full crawl", e);
+                    // Fall back: clear the filter and do a full re-crawl
+                    filesToProcess = null;
+                    indexService.getIndexWriter().deleteAll();
+                    indexService.commit();
+                }
             }
 
-            // Reset statistics
+            // Reset statistics and set crawl mode
             statisticsTracker.reset();
+            final String crawlMode = (reconciliationResult != null && filesToProcess != null) ? "incremental" : "full";
+            statisticsTracker.setCrawlMode(crawlMode);
+
+            // Record reconciliation stats if available
+            if (reconciliationResult != null) {
+                statisticsTracker.setOrphansDeleted(reconciliationResult.filesToDelete().size());
+                statisticsTracker.setFilesSkippedUnchanged(reconciliationResult.unchangedCount());
+                statisticsTracker.setReconciliationTimeMs(reconciliationResult.reconciliationTimeMs());
+            }
+
             statisticsTracker.sendStartNotification(config.getDirectories().size());
 
             // Start batch processor
@@ -107,7 +167,7 @@ public class DocumentCrawlerService implements FileChangeListener {
 
             // Count total files first to determine if we need bulk optimization
             final long totalFiles = countTotalFiles();
-            logger.info("Found approximately {} files to process", totalFiles);
+            logger.info("Found approximately {} files to process (crawlMode={})", totalFiles, crawlMode);
 
             // Adjust NRT refresh interval if bulk indexing
             if (totalFiles >= config.getBulkIndexThreshold()) {
@@ -123,6 +183,10 @@ public class DocumentCrawlerService implements FileChangeListener {
                 final Future<?> future = crawlExecutor.submit(() -> crawlDirectory(directory));
                 futures.add(future);
             }
+
+            // Capture for use in the completion lambda
+            final long totalFilesCaptured = totalFiles;
+            final String crawlModeCaptured = crawlMode;
 
             // Wait for all crawl tasks to complete
             crawlExecutor.execute(() -> {
@@ -140,7 +204,7 @@ public class DocumentCrawlerService implements FileChangeListener {
                     }
 
                     // Restore original NRT refresh interval
-                    if (totalFiles >= config.getBulkIndexThreshold()) {
+                    if (totalFilesCaptured >= config.getBulkIndexThreshold()) {
                         indexService.setNrtRefreshInterval(originalNrtRefreshInterval);
                         logger.info("Restored NRT refresh interval to {}ms", originalNrtRefreshInterval);
                     }
@@ -150,6 +214,12 @@ public class DocumentCrawlerService implements FileChangeListener {
 
                     // Send completion notification
                     statisticsTracker.sendCompleteNotification();
+
+                    // Persist crawl state on successful completion
+                    saveCrawlStateOnSuccess(crawlModeCaptured);
+
+                    // Clear the incremental filter
+                    filesToProcess = null;
 
                     // Setup directory watching if enabled
                     if (config.isWatchEnabled()) {
@@ -162,12 +232,46 @@ public class DocumentCrawlerService implements FileChangeListener {
                 } catch (final Exception e) {
                     logger.error("Error during crawl completion", e);
                     crawling.set(false);
+                    filesToProcess = null;
                     state = CrawlerState.IDLE;
                 }
             });
 
         } else {
             logger.warn("Crawl already in progress");
+        }
+    }
+
+    /**
+     * Execute the reconciliation phase: notify, reconcile, notify again.
+     * Returns {@code null} on any failure so the caller can fall back to a full crawl.
+     */
+    private ReconciliationResult performReconciliation() {
+        statisticsTracker.sendReconciliationStartNotification();
+        try {
+            final ReconciliationResult result = reconciliationService.reconcile(
+                    config.getDirectories(),
+                    config.getIncludePatterns(),
+                    config.getExcludePatterns()
+            );
+            statisticsTracker.sendReconciliationCompleteNotification(result);
+            return result;
+        } catch (final IOException e) {
+            logger.error("Reconciliation failed -- will fall back to full crawl", e);
+            return null;
+        }
+    }
+
+    /**
+     * Persist the crawl state after a successful crawl completion.
+     */
+    private void saveCrawlStateOnSuccess(final String crawlMode) {
+        try {
+            final long docCount = indexService.getDocumentCount();
+            final CrawlState crawlState = new CrawlState(System.currentTimeMillis(), docCount, crawlMode);
+            configManager.saveCrawlState(crawlState);
+        } catch (final IOException e) {
+            logger.error("Failed to persist crawl state", e);
         }
     }
 
@@ -188,6 +292,7 @@ public class DocumentCrawlerService implements FileChangeListener {
                 count += paths
                         .filter(Files::isRegularFile)
                         .filter(matcher::shouldInclude)
+                        .filter(this::shouldProcessFile)
                         .count();
             } catch (final IOException e) {
                 logger.warn("Error counting files in directory: {}", directory, e);
@@ -219,6 +324,7 @@ public class DocumentCrawlerService implements FileChangeListener {
         try (final Stream<Path> paths = Files.walk(dirPath)) {
             paths.filter(Files::isRegularFile)
                     .filter(matcher::shouldInclude)
+                    .filter(this::shouldProcessFile)
                     .forEach(file -> {
                         // Check if paused
                         while (paused.get() && crawling.get()) {
@@ -242,6 +348,19 @@ public class DocumentCrawlerService implements FileChangeListener {
         }
 
         logger.info("Finished crawling directory: {}", directory);
+    }
+
+    /**
+     * Determine whether a given file should be processed in the current crawl.
+     * In incremental mode, only files present in the {@link #filesToProcess} set
+     * are processed.  In full mode ({@code filesToProcess == null}), all files pass.
+     */
+    private boolean shouldProcessFile(final Path file) {
+        final Set<String> toProcess = filesToProcess;
+        if (toProcess == null) {
+            return true; // full crawl -- process everything
+        }
+        return toProcess.contains(file.toString());
     }
 
     private void processFile(final Path file, final String directory) {
