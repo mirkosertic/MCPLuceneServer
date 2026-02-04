@@ -62,6 +62,7 @@ public class ApplicationConfig {
     private boolean crawlOnStartup = true;
     private int progressNotificationFiles = 100;
     private long progressNotificationIntervalMs = 30000;
+    private boolean reconciliationEnabled = true;
 
     // Profile settings
     private boolean deployedMode = false;
@@ -206,6 +207,9 @@ public class ApplicationConfig {
         }
         if (crawlerConfig.containsKey("progress-notification-interval-ms")) {
             this.progressNotificationIntervalMs = ((Number) crawlerConfig.get("progress-notification-interval-ms")).longValue();
+        }
+        if (crawlerConfig.containsKey("reconciliation-enabled")) {
+            this.reconciliationEnabled = (Boolean) crawlerConfig.get("reconciliation-enabled");
         }
     }
 
@@ -379,5 +383,9 @@ public class ApplicationConfig {
 
     public boolean isDeployedMode() {
         return deployedMode;
+    }
+
+    public boolean isReconciliationEnabled() {
+        return reconciliationEnabled;
     }
 }

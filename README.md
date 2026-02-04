@@ -10,6 +10,7 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - Automatically indexes PDFs, Microsoft Office, and OpenOffice documents
 - Multi-threaded crawling for fast indexing
 - Real-time directory monitoring for automatic updates
+- Incremental indexing with full reconciliation (skips unchanged files, removes orphans)
 
 🔍 **Powerful Search**
 - Full Lucene query syntax support (wildcards, boolean operators, phrase queries)
@@ -262,6 +263,9 @@ lucene:
     # Progress notifications
     progress-notification-files: 100       # Notify every N files
     progress-notification-interval-ms: 30000  # Or every N milliseconds
+
+    # Incremental indexing
+    reconciliation-enabled: true           # Skip unchanged files, remove orphans (default: true)
 ```
 
 **Supported File Formats:**
@@ -392,7 +396,7 @@ Get statistics about the Lucene index.
 Start crawling configured directories to index documents.
 
 **Parameters:**
-- `fullReindex` (optional): If true, clears the index before crawling (default: false)
+- `fullReindex` (optional): If true, clears the index before crawling (default: false). When false and `reconciliation-enabled` is true, an incremental crawl is performed instead.
 
 **Features:**
 - Automatically extracts content from PDFs, Office documents, and OpenOffice files
@@ -400,6 +404,7 @@ Start crawling configured directories to index documents.
 - Extracts metadata (author, title, creation date, etc.)
 - Multi-threaded processing for fast indexing
 - Progress notifications during crawling
+- **Incremental mode** (default): Only new or modified files are indexed; deleted files are removed from the index automatically. Falls back to a full crawl if reconciliation encounters an error.
 
 ### `getCrawlerStats`
 
@@ -415,6 +420,13 @@ Get real-time statistics about the crawler progress.
 - `megabytesPerSecond`: Data throughput
 - `elapsedTimeMs`: Time elapsed since crawl started
 - `perDirectoryStats`: Statistics breakdown per directory
+- `orphansDeleted`: Number of index entries removed because the file no longer exists on disk (incremental mode)
+- `filesSkippedUnchanged`: Number of files skipped because they were not modified since the last crawl (incremental mode)
+- `reconciliationTimeMs`: Time spent comparing the index against the filesystem (incremental mode)
+- `crawlMode`: Either `"full"` or `"incremental"`
+- `lastCrawlCompletionTimeMs`: Unix timestamp (ms) of the last successful crawl completion (null if no previous crawl)
+- `lastCrawlDocumentCount`: Number of documents in the index after the last successful crawl (null if no previous crawl)
+- `lastCrawlMode`: Mode of the last crawl - `"full"` or `"incremental"` (null if no previous crawl)
 
 ### `listIndexedFields`
 
@@ -867,6 +879,35 @@ The crawler starts automatically on server startup (if `crawl-on-startup: true`)
 5. **Indexes documents** in batches for optimal performance
 6. **Monitors directories** for changes (create, modify, delete)
 
+### Incremental Indexing (Reconciliation)
+
+By default (`reconciliation-enabled: true`), every crawl that is **not** a full reindex performs an incremental pass first. This makes repeated crawls significantly faster because unchanged files are never re-processed.
+
+**How it works:**
+
+1. **Index snapshot** -- All `(file_path, modified_date)` pairs are read from the Lucene index.
+2. **Filesystem snapshot** -- The configured directories are walked and the current `(file_path, mtime)` pairs are collected (no content extraction at this stage).
+3. **Four-way diff** is computed:
+   - **DELETE** -- paths in the index that no longer exist on disk (orphans).
+   - **ADD** -- paths on disk that are not yet in the index.
+   - **UPDATE** -- paths where the on-disk mtime is newer than the stored `modified_date`.
+   - **SKIP** -- paths that are identical; these are never touched.
+4. **Orphan deletions** are applied first (bulk delete via a single Lucene query).
+5. Only ADD and UPDATE files are crawled, extracted, and indexed.
+6. On successful completion, the crawl state (timestamp, document count, mode) is persisted to `~/.mcplucene/crawl-state.yaml`.
+
+**Fallback behaviour:**
+If reconciliation fails for any reason (I/O error reading the index, filesystem walk failure, etc.) the system automatically falls back to a full crawl. No data is lost and no manual intervention is required.
+
+**Disabling incremental indexing:**
+Set `reconciliation-enabled: false` in `application.yaml` to always perform a full crawl. Alternatively, pass `fullReindex: true` to `startCrawl` to force a single full crawl without changing the default.
+
+**Persisted state file:**
+```
+~/.mcplucene/crawl-state.yaml
+```
+This file records the last successful crawl's completion time, document count, and mode. It is written only after a crawl completes successfully.
+
 ### Real-time Monitoring
 
 With directory watching enabled (`watch-enabled: true`):
@@ -1296,3 +1337,9 @@ The document crawler uses a multi-layered architecture:
    - Thread-safe statistics collection
    - Automatic progress notifications
    - Per-directory breakdown
+
+7. **IndexReconciliationService** - Incremental indexing
+   - Compares index snapshot with filesystem in memory
+   - Computes ADD / UPDATE / DELETE / SKIP sets
+   - Applies bulk orphan deletions before new content is indexed
+   - Designed to be fast: no content extraction during the reconciliation phase

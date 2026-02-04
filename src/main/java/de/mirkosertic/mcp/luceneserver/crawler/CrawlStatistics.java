@@ -10,7 +10,15 @@ public record CrawlStatistics(
         long bytesProcessed,
         long startTimeMs,
         long endTimeMs,
-        Map<String, DirectoryStatistics> perDirectoryStats
+        Map<String, DirectoryStatistics> perDirectoryStats,
+        /** Number of orphan documents removed from the index during reconciliation. */
+        long orphansDeleted,
+        /** Number of files skipped because they were unchanged since the last crawl. */
+        long filesSkippedUnchanged,
+        /** Wall-clock time in milliseconds spent in the reconciliation phase. */
+        long reconciliationTimeMs,
+        /** The crawl mode that produced these statistics: {@code "full"} or {@code "incremental"}. */
+        String crawlMode
 ) {
     public double filesPerSecond() {
         final long elapsedMs = endTimeMs - startTimeMs;

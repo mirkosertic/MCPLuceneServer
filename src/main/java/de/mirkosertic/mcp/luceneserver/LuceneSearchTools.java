@@ -400,11 +400,12 @@ public class LuceneSearchTools {
 
         try {
             final CrawlStatistics stats = crawlerService.getStatistics();
+            final var lastCrawlState = configManager.loadCrawlState();
 
             logger.info("Crawler stats: processed={}, indexed={}, failed={}",
                     stats.filesProcessed(), stats.filesIndexed(), stats.filesFailed());
 
-            return ToolResultHelper.createResult(CrawlerStatsResponse.success(stats));
+            return ToolResultHelper.createResult(CrawlerStatsResponse.success(stats, lastCrawlState));
 
         } catch (final Exception e) {
             logger.error("Error getting crawler stats", e);

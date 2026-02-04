@@ -29,6 +29,7 @@ public class CrawlerConfigurationManager {
     private static final String ENV_DIRECTORIES = "LUCENE_CRAWLER_DIRECTORIES";
     private static final String CONFIG_DIR = ".mcplucene";
     private static final String CONFIG_FILE = "config.yaml";
+    private static final String CRAWL_STATE_FILE = "crawl-state.yaml";
 
     private final Yaml yaml;
 
@@ -201,6 +202,80 @@ public class CrawlerConfigurationManager {
             Files.createDirectories(configDir);
             logger.debug("Created config directory: {}", configDir);
         }
+    }
+
+    // ==================== Crawl State Persistence ====================
+
+    /**
+     * Load the persisted crawl state from {@code ~/.mcplucene/crawl-state.yaml}.
+     *
+     * @return the last saved {@link CrawlState}, or {@code null} if the file does not exist
+     *         or cannot be parsed
+     */
+    @SuppressWarnings("unchecked")
+    public synchronized CrawlState loadCrawlState() {
+        final Path statePath = getCrawlStatePath();
+        if (!Files.exists(statePath)) {
+            logger.debug("Crawl state file does not exist: {}", statePath);
+            return null;
+        }
+
+        try (final Reader reader = Files.newBufferedReader(statePath)) {
+            final Map<String, Object> stateMap = yaml.load(reader);
+            if (stateMap == null) {
+                logger.debug("Crawl state file is empty: {}", statePath);
+                return null;
+            }
+
+            final long lastCompletionTimeMs = ((Number) stateMap.getOrDefault("lastCompletionTimeMs", 0L)).longValue();
+            final long lastDocumentCount = ((Number) stateMap.getOrDefault("lastDocumentCount", 0L)).longValue();
+            final String lastCrawlMode = (String) stateMap.getOrDefault("lastCrawlMode", "full");
+
+            logger.info("Loaded crawl state: completionTime={}, docs={}, mode={}",
+                    lastCompletionTimeMs, lastDocumentCount, lastCrawlMode);
+            return new CrawlState(lastCompletionTimeMs, lastDocumentCount, lastCrawlMode);
+
+        } catch (final IOException e) {
+            logger.error("Failed to load crawl state file: {}", statePath, e);
+            return null;
+        } catch (final ClassCastException e) {
+            logger.error("Invalid crawl state structure in: {}", statePath, e);
+            return null;
+        }
+    }
+
+    /**
+     * Persist crawl state to {@code ~/.mcplucene/crawl-state.yaml}.
+     * Called only after a crawl completes successfully.
+     *
+     * @param crawlState the state to persist; must not be null
+     * @throws IOException if the write fails
+     */
+    public synchronized void saveCrawlState(final CrawlState crawlState) throws IOException {
+        ensureConfigDirectoryExists();
+        final Path statePath = getCrawlStatePath();
+
+        final Map<String, Object> stateMap = new HashMap<>();
+        stateMap.put("lastCompletionTimeMs", crawlState.lastCompletionTimeMs());
+        stateMap.put("lastDocumentCount", crawlState.lastDocumentCount());
+        stateMap.put("lastCrawlMode", crawlState.lastCrawlMode());
+
+        try (final Writer writer = Files.newBufferedWriter(statePath,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING)) {
+            yaml.dump(stateMap, writer);
+            logger.info("Saved crawl state: completionTime={}, docs={}, mode={}",
+                    crawlState.lastCompletionTimeMs(), crawlState.lastDocumentCount(), crawlState.lastCrawlMode());
+        }
+    }
+
+    /**
+     * Get the path to the crawl state file.
+     *
+     * @return path to {@code ~/.mcplucene/crawl-state.yaml}
+     */
+    public Path getCrawlStatePath() {
+        return Paths.get(System.getProperty("user.home"), CONFIG_DIR, CRAWL_STATE_FILE);
     }
 
     /**
