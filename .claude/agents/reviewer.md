@@ -27,6 +27,7 @@ Review code changes and provide constructive, actionable feedback. You cannot ed
 - Correct usage of Lucene and Spring Boot APIs
 - Inconsistent or missing documentation (Code, README.md, ...)
 - **Field injection**: All Spring beans and `@Value` properties MUST use constructor injection, NEVER field injection. Flag any `@Autowired` or `@Value` annotations on fields as critical issues.
+- Correct usage of Lucene functionality with respect to the required Field attributes.
 
 ### Important (should fix)
 - Logic errors

@@ -75,9 +75,11 @@ This document contains instructions and context for AI assistants working on thi
 - No network security concerns
 - **Consequence**: Console logging MUST be disabled in production (`deployed` profile)
 
-### Why StandardAnalyzer?
-- Simple, fast, no external dependencies
-- **Limitation**: No stemming/synonyms - AI assistants compensate with OR queries
+### Why UnicodeNormalizingAnalyzer (ICUFoldingFilter)?
+- Replaces the previous `StandardAnalyzer` to handle real-world document text correctly
+- ICUFoldingFilter performs NFKC normalization, diacritic folding, and ligature expansion
+- Critical for PDF content: ligatures (fi, fl) extracted by Tika are invisible Unicode code-points that break exact-match search without folding
+- **Trade-off**: Adds `lucene-analysis-icu` dependency; still no stemming/synonyms -- AI assistants compensate with OR queries
 - See README.md "Lexical Search" section for user guidance
 
 ### Batch Processing Pattern

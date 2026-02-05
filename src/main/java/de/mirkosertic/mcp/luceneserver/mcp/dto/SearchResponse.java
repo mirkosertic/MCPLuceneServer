@@ -5,10 +5,16 @@ import java.util.Map;
 
 /**
  * Response DTO for the search tool.
+ *
+ * <p>Each document in {@link #documents()} contains a {@code passages} array instead of
+ * a single {@code snippet} string.  Every passage carries quality metadata
+ * ({@code score}, {@code matchedTerms}, {@code termCoverage}, {@code position})
+ * intended to help an LLM decide which passages are most relevant without
+ * re-ranking.  See {@link Passage} for the full field contract.</p>
  */
 public record SearchResponse(
         boolean success,
-        List<Map<String, Object>> documents,
+        List<SearchDocument> documents,
         long totalHits,
         int page,
         int pageSize,
@@ -23,7 +29,7 @@ public record SearchResponse(
      * Create a successful search response.
      */
     public static SearchResponse success(
-            final List<Map<String, Object>> documents,
+            final List<SearchDocument> documents,
             final long totalHits,
             final int page,
             final int pageSize,
