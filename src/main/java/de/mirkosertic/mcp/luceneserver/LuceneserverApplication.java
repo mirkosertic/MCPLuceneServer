@@ -48,8 +48,7 @@ public class LuceneserverApplication {
         final DocumentIndexer documentIndexer = new DocumentIndexer();
 
         this.indexService = new LuceneIndexService(
-                config.getIndexPath(),
-                config.getNrtRefreshIntervalMs(),
+                config,
                 documentIndexer
         );
 

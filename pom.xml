@@ -94,6 +94,11 @@
 			<artifactId>lucene-backward-codecs</artifactId>
 			<version>${lucene.version}</version>
 		</dependency>
+		<dependency>
+			<groupId>org.apache.lucene</groupId>
+			<artifactId>lucene-analysis-icu</artifactId>
+			<version>${lucene.version}</version>
+		</dependency>
 
 		<!-- Apache Tika for content extraction -->
 		<dependency>

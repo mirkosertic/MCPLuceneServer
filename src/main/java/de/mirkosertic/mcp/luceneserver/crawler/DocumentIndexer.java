@@ -54,10 +54,14 @@ public class DocumentIndexer {
         // file_name (analyzed, stored)
         doc.add(new TextField("file_name", filePath.getFileName().toString(), Field.Store.YES));
 
-        // content (analyzed, stored, with term vectors)
+        // content (analyzed, stored, with term vectors + positions + offsets)
+        // Positions and offsets are required by UnifiedHighlighter to locate matched
+        // terms within the stored value without re-analysing the text at query time.
         if (extracted.content() != null && !extracted.content().isEmpty()) {
             final FieldType contentFieldType = new FieldType(TextField.TYPE_STORED);
             contentFieldType.setStoreTermVectors(true);
+            contentFieldType.setStoreTermVectorPositions(true);
+            contentFieldType.setStoreTermVectorOffsets(true);
             doc.add(new Field("content", extracted.content(), contentFieldType));
         }
 

@@ -15,7 +15,7 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 🔍 **Powerful Search**
 - Full Lucene query syntax support (wildcards, boolean operators, phrase queries)
 - Field-specific filtering (by author, language, file type, etc.)
-- Highlighted search snippets showing terms in context
+- Structured passages with quality metadata for LLM consumption
 - Paginated results with filter suggestions
 
 📄 **Rich Metadata Extraction**
@@ -266,6 +266,9 @@ lucene:
 
     # Incremental indexing
     reconciliation-enabled: true           # Skip unchanged files, remove orphans (default: true)
+
+    # Search passages
+    max-passages: 5                        # Max highlighted passages per search result (default: 5)
 ```
 
 **Supported File Formats:**
@@ -339,14 +342,16 @@ When you ask Claude to "find documents about cars", it automatically searches fo
 
 **⚠️ Technical Details (Lexical Matching):**
 
-The index uses Lucene's `StandardAnalyzer`, which provides:
+The index uses a custom `UnicodeNormalizingAnalyzer` built on Lucene's `ICUFoldingFilter`, which provides:
 - ✅ Tokenization and lowercasing
-- ✅ Standard stopword filtering
+- ✅ Unicode normalization (NFKC) -- full-width characters are mapped to their standard equivalents
+- ✅ Diacritic folding -- accented characters are mapped to their ASCII base forms (e.g., "ä" → "a", "ö" → "o", "ü" → "u", "ñ" → "n")
+- ✅ Ligature expansion -- PDF ligatures are expanded correctly (e.g., the "fi" ligature → "fi", the "fl" ligature → "fl")
 - ❌ No automatic synonym expansion at the index level
 - ❌ No phonetic matching (e.g., "Smith" won't match "Smyth")
 - ❌ No stemming (e.g., "running" won't match "run")
 
-The AI assistant compensates for these limitations by expanding your queries intelligently.
+The AI assistant compensates for the remaining limitations by expanding your queries intelligently.
 
 **💡 Best Practices for Better Results:**
 
@@ -378,8 +383,8 @@ The AI assistant compensates for these limitations by expanding your queries int
 - Range queries: `modified_date:[1609459200000 TO 1640995200000]` (timestamps in milliseconds)
 
 **Returns:**
-- Paginated document results with highlighted snippets
-- Relevance scores
+- Paginated document results, each containing a `passages` array with highlighted text and quality metadata
+- Document-level relevance scores
 - Facets with actual values and counts from the result set
 - Search execution time in milliseconds (`searchTimeMs`)
 
@@ -747,7 +752,7 @@ When documents are indexed by the crawler, the following fields are automaticall
 
 ### Content Fields
 - **`content`**: Full text content of the document (analyzed, searchable)
-- **`snippet`**: Highlighted excerpt from search results (max 300 characters)
+- **`passages`**: Array of highlighted passages returned in search results (see [Search Response Format](#search-response-format) below)
 
 ### File Information
 - **`file_path`**: Full path to the file (unique ID)
@@ -787,7 +792,22 @@ Search results are optimized for MCP responses (< 1 MB) and include:
       "title": "Example Document",
       "author": "John Doe",
       "language": "en",
-      "snippet": "...relevant <em>search term</em> highlighted in context..."
+      "passages": [
+        {
+          "text": "...relevant <em>search term</em> highlighted in context...",
+          "score": 1.0,
+          "matchedTerms": ["search term"],
+          "termCoverage": 1.0,
+          "position": 0.12
+        },
+        {
+          "text": "...another occurrence of <em>search</em> in a later section...",
+          "score": 0.75,
+          "matchedTerms": ["search"],
+          "termCoverage": 0.5,
+          "position": 0.67
+        }
+      ]
     }
   ],
   "totalHits": 42,
@@ -824,7 +844,12 @@ Search results are optimized for MCP responses (< 1 MB) and include:
 
 - **Search Performance Metrics:** Every search response includes `searchTimeMs` showing the exact execution time in milliseconds, enabling performance monitoring and optimization.
 
-- **Snippets with Highlighting:** The full `content` field is NOT included in search results to keep response sizes manageable. Instead, a contextual `snippet` with `<em>` tags highlighting search terms is provided.
+- **Passages with Highlighting:** The full `content` field is NOT included in search results to keep response sizes manageable. Instead, each document contains a `passages` array with up to `max-passages` (default: 5) highlighted excerpts. Passages are ordered by relevance (best first). Each passage includes:
+  - `text` -- The highlighted excerpt with matched terms wrapped in `<em>` tags.
+  - `score` -- Normalised relevance score (0.0-1.0). The best passage scores 1.0; subsequent passages decay linearly to 0.5.
+  - `matchedTerms` -- The distinct query terms that appear in this passage (extracted from the `<em>` tags). Useful for understanding which parts of a multi-term query a passage satisfies.
+  - `termCoverage` -- The fraction of all query terms present in this passage (0.0-1.0). A value of 1.0 means every query term matched. LLMs can use this to prefer passages that address the full query.
+  - `position` -- Approximate location within the source document (0.0 = start, 1.0 = end). Useful for citations or for understanding document structure.
 
 - **Lucene Faceting:** The `facets` object uses **Lucene's SortedSetDocValues** for efficient faceted search. It shows actual facet values and document counts from the search results, not just available fields. Only facet dimensions that have values in the result set are returned.
 
@@ -974,6 +999,21 @@ tail -n 100 ~/.mcplucene/log/mcplucene.log
 ```
 
 **When developing** (without the `deployed` profile), logs are written to the console instead of files.
+
+### Full reindex required after upgrading (content normalisation + passage changes)
+
+A recent update introduced changes that affect stored index content:
+
+1. **Index-time content normalisation** -- Extracted text is now cleaned before indexing: NFKC Unicode normalisation expands ligatures and compatibility characters, control characters are stripped, and redundant whitespace is collapsed. This means the stored `content` field in existing index entries does not match what the server would produce today.
+2. **Passage upgrade** -- Search results now return a structured `passages` array (with `score`, `matchedTerms`, `termCoverage`, and `position` metadata) instead of a single `snippet` string. Passages are generated by Lucene's `UnifiedHighlighter` and enriched with quality signals. The highlighter uses the stored content to find the best passages around matched terms, so stale (un-normalised) content will produce lower-quality passages and inaccurate `position` values.
+
+**What to do:** After upgrading, trigger a full reindex to ensure all documents are stored with normalised content:
+
+```
+Ask Claude: "Reindex all documents from scratch"
+```
+
+This calls `startCrawl(fullReindex: true)`, which clears the existing index and re-crawls all configured directories. Search results and passages will improve once the reindex is complete.
 
 ### Index lock file prevents startup (write.lock)
 
@@ -1142,18 +1182,33 @@ filterField: "language"
 filterValue: "de"
 ```
 
-### Example 7: Search with Context Snippets
+### Example 7: Search with Passages
 
-Search results include highlighted snippets showing the search term in context:
+Search results include a `passages` array with highlighted excerpts and quality metadata:
 
 ```json
 {
   "file_name": "report.pdf",
-  "snippet": "...discusses the impact of <em>machine learning</em> on modern software development. The study shows..."
+  "passages": [
+    {
+      "text": "...discusses the impact of <em>machine learning</em> on modern software development. The study shows...",
+      "score": 1.0,
+      "matchedTerms": ["machine learning"],
+      "termCoverage": 1.0,
+      "position": 0.08
+    },
+    {
+      "text": "...<em>machine learning</em> algorithms were applied to the dataset in Section 4...",
+      "score": 0.75,
+      "matchedTerms": ["machine learning"],
+      "termCoverage": 1.0,
+      "position": 0.45
+    }
+  ]
 }
 ```
 
-This allows you to see relevant excerpts without downloading the full document.
+This allows you to see relevant excerpts without downloading the full document. The metadata fields help LLMs quickly identify the best passage: prefer passages with high `termCoverage` (covers more of the query) and use `position` for document-structure context.
 
 ### Example 8: Managing Crawlable Directories at Runtime
 

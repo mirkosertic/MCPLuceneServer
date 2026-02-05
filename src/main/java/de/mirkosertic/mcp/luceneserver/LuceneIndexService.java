@@ -1,7 +1,10 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.Passage;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
+import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.facet.FacetResult;
 import org.apache.lucene.facet.Facets;
@@ -25,6 +28,9 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.SearcherManager;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.search.TotalHits;
+import org.apache.lucene.search.uhighlight.DefaultPassageFormatter;
+import org.apache.lucene.search.uhighlight.UnifiedHighlighter;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.slf4j.Logger;
@@ -33,6 +39,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -65,6 +72,7 @@ public class LuceneIndexService {
         FAILED
     }
 
+    private final ApplicationConfig config;
     private final String indexPath;
     private volatile long nrtRefreshIntervalMs;
 
@@ -72,7 +80,7 @@ public class LuceneIndexService {
     private IndexWriter indexWriter;
     private SearcherManager searcherManager;
     private ScheduledExecutorService refreshScheduler;
-    private final StandardAnalyzer analyzer;
+    private final Analyzer analyzer;
     private final DocumentIndexer documentIndexer;
 
     // Lock object for admin operation state transitions
@@ -93,11 +101,12 @@ public class LuceneIndexService {
         return t;
     });
 
-    public LuceneIndexService(final String indexPath, final long nrtRefreshIntervalMs,
+    public LuceneIndexService(final ApplicationConfig config,
                               final DocumentIndexer documentIndexer) {
-        this.analyzer = new StandardAnalyzer();
-        this.indexPath = indexPath;
-        this.nrtRefreshIntervalMs = nrtRefreshIntervalMs;
+        this.config = config;
+        this.analyzer = new UnicodeNormalizingAnalyzer();
+        this.indexPath = config.getIndexPath();
+        this.nrtRefreshIntervalMs = config.getNrtRefreshIntervalMs();
         this.documentIndexer = documentIndexer;
     }
 
@@ -234,38 +243,64 @@ public class LuceneIndexService {
             final TopDocs topDocs = result.topDocs();
             final long totalHits = topDocs.totalHits.value();
 
+            // Build a UnifiedHighlighter for passage generation.
+            // highlight() is called with a single-doc TopDocs per result so that the
+            // highlighter reads term vectors (positions + offsets) stored in the index
+            // rather than re-analysing the content text.  This is critical for correct
+            // <em> tagging when ICUFoldingFilter is in play: the stored offsets map
+            // directly to the original surface forms in the stored value.
+            // The formatter wraps matched terms in <em>...</em> tags.
+            // We use mainQuery (before the filter clause) so that only the user's
+            // actual search terms are highlighted, not filter values.
+            // maxNoHighlightPassages=1 ensures a fallback passage is returned even if
+            // no terms match within the highlighter's view of the document.
+            final int maxPassages = config.getMaxPassages();
+            final UnifiedHighlighter highlighter = UnifiedHighlighter.builder(searcher, analyzer)
+                    .withMaxLength(10_000) // read up to 10 000 chars of stored value to find more passages
+                    .withFormatter(new DefaultPassageFormatter("<em>", "</em>", "...", false))  // false = no HTML escaping (LLM output, not browser)
+                    .withHandleMultiTermQuery(true)
+                    .withBreakIterator(BreakIterator::getSentenceInstance)
+                    .withMaxNoHighlightPassages(1)
+                    .build();
+
+            // Extract query terms for termCoverage calculation.
+            // Query.toString() produces a human-readable representation; we strip
+            // field prefixes and punctuation to get the raw terms.
+            final Set<String> queryTerms = extractQueryTerms(mainQuery);
+
             // Collect results for the requested page
-            final List<Map<String, Object>> results = new ArrayList<>();
+            final List<SearchDocument> results = new ArrayList<>();
             final ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 
             for (int i = startIndex; i < scoreDocs.length && i < maxResults; i++) {
                 final Document doc = searcher.storedFields().document(scoreDocs[i].doc);
-                final Map<String, Object> docMap = new HashMap<>();
-                docMap.put("score", scoreDocs[i].score);
 
-                // Add only essential fields (NOT the full content to keep response size under 1MB)
-                addFieldIfPresent(doc, docMap, "file_path");
-                addFieldIfPresent(doc, docMap, "file_name");
-                addFieldIfPresent(doc, docMap, "title");
-                addFieldIfPresent(doc, docMap, "author");
-                addFieldIfPresent(doc, docMap, "creator");
-                addFieldIfPresent(doc, docMap, "subject");
-                addFieldIfPresent(doc, docMap, "language");
-                addFieldIfPresent(doc, docMap, "file_extension");
-                addFieldIfPresent(doc, docMap, "file_type");
-                addFieldIfPresent(doc, docMap, "file_size");
-                addFieldIfPresent(doc, docMap, "created_date");
-                addFieldIfPresent(doc, docMap, "modified_date");
-                addFieldIfPresent(doc, docMap, "indexed_date");
-
-                // Create snippet from content (max 300 chars)
+                // Generate structured passages using UnifiedHighlighter.highlight()
+                // which reads term-vector offsets from the index for precise <em> tagging.
+                logger.debug("Query for highlighting: {}", mainQuery);
                 final String content = doc.get("content");
-                if (content != null) {
-                    final String snippet = createSnippet(content, queryString, 300);
-                    docMap.put("snippet", snippet);
-                }
+                final List<Passage> passages = createPassages(
+                        content, mainQuery, highlighter, maxPassages, queryTerms, scoreDocs[i]);
 
-                results.add(docMap);
+                final SearchDocument searchDoc = SearchDocument.builder()
+                        .score(scoreDocs[i].score)
+                        .filePath(doc.get("file_path"))
+                        .fileName(doc.get("file_name"))
+                        .title(doc.get("title"))
+                        .author(doc.get("author"))
+                        .creator(doc.get("creator"))
+                        .subject(doc.get("subject"))
+                        .language(doc.get("language"))
+                        .fileExtension(doc.get("file_extension"))
+                        .fileType(doc.get("file_type"))
+                        .fileSize(doc.get("file_size"))
+                        .createdDate(doc.get("created_date"))
+                        .modifiedDate(doc.get("modified_date"))
+                        .indexedDate(doc.get("indexed_date"))
+                        .passages(passages)
+                        .build();
+
+                results.add(searchDoc);
             }
 
             // Build facets from collected data
@@ -294,6 +329,15 @@ public class LuceneIndexService {
 
     public void commit() throws IOException {
         indexWriter.commit();
+    }
+
+    /**
+     * Force an immediate refresh of the searcher to see recently committed changes.
+     * Primarily used for testing; in production the scheduled refresh is preferred.
+     */
+    public void refreshSearcher() throws IOException {
+        // maybeRefreshBlocking guarantees the refresh happens before returning
+        searcherManager.maybeRefreshBlocking();
     }
 
     public Set<String> getIndexedFields() throws IOException {
@@ -768,56 +812,328 @@ public class LuceneIndexService {
         }
     }
 
-    private String createSnippet(final String content, final String queryString, final int maxLength) {
+    /**
+     * Produce a list of structured passages for a single document using Lucene's UnifiedHighlighter.
+     *
+     * <p>The highlighter reads term vectors (positions + offsets) stored in the index so that
+     * matched terms are located precisely without re-analysing the content.  This is
+     * particularly important when ICUFoldingFilter is in the analyzer chain: the stored
+     * offsets map directly to the original surface forms, ensuring {@code <em>} tags wrap
+     * the correct character spans.</p>
+     *
+     * <p>The highlighter returns passages in relevance order (best first). Each passage is
+     * enriched with metadata: a normalised relevance score, the set of query terms that
+     * matched within the passage, the fraction of all query terms covered, and the
+     * approximate position of the passage in the original document.</p>
+     *
+     * <p>If the content is null or empty an empty list is returned.  If highlighting
+     * fails entirely a single fallback passage is synthesised from the beginning of the
+     * content so the caller always receives at least one passage when content exists.</p>
+     *
+     * @param content     the stored content field value (may be null)
+     * @param query       the user's search query (filter clauses excluded)
+     * @param highlighter the configured highlighter instance (shared across the result page)
+     * @param maxPassages maximum number of passages to return
+     * @param queryTerms  the set of query terms extracted from the query for coverage calculation
+     * @param scoreDoc    the ScoreDoc for this document, used to build the single-doc TopDocs
+     *                    that highlight() requires to read term vectors from the index
+     * @return list of Passage records, each containing text, score, matchedTerms, termCoverage, position
+     */
+    private List<Passage> createPassages(final String content,
+                                         final Query query,
+                                         final UnifiedHighlighter highlighter,
+                                         final int maxPassages,
+                                         final Set<String> queryTerms,
+                                         final ScoreDoc scoreDoc) {
+        // Null or empty content -- nothing to extract
         if (content == null || content.isEmpty()) {
-            return "";
+            return List.of();
         }
 
-        // Extract search terms from query (simple approach - just split on whitespace and remove operators)
-        final String[] terms = queryString.toLowerCase()
-                .replaceAll("[(){}\\[\\]\":]", " ")
-                .replaceAll("\\b(AND|OR|NOT)\\b", " ")
-                .split("\\s+");
+        // Attempt to obtain highlighted passages from the UnifiedHighlighter.
+        // A single-doc TopDocs is constructed so that highlight() can read the term
+        // vectors (positions + offsets) that were stored at index time.  This avoids
+        // the re-analysis path of highlightWithoutSearcher() which does not use term
+        // vectors and therefore cannot produce correct <em> tags when the analyzer
+        // applies folding or normalization filters.
+        String[] highlightedPassages = null;
+        try {
+            final TopDocs singleDocTopDocs = new TopDocs(
+                    new TotalHits(1, TotalHits.Relation.EQUAL_TO),
+                    new ScoreDoc[]{scoreDoc}
+            );
+            final String[] highlightResults = highlighter.highlight("content", query, singleDocTopDocs, maxPassages);
+            logger.debug("Highlighting query '{}' against doc {}, result: {}",
+                    query, scoreDoc.doc,
+                    highlightResults == null ? "null" : "String[" + highlightResults.length + "]");
+            if (highlightResults != null && highlightResults.length > 0 && highlightResults[0] != null && !highlightResults[0].isBlank()) {
+                // highlight() returns one joined string per document (passages separated by
+                // the formatter's separator "...").  Wrap in array for uniform handling below.
+                highlightedPassages = new String[]{highlightResults[0]};
+            }
+        } catch (final Exception e) {
+            logger.warn("UnifiedHighlighter.highlight() failed for doc {}; synthesising fallback passage", scoreDoc.doc, e);
+        }
 
-        // Find first occurrence of any search term
-        int bestPos = -1;
-        String bestTerm = null;
-        for (final String term : terms) {
-            if (term.length() > 2) { // Skip very short terms
-                final int pos = content.toLowerCase().indexOf(term);
-                if (pos >= 0 && (bestPos < 0 || pos < bestPos)) {
-                    bestPos = pos;
-                    bestTerm = term;
+        // Fallback: synthesise a single passage from the start of the content
+        if (highlightedPassages == null || highlightedPassages.length == 0) {
+            final int fallbackLength = Math.min(300, content.length());
+            final String fallbackText = cleanPassageText(
+                    content.substring(0, fallbackLength) +
+                    (content.length() > fallbackLength ? "..." : ""));
+            return List.of(new Passage(fallbackText, 0.0, List.of(), 0.0, 0.0));
+        }
+
+        // Build Passage records from the highlighted strings
+        final List<Passage> passages = new ArrayList<>(highlightedPassages.length);
+        final int totalPassages = highlightedPassages.length;
+
+        for (int idx = 0; idx < totalPassages; idx++) {
+            final String rawPassageText = highlightedPassages[idx];
+            if (rawPassageText == null || rawPassageText.isBlank()) {
+                continue;
+            }
+
+            // Clean passage text for display: collapse newlines and extra whitespace
+            final String passageText = cleanPassageText(rawPassageText);
+
+            // --- score: normalised 0-1 using linear decay from position in the array ---
+            // The highlighter returns passages in relevance order; first is best.
+            final double score = totalPassages == 1 ? 1.0 :
+                    1.0 - ((double) idx / (totalPassages - 1)) * 0.5;
+            // Clamp to [0.0, 1.0] and round to 2 decimal places for clean output
+            final double roundedScore = Math.round(score * 100.0) / 100.0;
+
+            // --- matchedTerms: extract text between <em> tags, with fallback to direct query-term matching ---
+            final List<String> matchedTerms = extractMatchedTerms(passageText, queryTerms);
+
+            // --- termCoverage: unique matched terms / total query terms ---
+            final double termCoverage;
+            if (queryTerms.isEmpty()) {
+                termCoverage = matchedTerms.isEmpty() ? 0.0 : 1.0;
+            } else {
+                // Normalize both sides with NFKC + lowercase for robust comparison
+                final Set<String> matchedNormalized = new HashSet<>();
+                for (final String t : matchedTerms) {
+                    matchedNormalized.add(normalizeForComparison(t));
+                }
+
+                long coveredCount = 0;
+                for (final String qt : queryTerms) {
+                    final String qtNormalized = normalizeForComparison(qt);
+                    if (matchedNormalized.contains(qtNormalized)) {
+                        coveredCount++;
+                    }
+                }
+                termCoverage = Math.round((double) coveredCount / queryTerms.size() * 100.0) / 100.0;
+            }
+
+            // --- position: find where the plain (un-tagged) passage text first appears in content ---
+            final double position = calculatePosition(passageText, content);
+
+            passages.add(new Passage(passageText, roundedScore, matchedTerms, termCoverage, position));
+        }
+
+        // If all passages were blank (unlikely but defensive), return a fallback
+        if (passages.isEmpty()) {
+            final int fallbackLength = Math.min(300, content.length());
+            final String fallbackText = cleanPassageText(
+                    content.substring(0, fallbackLength) +
+                    (content.length() > fallbackLength ? "..." : ""));
+            return List.of(new Passage(fallbackText, 0.0, List.of(), 0.0, 0.0));
+        }
+
+        return passages;
+    }
+
+    /**
+     * Extract all terms wrapped in {@code <em>...</em>} tags from a highlighted passage.
+     * Duplicates are removed (case-insensitive); order follows first appearance.
+     *
+     * <p>If no {@code <em>} tags are found but {@code queryTerms} is non-empty the method
+     * falls back to scanning the passage for any query term that appears verbatim
+     * (after NFKC + lowercase normalisation).  This handles the case where the
+     * highlighter returns a relevant passage without wrapping the matched tokens.</p>
+     *
+     * @param highlightedText the passage text (may contain {@code <em>} markup)
+     * @param queryTerms      the original query terms; used only for the fallback scan
+     * @return list of matched terms in first-appearance order
+     */
+    private static List<String> extractMatchedTerms(final String highlightedText, final Set<String> queryTerms) {
+        final List<String> terms = new ArrayList<>();
+        final Set<String> seen = new HashSet<>();
+
+        // First try to extract from <em> tags
+        int searchFrom = 0;
+        while (true) {
+            final int emOpen = highlightedText.indexOf("<em>", searchFrom);
+            if (emOpen < 0) {
+                break;
+            }
+            final int emClose = highlightedText.indexOf("</em>", emOpen + 4);
+            if (emClose < 0) {
+                break;
+            }
+            final String term = highlightedText.substring(emOpen + 4, emClose);
+            if (!term.isEmpty() && seen.add(term.toLowerCase())) {
+                terms.add(term);
+            }
+            searchFrom = emClose + 5;
+        }
+
+        // Fallback: if no <em> tags found, check which query terms appear in the passage
+        if (terms.isEmpty() && queryTerms != null && !queryTerms.isEmpty()) {
+            final String normalizedPassage = normalizeForComparison(highlightedText);
+            for (final String qt : queryTerms) {
+                final String qtNorm = normalizeForComparison(qt);
+                if (qtNorm.length() >= 2 && normalizedPassage.contains(qtNorm)) {
+                    if (seen.add(qtNorm)) {
+                        terms.add(qt); // Add original form
+                    }
                 }
             }
         }
 
-        // If no term found, just take beginning
-        if (bestPos < 0) {
-            return content.substring(0, Math.min(maxLength, content.length())) + "...";
+        return terms;
+    }
+
+    /**
+     * Calculate the approximate position (0.0-1.0) of a highlighted passage within
+     * the original content.  The method strips {@code <em>} tags and the leading
+     * ellipsis from the passage, then searches for the first substantial fragment
+     * in the original text.
+     *
+     * @return position fraction, rounded to 2 decimal places; 0.0 if not found
+     */
+    private static double calculatePosition(final String highlightedPassage, final String content) {
+        // Strip all <em> and </em> tags to get plain text
+        String plain = highlightedPassage.replace("<em>", "").replace("</em>", "");
+
+        // The DefaultPassageFormatter prepends "..." to passages that are not at
+        // the very start of the text.  Strip leading/trailing ellipsis and whitespace.
+        plain = plain.strip();
+        if (plain.startsWith("...")) {
+            plain = plain.substring(3).strip();
+        }
+        if (plain.endsWith("...")) {
+            plain = plain.substring(0, plain.length() - 3).strip();
         }
 
-        // Create snippet around the found term
-        final int snippetStart = Math.max(0, bestPos - 100);
-        final int snippetEnd = Math.min(content.length(), bestPos + 200);
-
-        String snippet = content.substring(snippetStart, snippetEnd);
-
-        // Add ellipsis
-        if (snippetStart > 0) {
-            snippet = "..." + snippet;
-        }
-        if (snippetEnd < content.length()) {
-            snippet = snippet + "...";
+        if (plain.isEmpty() || content.isEmpty()) {
+            return 0.0;
         }
 
-        // Highlight the search term (simple approach - wrap in <em> tags)
-        if (bestTerm != null) {
-            snippet = snippet.replaceAll("(?i)(" + java.util.regex.Pattern.quote(bestTerm) + ")",
-                    "<em>$1</em>");
+        // Use the first 80 characters of the cleaned passage as the search needle;
+        // this avoids expensive searches on very long strings while being long enough
+        // to locate uniquely in almost all documents.
+        final int needleLen = Math.min(80, plain.length());
+        final String needle = plain.substring(0, needleLen);
+
+        final int idx = content.indexOf(needle);
+        if (idx < 0) {
+            // Needle not found (possible if content was normalised differently).
+            // Return 0.0 rather than crashing.
+            return 0.0;
         }
 
-        return snippet;
+        return Math.round((double) idx / content.length() * 100.0) / 100.0;
+    }
+
+    /**
+     * Clean a passage text for display: replace newlines with spaces, collapse
+     * consecutive spaces into one, and trim leading/trailing whitespace.
+     * Returns an empty string for null input.
+     */
+    private static String cleanPassageText(final String passageText) {
+        if (passageText == null) {
+            return "";
+        }
+        // Replace newlines with space, collapse multiple spaces, trim
+        return passageText.replace('\n', ' ')
+                          .replaceAll(" +", " ")
+                          .trim();
+    }
+
+    /**
+     * Normalize a term for comparison: NFKC normalization + lowercase.
+     * This approximates what ICUFoldingFilter does during indexing, allowing
+     * matched-term detection to succeed even when the highlighter returns the
+     * original (un-folded) surface form from the stored content.
+     */
+    private static String normalizeForComparison(final String term) {
+        if (term == null || term.isEmpty()) {
+            return "";
+        }
+        return java.text.Normalizer.normalize(term, java.text.Normalizer.Form.NFKC).toLowerCase();
+    }
+
+    /**
+     * Extract the set of leaf query terms from a Lucene {@link Query} tree.
+     * Walks {@link BooleanQuery} clauses recursively and pulls text from
+     * {@link TermQuery} nodes.  For other query types (wildcards, phrases, etc.)
+     * falls back to parsing {@link Query#toString()}.
+     */
+    private static Set<String> extractQueryTerms(final Query query) {
+        final Set<String> terms = new HashSet<>();
+        collectTerms(query, terms);
+        if (terms.isEmpty()) {
+            // Last-resort fallback: tokenise the string representation
+            parseTermsFromString(query.toString(), terms);
+        }
+        return terms;
+    }
+
+    private static void collectTerms(final Query query, final Set<String> terms) {
+        if (query instanceof TermQuery tq) {
+            terms.add(tq.getTerm().text());
+        } else if (query instanceof BooleanQuery bq) {
+            // Lucene 10: getClauses() requires an Occur parameter.
+            // Iterate over all Occur values to collect every sub-query.
+            for (final BooleanClause.Occur occur : BooleanClause.Occur.values()) {
+                for (final Query sub : bq.getClauses(occur)) {
+                    collectTerms(sub, terms);
+                }
+            }
+        } else {
+            // For WildcardQuery, PrefixQuery, PhraseQuery, etc. -- extract from toString()
+            parseTermsFromString(query.toString(), terms);
+        }
+    }
+
+    /**
+     * Parse terms out of a Query.toString() representation.
+     * Strips field prefixes (e.g. "content:"), parentheses, boolean operators,
+     * and wildcard characters to isolate the actual search tokens.
+     */
+    private static void parseTermsFromString(final String queryStr, final Set<String> terms) {
+        if (queryStr == null || queryStr.isBlank()) {
+            return;
+        }
+        // Split on whitespace and common delimiters
+        final String[] tokens = queryStr.split("[\\s()\"]+");
+        for (final String token : tokens) {
+            String cleaned = token.trim();
+            if (cleaned.isEmpty()) {
+                continue;
+            }
+            // Skip boolean operators
+            if ("AND".equals(cleaned) || "OR".equals(cleaned) || "NOT".equals(cleaned) ||
+                    "TO".equals(cleaned) || "+".equals(cleaned) || "-".equals(cleaned)) {
+                continue;
+            }
+            // Strip field prefix (e.g. "content:" or "title:")
+            final int colonIdx = cleaned.indexOf(':');
+            if (colonIdx > 0 && colonIdx < cleaned.length() - 1) {
+                cleaned = cleaned.substring(colonIdx + 1);
+            }
+            // Strip wildcard and range characters
+            cleaned = cleaned.replace("*", "").replace("?", "")
+                    .replace("[", "").replace("]", "")
+                    .replace("{", "").replace("}", "");
+            if (!cleaned.isEmpty()) {
+                terms.add(cleaned);
+            }
+        }
     }
 
     private Map<String, List<FacetValue>> buildFacets(final IndexSearcher searcher, final FacetsCollector facetsCollector) {
@@ -870,7 +1186,7 @@ public class LuceneIndexService {
     }
 
     public record SearchResult(
-            List<Map<String, Object>> documents,
+            List<SearchDocument> documents,
             long totalHits,
             int page,
             int pageSize,

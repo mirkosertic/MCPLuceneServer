@@ -48,7 +48,7 @@ public class LuceneSearchTools {
             - Field search: 'title:hello content:world' \
             - Grouping: '(contract OR agreement) AND signed' \
             Best practices: Combine related terms with OR, use wildcards for inflections, leverage facets for drill-down. \
-            Returns: paginated results with snippets (highlighted matches), relevance scores, facets (with counts), and searchTimeMs.""";
+            Returns: paginated results with a passages array per document (each passage contains highlighted text, a relevance score, matchedTerms, termCoverage, and position), document-level relevance scores, facets (with counts), and searchTimeMs.""";
 
     private static final String ADMIN_APP_RESOURCE_ID = "ui://indexadmin/index.html";
 

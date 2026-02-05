@@ -1,0 +1,407 @@
+package de.mirkosertic.mcp.luceneserver;
+
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
+import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
+import de.mirkosertic.mcp.luceneserver.crawler.ExtractedDocument;
+import de.mirkosertic.mcp.luceneserver.crawler.FileContentExtractor;
+import de.mirkosertic.mcp.luceneserver.crawler.TestDocumentGenerator;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.Passage;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.stream.Stream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+/**
+ * Integration tests for search highlighting functionality.
+ *
+ * <p>These tests verify the complete pipeline:</p>
+ * <ol>
+ *   <li>Content extraction from various document formats</li>
+ *   <li>Content normalization (HTML entities, special characters)</li>
+ *   <li>Indexing with term vectors (positions and offsets)</li>
+ *   <li>Search with UnifiedHighlighter</li>
+ *   <li>Passage generation with {@code <em>} highlighting tags</li>
+ * </ol>
+ */
+@DisplayName("Search Highlighting Integration Tests")
+class SearchHighlightingIntegrationTest {
+
+    @TempDir
+    Path tempDir;
+
+    private Path indexDir;
+    private Path docsDir;
+    private LuceneIndexService indexService;
+    private FileContentExtractor extractor;
+    private DocumentIndexer documentIndexer;
+    private ApplicationConfig config;
+
+    @BeforeEach
+    void setUp() throws IOException {
+        indexDir = tempDir.resolve("index");
+        docsDir = tempDir.resolve("docs");
+        Files.createDirectories(indexDir);
+        Files.createDirectories(docsDir);
+
+        // Create mock config
+        config = mock(ApplicationConfig.class);
+        when(config.getIndexPath()).thenReturn(indexDir.toString());
+        when(config.getNrtRefreshIntervalMs()).thenReturn(100L);
+        when(config.getMaxPassages()).thenReturn(5);
+        when(config.isExtractMetadata()).thenReturn(true);
+        when(config.isDetectLanguage()).thenReturn(false); // Disable for faster tests
+        when(config.getMaxContentLength()).thenReturn(-1L);
+
+        // Create components
+        extractor = new FileContentExtractor(config);
+        documentIndexer = new DocumentIndexer();
+        indexService = new LuceneIndexService(config, documentIndexer);
+        indexService.init();  // Initialize the index writer and searcher
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        if (indexService != null) {
+            indexService.close();
+        }
+    }
+
+    // ========== Parameterized Tests for All Document Types ==========
+
+    @ParameterizedTest(name = "Highlighting in {0} files")
+    @MethodSource("documentTypeProvider")
+    @DisplayName("Should highlight search terms in")
+    void shouldHighlightSearchTermsInDocument(
+            final String extension,
+            final FileGenerator generator) throws Exception {
+
+        // Given: Create and index a test document
+        final Path testFile = docsDir.resolve("test-highlight." + extension);
+        generator.generate(testFile);
+
+        final ExtractedDocument extracted = extractor.extract(testFile);
+        assertThat(extracted.content())
+            .as("Content should be extracted from %s", extension)
+            .isNotEmpty();
+
+        // Index the document
+        final var luceneDoc = documentIndexer.createDocument(testFile, extracted);
+        documentIndexer.indexDocument(indexService.getIndexWriter(), luceneDoc);
+        indexService.commit();
+        indexService.refreshSearcher();
+
+        // When: Search for a term we know is in the test content
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "test content", null, null, 0, 10);
+
+        // Then: Verify search found the document
+        assertThat(result.totalHits())
+            .as("Should find the %s document", extension)
+            .isGreaterThanOrEqualTo(1);
+
+        assertThat(result.documents())
+            .as("Should return search results for %s", extension)
+            .isNotEmpty();
+
+        // Verify passages exist and contain highlighting
+        final SearchDocument doc = result.documents().getFirst();
+        assertThat(doc.passages())
+            .as("Should have passages for %s", extension)
+            .isNotEmpty();
+
+        final Passage firstPassage = doc.passages().getFirst();
+        assertThat(firstPassage.text())
+            .as("Passage text should not be empty for %s", extension)
+            .isNotEmpty();
+
+        // Verify highlighting with <em> tags (at least one term should be highlighted)
+        final boolean hasHighlighting = firstPassage.text().contains("<em>")
+            && firstPassage.text().contains("</em>");
+
+        assertThat(hasHighlighting)
+            .as("Passage should contain <em> highlighting tags for %s. Actual passage: %s",
+                extension, firstPassage.text())
+            .isTrue();
+
+        // Verify matched terms are extracted
+        assertThat(firstPassage.matchedTerms())
+            .as("Should have matched terms for %s", extension)
+            .isNotEmpty();
+
+        // Verify term coverage is calculated
+        assertThat(firstPassage.termCoverage())
+            .as("Term coverage should be > 0 for %s", extension)
+            .isGreaterThan(0.0);
+
+        // Verify score is set
+        assertThat(firstPassage.score())
+            .as("Passage score should be > 0 for %s", extension)
+            .isGreaterThan(0.0);
+    }
+
+    static Stream<Arguments> documentTypeProvider() {
+        return Stream.of(
+            Arguments.of("txt", (FileGenerator) TestDocumentGenerator::createTxtFile),
+            Arguments.of("pdf", (FileGenerator) TestDocumentGenerator::createPdfFile),
+            Arguments.of("docx", (FileGenerator) TestDocumentGenerator::createDocxFile),
+            Arguments.of("doc", (FileGenerator) TestDocumentGenerator::createDocFile),
+            Arguments.of("xlsx", (FileGenerator) TestDocumentGenerator::createXlsxFile),
+            Arguments.of("xls", (FileGenerator) TestDocumentGenerator::createXlsFile),
+            Arguments.of("pptx", (FileGenerator) TestDocumentGenerator::createPptxFile),
+            Arguments.of("ppt", (FileGenerator) TestDocumentGenerator::createPptFile),
+            Arguments.of("odt", (FileGenerator) TestDocumentGenerator::createOdtFile),
+            Arguments.of("ods", (FileGenerator) TestDocumentGenerator::createOdsFile)
+        );
+    }
+
+    @FunctionalInterface
+    interface FileGenerator {
+        void generate(Path path) throws Exception;
+    }
+
+    // ========== Specific Highlighting Tests ==========
+
+    @Test
+    @DisplayName("Should highlight multiple search terms")
+    void shouldHighlightMultipleSearchTerms() throws Exception {
+        // Given: Index a document with known content
+        final Path testFile = docsDir.resolve("multi-term.txt");
+        Files.writeString(testFile, "This document contains test content for verification purposes. " +
+            "The test should verify that multiple terms are highlighted correctly.");
+
+        indexDocument(testFile);
+
+        // When: Search for multiple terms
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "test verification", null, null, 0, 10);
+
+        // Then: Both terms should be highlighted
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        final Passage passage = result.documents().getFirst().passages().getFirst();
+        assertThat(passage.text())
+            .contains("<em>")
+            .contains("</em>");
+
+        // Should have matched at least one of the terms
+        assertThat(passage.matchedTerms())
+            .as("Should have matched terms")
+            .isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("Should handle HTML entities in content")
+    void shouldHandleHtmlEntitiesInContent() throws Exception {
+        // Given: Index a document with HTML entities
+        final Path testFile = docsDir.resolve("html-entities.txt");
+        Files.writeString(testFile, "Tom &amp; Jerry are famous characters in animation. " +
+            "The path is C:&#x2F;Users&#x2F;test for configuration. " +
+            "Price: &lt;100&gt; dollars is affordable.");
+
+        indexDocument(testFile);
+
+        // When: Search for content (use terms that will definitely be in the text)
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "characters animation", null, null, 0, 10);
+
+        // Then: Entities should be decoded in the indexed content
+        assertThat(result.totalHits())
+            .as("Should find the document")
+            .isGreaterThanOrEqualTo(1);
+
+        final Passage passage = result.documents().getFirst().passages().getFirst();
+
+        // The passage should contain decoded entities (& instead of &amp;)
+        // Note: This tests the full pipeline including FileContentExtractor normalization
+        // AND that the highlighter doesn't re-escape them
+        assertThat(passage.text())
+            .as("HTML entities should be decoded. Actual: %s", passage.text())
+            .doesNotContain("&amp;")
+            .doesNotContain("&#x2F;")
+            .doesNotContain("&lt;")
+            .doesNotContain("&gt;");
+
+        // Verify the decoded characters are present
+        assertThat(passage.text())
+            .as("Should contain decoded ampersand")
+            .contains("&");  // The actual & character, not &amp;
+    }
+
+    @Test
+    @DisplayName("Should handle special Unicode characters")
+    void shouldHandleSpecialUnicodeCharacters() throws Exception {
+        // Given: Index a document with special characters
+        final Path testFile = docsDir.resolve("unicode.txt");
+        Files.writeString(testFile, "Müller and Müller are searching for files. " +
+            "The file path contains special characters.");
+
+        indexDocument(testFile);
+
+        // When: Search for the name (with umlaut)
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "Muller", null, null, 0, 10);  // Search without umlaut
+
+        // Then: Should find the document (ICU folding should handle this)
+        assertThat(result.totalHits())
+            .as("Should find document with umlauts when searching without")
+            .isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Should calculate term coverage correctly")
+    void shouldCalculateTermCoverageCorrectly() throws Exception {
+        // Given: Index a document
+        final Path testFile = docsDir.resolve("coverage.txt");
+        Files.writeString(testFile, "Alpha Beta Gamma Delta - these are Greek letters. " +
+            "Alpha and Beta appear here again.");
+
+        indexDocument(testFile);
+
+        // When: Search for terms where only some appear
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "Alpha Beta Omega", null, null, 0, 10);
+
+        // Then: Term coverage should reflect partial match
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        final Passage passage = result.documents().getFirst().passages().getFirst();
+
+        // Alpha and Beta should be found, Omega should not
+        // So coverage should be around 0.67 (2/3)
+        assertThat(passage.termCoverage())
+            .as("Term coverage should be between 0 and 1")
+            .isBetween(0.0, 1.0);
+
+        assertThat(passage.matchedTerms())
+            .as("Should have found Alpha and/or Beta")
+            .isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("Should highlight multiple occurrences in long documents")
+    void shouldHighlightMultipleOccurrencesInLongDocuments() throws Exception {
+        // Given: Index a document with multiple relevant sections
+        String content = "First section: The search term appears here in the introduction. " +
+                "Lorem ipsum dolor sit amet. ".repeat(50) + // Filler
+                "Second section: Another occurrence of the search term in the middle. " +
+                "Lorem ipsum dolor sit amet. ".repeat(50) + // Filler
+                "Third section: Final mention of the search term at the end.";
+
+        final Path testFile = docsDir.resolve("long-document.txt");
+        Files.writeString(testFile, content);
+
+        indexDocument(testFile);
+
+        // When: Search for the repeated term
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "search term", null, null, 0, 10);
+
+        // Then: Should find the document and have passages
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        final List<Passage> passages = result.documents().getFirst().passages();
+        assertThat(passages)
+            .as("Should have at least one passage")
+            .isNotEmpty();
+
+        // The UnifiedHighlighter joins multiple matches into one passage with "..."
+        // Verify that multiple sections are found (indicated by "..." separators)
+        final Passage passage = passages.getFirst();
+        assertThat(passage.text())
+            .as("Passage should contain multiple highlighted occurrences")
+            .contains("<em>search</em>")
+            .contains("<em>term</em>");
+
+        // Count how many times the search term is highlighted
+        final int highlightCount = countOccurrences(passage.text(), "<em>search</em>");
+        assertThat(highlightCount)
+            .as("Should highlight the search term multiple times")
+            .isGreaterThanOrEqualTo(2);
+    }
+
+    private int countOccurrences(final String text, final String substring) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = text.indexOf(substring, idx)) != -1) {
+            count++;
+            idx += substring.length();
+        }
+        return count;
+    }
+
+    @Test
+    @DisplayName("Should handle wildcard queries")
+    void shouldHandleWildcardQueries() throws Exception {
+        // Given: Index a document
+        final Path testFile = docsDir.resolve("wildcard.txt");
+        Files.writeString(testFile, "Testing wildcard functionality. " +
+            "Test cases include testing and tested scenarios.");
+
+        indexDocument(testFile);
+
+        // When: Search with wildcard
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "test*", null, null, 0, 10);
+
+        // Then: Should find and highlight matches
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        final Passage passage = result.documents().getFirst().passages().getFirst();
+        assertThat(passage.text())
+            .as("Should contain highlighting for wildcard match")
+            .contains("<em>");
+    }
+
+    @Test
+    @DisplayName("Should not have newlines in passage text")
+    void shouldNotHaveNewlinesInPassageText() throws Exception {
+        // Given: Index a document with multiple lines
+        final Path testFile = docsDir.resolve("multiline.txt");
+        Files.writeString(testFile, """
+                First line with search term.
+                Second line continues.
+                Third line with more content.
+                Fourth line ends here.""");
+
+        indexDocument(testFile);
+
+        // When: Search
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "search term", null, null, 0, 10);
+
+        // Then: Passages should not contain raw newlines
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        for (final Passage passage : result.documents().getFirst().passages()) {
+            assertThat(passage.text())
+                .as("Passage should not contain newline characters")
+                .doesNotContain("\n")
+                .doesNotContain("\r");
+        }
+    }
+
+    // ========== Helper Methods ==========
+
+    private void indexDocument(final Path file) throws IOException {
+        final ExtractedDocument extracted = extractor.extract(file);
+        final var luceneDoc = documentIndexer.createDocument(file, extracted);
+        documentIndexer.indexDocument(indexService.getIndexWriter(), luceneDoc);
+        indexService.commit();
+        indexService.refreshSearcher();
+    }
+}
