@@ -3,6 +3,7 @@ package de.mirkosertic.mcp.luceneserver.crawler;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -176,5 +177,87 @@ class FileContentExtractorTest {
                 Arguments.of("odt", (FileGenerator) TestDocumentGenerator::createOdtFile),
                 Arguments.of("ods", (FileGenerator) TestDocumentGenerator::createOdsFile)
         );
+    }
+
+    // ========== Tests for normalizeContent (HTML entity and URL decoding) ==========
+
+    @Test
+    @DisplayName("Should decode HTML named entities")
+    void shouldDecodeHtmlNamedEntities() {
+        final String input = "Tom &amp; Jerry &lt;test&gt; &quot;quoted&quot;";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("Tom & Jerry <test> \"quoted\"");
+    }
+
+    @Test
+    @DisplayName("Should decode HTML decimal numeric entities")
+    void shouldDecodeHtmlDecimalEntities() {
+        final String input = "&#38; &#60; &#62; &#34;";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("& < > \"");
+    }
+
+    @Test
+    @DisplayName("Should decode HTML hexadecimal numeric entities")
+    void shouldDecodeHtmlHexEntities() {
+        final String input = "&#x26; &#x3C; &#x3E; &#x22;";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("& < > \"");
+    }
+
+    @Test
+    @DisplayName("Should decode &#x2F; to forward slash")
+    void shouldDecodeForwardSlashEntity() {
+        final String input = "path&#x2F;to&#x2F;file";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("path/to/file");
+    }
+
+    @Test
+    @DisplayName("Should decode HTML hex entities with uppercase X")
+    void shouldDecodeHtmlHexEntitiesUppercaseX() {
+        final String input = "&#X26; &#X3C;";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("& <");
+    }
+
+    @Test
+    @DisplayName("Should decode URL-encoded sequences")
+    void shouldDecodeUrlEncodedSequences() {
+        final String input = "Hello%20World%21";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("Hello World!");
+    }
+
+    @Test
+    @DisplayName("Should decode URL-encoded UTF-8 sequences")
+    void shouldDecodeUrlEncodedUtf8() {
+        final String input = "M%C3%BCller";  // Müller in UTF-8
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("Müller");  // NFKC keeps ü as-is (only decomposes compatibility chars)
+    }
+
+    @Test
+    @DisplayName("Should handle mixed entities and regular text")
+    void shouldHandleMixedContent() {
+        final String input = "Copyright &copy; 2024 &mdash; All rights reserved";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("Copyright © 2024 — All rights reserved");
+    }
+
+    @Test
+    @DisplayName("Should leave invalid entities unchanged")
+    void shouldLeaveInvalidEntitiesUnchanged() {
+        final String input = "&invalid; &; & test";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("&invalid; &; & test");
+    }
+
+    @Test
+    @DisplayName("Should collapse whitespace after entity decoding")
+    void shouldCollapseWhitespaceAfterDecoding() {
+        final String input = "Hello&nbsp;&nbsp;&nbsp;World";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("Hello World");  // nbsp -> space, then collapsed
     }
 }

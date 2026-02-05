@@ -46,3 +46,4 @@ lucene:
     progress-notification-files: 100
     progress-notification-interval-ms: 30000
     reconciliation-enabled: true
+    max-passages: 5
