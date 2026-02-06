@@ -231,6 +231,7 @@ lucene:
       - "*.xls"
       - "*.xlsx"
       - "*.ods"
+      - "*.txt" 
 
     # File patterns to exclude
     exclude-patterns:
