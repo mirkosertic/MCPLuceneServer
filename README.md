@@ -317,6 +317,25 @@ lucene:
 
 ## Available MCP Tools
 
+### `indexAdmin`
+
+An [MCP App](https://github.com/modelcontextprotocol/ext-apps) that provides a visual user interface for index maintenance tasks directly inside your MCP client (e.g. Claude Desktop). When invoked, the app is rendered inline in the conversation and offers one-click access to administrative operations without requiring manual tool calls.
+
+![Index Administration App](doc/indexadminapp.png)
+
+**Available actions:**
+
+- **Unlock Index** -- Removes a stale `write.lock` file after an unclean shutdown (equivalent to calling `unlockIndex` with `confirm=true`)
+- **Optimize Index** -- Merges index segments for improved search performance (equivalent to calling `optimizeIndex`)
+- **Purge Index** -- Deletes all documents from the index (equivalent to calling `purgeIndex` with `confirm=true`)
+
+Each action shows inline status feedback (success, error, or progress details) directly in the app UI.
+
+**Example:**
+```
+Ask Claude: "Can you invoke the indexAdmin tool please?"
+```
+
 ### `search`
 
 Search the Lucene fulltext index using **lexical matching** (exact word forms only).
