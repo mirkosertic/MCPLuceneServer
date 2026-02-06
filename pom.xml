@@ -4,7 +4,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>de.mirkosertic.mcp</groupId>
 	<artifactId>luceneserver</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
+	<version>${revision}</version>
 	<name>luceneserver</name>
 	<description>An MCP server for fulltext search with Lucene.</description>
 	<url/>
@@ -24,6 +24,7 @@
 		<url/>
 	</scm>
 	<properties>
+		<revision>0.0.1-SNAPSHOT</revision>
 		<java.version>21</java.version>
 		<maven.compiler.source>${java.version}</maven.compiler.source>
 		<maven.compiler.target>${java.version}</maven.compiler.target>

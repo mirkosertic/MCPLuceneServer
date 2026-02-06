@@ -35,6 +35,7 @@ build/
 # Claude Code - ignore local files, keep agents and settings
 .claude/*
 !.claude/agents/
+!.claude/skills/
 !.claude/settings.json
 
 node_modules
