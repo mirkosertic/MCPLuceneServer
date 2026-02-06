@@ -63,6 +63,13 @@ public class DocumentIndexer {
             contentFieldType.setStoreTermVectorPositions(true);
             contentFieldType.setStoreTermVectorOffsets(true);
             doc.add(new Field("content", extracted.content(), contentFieldType));
+
+            // content_reversed (analyzed with ReverseUnicodeNormalizingAnalyzer, not stored)
+            // Stores reversed tokens so that leading wildcard queries (*vertrag) can be
+            // rewritten as efficient trailing wildcard queries on this field (gartrev*).
+            // The PerFieldAnalyzerWrapper in LuceneIndexService routes this field to the
+            // ReverseUnicodeNormalizingAnalyzer automatically.
+            doc.add(new TextField("content_reversed", extracted.content(), Field.Store.NO));
         }
 
         // file_extension (not analyzed, stored, faceted)

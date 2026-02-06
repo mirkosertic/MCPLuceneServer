@@ -39,14 +39,22 @@ public class LuceneSearchTools {
             Search the Lucene fulltext index using LEXICAL matching (exact word forms only). \
             IMPORTANT: No automatic synonym expansion, phonetic matching, or stemming is applied. \
             To find synonyms/variants, YOU MUST explicitly include them using OR: '(contract OR agreement OR deal)'. \
-            Use wildcards for variations: 'contract*' matches 'contracts', 'contracting'. \
             Supports Lucene query syntax: \
             - Simple terms: 'hello world' (implicit AND) \
             - Phrases: '"exact phrase"' \
             - Boolean: 'term1 AND term2', 'term1 OR term2', 'NOT term' \
-            - Wildcards: 'test*' (suffix), 'te?t' (single char), '*test' (prefix, slow!) \
+            - Trailing wildcard: 'contract*' matches contracts, contracting \
+            - Leading wildcard: '*vertrag' efficiently finds Arbeitsvertrag, Kaufvertrag (German compound words) \
+            - Infix wildcard: '*vertrag*' finds both Arbeitsvertrag and Vertragsbedingungen \
+            - Single char wildcard: 'te?t' matches test, text \
+            - Fuzzy search: 'term~2' finds terms within Levenshtein distance 2 \
+            - Proximity search: '"term1 term2"~5' finds terms within 5 words of each other \
             - Field search: 'title:hello content:world' \
             - Grouping: '(contract OR agreement) AND signed' \
+            ICU folding is applied: umlauts and diacritics are auto-folded (Muller matches Mueller, cafe matches cafe). \
+            No stemming: use wildcards + OR groups for inflections, e.g. '(vertrag* OR vertraeg*)' or '(run OR running OR ran)'. \
+            German compound word strategy: use leading wildcards for suffixes (*vertrag), trailing wildcards for prefixes (vertrag*), \
+            or infix wildcards for substrings (*vertrag*). \
             Best practices: Combine related terms with OR, use wildcards for inflections, leverage facets for drill-down. \
             Returns: paginated results with a passages array per document (each passage contains highlighted text, a relevance score, matchedTerms, termCoverage, and position), document-level relevance scores, facets (with counts), and searchTimeMs.""";
 

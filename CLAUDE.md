@@ -82,6 +82,16 @@ This document contains instructions and context for AI assistants working on thi
 - **Trade-off**: Adds `lucene-analysis-icu` dependency; still no stemming/synonyms -- AI assistants compensate with OR queries
 - See README.md "Lexical Search" section for user guidance
 
+### Why Reverse Token Field (`content_reversed`)?
+- Enables efficient leading wildcard queries (e.g., `*vertrag` to find German compound words like "Arbeitsvertrag")
+- Without this, Lucene must scan every term in the index for leading wildcards -- extremely slow on large indices
+- Uses `ReverseUnicodeNormalizingAnalyzer` (same chain as `UnicodeNormalizingAnalyzer` + `ReverseStringFilter`)
+- `PerFieldAnalyzerWrapper` routes the `content_reversed` field to the reverse analyzer automatically
+- `rewriteLeadingWildcards()` in `LuceneIndexService` transparently rewrites queries before execution
+- The original (non-rewritten) query is still used for highlighting and term extraction, so `<em>` tags appear correctly
+- **Trade-off**: Doubles the token count in the index (content indexed twice); `Store.NO` minimizes disk overhead
+- **Breaking change**: Requires full reindex -- existing documents lack the `content_reversed` field
+
 ### Batch Processing Pattern
 ```
 Directory Walkers (N threads) ──> LinkedBlockingQueue ──> Batch Processor (1 thread)

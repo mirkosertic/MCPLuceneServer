@@ -5,6 +5,7 @@ import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.Passage;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
 import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.facet.FacetResult;
 import org.apache.lucene.facet.Facets;
@@ -29,6 +30,7 @@ import org.apache.lucene.search.SearcherManager;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.TotalHits;
+import org.apache.lucene.search.WildcardQuery;
 import org.apache.lucene.search.uhighlight.DefaultPassageFormatter;
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter;
 import org.apache.lucene.store.Directory;
@@ -104,7 +106,10 @@ public class LuceneIndexService {
     public LuceneIndexService(final ApplicationConfig config,
                               final DocumentIndexer documentIndexer) {
         this.config = config;
-        this.analyzer = new UnicodeNormalizingAnalyzer();
+        final Analyzer defaultAnalyzer = new UnicodeNormalizingAnalyzer();
+        this.analyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
+                "content_reversed", new ReverseUnicodeNormalizingAnalyzer()
+        ));
         this.indexPath = config.getIndexPath();
         this.nrtRefreshIntervalMs = config.getNrtRefreshIntervalMs();
         this.documentIndexer = documentIndexer;
@@ -210,16 +215,20 @@ public class LuceneIndexService {
         // Acquire searcher from SearcherManager - this is thread-safe and reuses readers
         final IndexSearcher searcher = searcherManager.acquire();
         try {
-            // Build the main query
+            // Build the main query (allow leading wildcards in syntax)
             final QueryParser parser = new QueryParser("content", analyzer);
+            parser.setAllowLeadingWildcard(true);
             final Query mainQuery = parser.parse(queryString);
+
+            // Rewrite leading wildcards to use the reversed-token field for efficiency
+            final Query optimizedQuery = rewriteLeadingWildcards(mainQuery);
 
             // Apply filter if provided
             final Query finalQuery;
             if (filterField != null && !filterField.isBlank() &&
                 filterValue != null && !filterValue.isBlank()) {
                 final BooleanQuery.Builder builder = new BooleanQuery.Builder();
-                builder.add(mainQuery, BooleanClause.Occur.MUST);
+                builder.add(optimizedQuery, BooleanClause.Occur.MUST);
 
                 final QueryParser filterParser = new QueryParser(filterField, analyzer);
                 final Query filterQuery = filterParser.parse(filterValue);
@@ -227,7 +236,7 @@ public class LuceneIndexService {
 
                 finalQuery = builder.build();
             } else {
-                finalQuery = mainQuery;
+                finalQuery = optimizedQuery;
             }
 
             // Calculate pagination
@@ -1134,6 +1143,79 @@ public class LuceneIndexService {
                 terms.add(cleaned);
             }
         }
+    }
+
+    /**
+     * Rewrite leading wildcard queries to use the {@code content_reversed} field
+     * for efficient execution.
+     *
+     * <p>Rewriting rules (only for queries on the {@code content} field):</p>
+     * <ul>
+     *   <li>{@code *vertrag} &rarr; {@code WildcardQuery("content_reversed", "gartrev*")}</li>
+     *   <li>{@code *vertrag*} &rarr; {@code BooleanQuery(OR): content:*vertrag* OR content_reversed:gartrev*}</li>
+     *   <li>{@code vertrag*} &rarr; no change (trailing wildcard is already efficient)</li>
+     *   <li>{@code BooleanQuery} &rarr; recurse into sub-queries</li>
+     *   <li>Everything else &rarr; no change</li>
+     * </ul>
+     */
+    static Query rewriteLeadingWildcards(final Query query) {
+        if (query instanceof WildcardQuery wq) {
+            final String field = wq.getTerm().field();
+            final String text = wq.getTerm().text();
+
+            // Only rewrite queries on the "content" field
+            if (!"content".equals(field)) {
+                return query;
+            }
+
+            final boolean startsWithWildcard = text.startsWith("*") || text.startsWith("?");
+            final boolean endsWithWildcard = text.endsWith("*") || text.endsWith("?");
+
+            if (!startsWithWildcard) {
+                // Trailing wildcard only (e.g. vertrag*) -- already efficient
+                return query;
+            }
+
+            // Strip the leading wildcard character
+            final String core = text.substring(1);
+
+            if (endsWithWildcard) {
+                // Infix wildcard: *vertrag*
+                // Strip trailing wildcard to get the core word for reversal
+                final String coreWithoutTrailing = core.substring(0, core.length() - 1);
+                final String reversed = new StringBuilder(coreWithoutTrailing).reverse().toString();
+
+                // OR: original query on content OR reversed trailing wildcard on content_reversed
+                final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+                builder.add(wq, BooleanClause.Occur.SHOULD);
+                builder.add(new WildcardQuery(new Term("content_reversed", reversed + "*")),
+                        BooleanClause.Occur.SHOULD);
+                return builder.build();
+            } else {
+                // Pure leading wildcard: *vertrag
+                // Reverse the core and make it a trailing wildcard on the reversed field
+                final String reversed = new StringBuilder(core).reverse().toString();
+                return new WildcardQuery(new Term("content_reversed", reversed + "*"));
+            }
+
+        } else if (query instanceof BooleanQuery bq) {
+            // Recurse into sub-queries
+            final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+            boolean changed = false;
+            for (final BooleanClause.Occur occur : BooleanClause.Occur.values()) {
+                for (final Query sub : bq.getClauses(occur)) {
+                    final Query rewritten = rewriteLeadingWildcards(sub);
+                    builder.add(rewritten, occur);
+                    if (rewritten != sub) {
+                        changed = true;
+                    }
+                }
+            }
+            return changed ? builder.build() : query;
+        }
+
+        // All other query types: no change
+        return query;
     }
 
     private Map<String, List<FacetValue>> buildFacets(final IndexSearcher searcher, final FacetsCollector facetsCollector) {

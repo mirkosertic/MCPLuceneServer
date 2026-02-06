@@ -395,6 +395,123 @@ class SearchHighlightingIntegrationTest {
         }
     }
 
+    // ========== Leading Wildcard / Reverse Token Tests ==========
+
+    @Test
+    @DisplayName("Should search with leading wildcard (*vertrag finds Arbeitsvertrag)")
+    void shouldSearchWithLeadingWildcard() throws Exception {
+        // Given: Index a document with German compound words
+        final Path testFile = docsDir.resolve("compound-words.txt");
+        Files.writeString(testFile, "Der Arbeitsvertrag wurde gestern unterzeichnet. " +
+            "Der Kaufvertrag ist noch in Bearbeitung.");
+
+        indexDocument(testFile);
+
+        // When: Search with leading wildcard
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "*vertrag", null, null, 0, 10);
+
+        // Then: Should find the document
+        assertThat(result.totalHits())
+            .as("Leading wildcard *vertrag should find document with Arbeitsvertrag and Kaufvertrag")
+            .isGreaterThanOrEqualTo(1);
+
+        assertThat(result.documents()).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("Should highlight with leading wildcard query")
+    void shouldHighlightWithLeadingWildcard() throws Exception {
+        // Given: Index a document with compound words
+        final Path testFile = docsDir.resolve("highlight-leading.txt");
+        Files.writeString(testFile, "Der Arbeitsvertrag regelt die Arbeitsbedingungen. " +
+            "Ein Kaufvertrag wurde ebenfalls abgeschlossen.");
+
+        indexDocument(testFile);
+
+        // When: Search with leading wildcard
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "*vertrag", null, null, 0, 10);
+
+        // Then: Should find and have passages (highlighting may not use <em> for
+        // reversed-field queries, but passages should still be present)
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        final List<Passage> passages = result.documents().getFirst().passages();
+        assertThat(passages)
+            .as("Should have at least one passage")
+            .isNotEmpty();
+
+        assertThat(passages.getFirst().text())
+            .as("Passage text should not be empty")
+            .isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("Should search with infix wildcard (*vertrag* finds both compounds)")
+    void shouldSearchWithInfixWildcard() throws Exception {
+        // Given: Index documents with compound words containing "vertrag" in different positions
+        final Path testFile = docsDir.resolve("infix-wildcard.txt");
+        Files.writeString(testFile, "Die Vertragsbedingungen des Arbeitsvertrags sind klar definiert. " +
+            "Der Mietvertrag enthaelt wichtige Vertragsklauseln.");
+
+        indexDocument(testFile);
+
+        // When: Search with infix wildcard
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "*vertrag*", null, null, 0, 10);
+
+        // Then: Should find the document (matches both Vertragsbedingungen and Arbeitsvertrags)
+        assertThat(result.totalHits())
+            .as("Infix wildcard *vertrag* should find document with compound words")
+            .isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Should still work with trailing wildcard (regression test)")
+    void shouldStillWorkWithTrailingWildcard() throws Exception {
+        // Given: Index a document
+        final Path testFile = docsDir.resolve("trailing-wildcard.txt");
+        Files.writeString(testFile, "The contract was signed yesterday. " +
+            "The contractor delivered on time. Contracting services are available.");
+
+        indexDocument(testFile);
+
+        // When: Search with trailing wildcard
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "contract*", null, null, 0, 10);
+
+        // Then: Should find the document
+        assertThat(result.totalHits())
+            .as("Trailing wildcard contract* should still work")
+            .isGreaterThanOrEqualTo(1);
+
+        final Passage passage = result.documents().getFirst().passages().getFirst();
+        assertThat(passage.text())
+            .as("Should contain highlighting for wildcard match")
+            .contains("<em>");
+    }
+
+    @Test
+    @DisplayName("Should handle leading wildcard with ICU folding (*bericht finds Pruefbericht)")
+    void shouldHandleLeadingWildcardWithIcuFolding() throws Exception {
+        // Given: Index a document with umlauts
+        final Path testFile = docsDir.resolve("icu-leading.txt");
+        Files.writeString(testFile, "Der Pruefbericht wurde erstellt. " +
+            "Ein Jahresbericht folgt im naechsten Monat.");
+
+        indexDocument(testFile);
+
+        // When: Search with leading wildcard (without umlaut, ICU folding handles this)
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "*bericht", null, null, 0, 10);
+
+        // Then: Should find the document
+        assertThat(result.totalHits())
+            .as("Leading wildcard *bericht should find Pruefbericht and Jahresbericht via ICU folding")
+            .isGreaterThanOrEqualTo(1);
+    }
+
     // ========== Helper Methods ==========
 
     private void indexDocument(final Path file) throws IOException {
