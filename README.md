@@ -231,7 +231,15 @@ lucene:
       - "*.xls"
       - "*.xlsx"
       - "*.ods"
-      - "*.txt" 
+      - "*.txt"
+      - "*.eml"
+      - "*.msg"
+      - "*.md"
+      - "*.rst"
+      - "*.html"
+      - "*.htm"
+      - "*.rtf"
+      - "*.epub" 
 
     # File patterns to exclude
     exclude-patterns:
@@ -278,6 +286,10 @@ lucene:
 - Microsoft Office: Word (`.doc`, `.docx`), Excel (`.xls`, `.xlsx`), PowerPoint (`.ppt`, `.pptx`)
 - OpenOffice/LibreOffice: Writer (`.odt`), Calc (`.ods`), Impress (`.odp`)
 - Plain text files (`.txt`)
+- Email: Outlook (`.msg`), EML (`.eml`)
+- Markup: Markdown (`.md`), reStructuredText (`.rst`), HTML (`.html`, `.htm`)
+- Rich Text Format (`.rtf`)
+- E-books: EPUB (`.epub`)
 
 **Complete Configuration Example:**
 
