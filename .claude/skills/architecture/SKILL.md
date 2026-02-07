@@ -131,6 +131,20 @@ The document crawler uses a multi-layered architecture:
    - Applies bulk orphan deletions before new content is indexed
    - Designed to be fast: no content extraction during the reconciliation phase
 
+## MCP Response Token Budget
+
+Every byte returned by an MCP tool is a token consumed by the AI client. This is a **first-class design constraint** — treat response size the same way you would treat latency or memory.
+
+**Rules for MCP tool responses:**
+- Never return full document content in search results. Return focused passages instead.
+- Passages are truncated to `max-passage-char-length` (default: 200) using a **highlight-centred window** that trims irrelevant leading/trailing text while preserving `<em>` tags and surrounding context.
+- Default `max-passages` is 3 per document — enough for relevance judgement, not exhaustive coverage. Users who need more can retrieve the full document via `getDocument`.
+- When adding new fields to tool responses, ask: "Does the AI client actually need this in every response, or only on demand?" Prefer separate detail-fetching tools over bloating the default response.
+- When designing new MCP tools, estimate the worst-case response size: `(fields per result) × (avg field size) × (max results) × (max passages)`. Keep it under ~10 KB per tool call as a guideline.
+- Prefer structured, machine-readable output (short field values, numeric scores) over verbose human-readable text.
+
+**Example**: The passage system was redesigned to reduce worst-case per-search token load from ~25,000 chars (5 passages × 500 chars × 10 results) to ~6,000 chars (3 passages × 200 chars × 10 results) — a 76% reduction with *better* precision because passages are now individually extracted and windowed around highlights.
+
 ## Limitations (Design Constraints)
 
 | Limitation | Reason | Workaround |
@@ -142,7 +156,4 @@ The document crawler uses a multi-layered architecture:
 
 ## Future Enhancement Ideas
 
-- **OCR support**: Tesseract for scanned documents (high complexity)
-- **Semantic search**: Vector embeddings (very high complexity)
-- **Multi-language analyzers**: Language-specific stemming
-- **HTTP/SSE transport**: For browser-based clients
+See the **`/improvements`** skill for the full prioritized roadmap, trade-off analysis, and rejected ideas with reasoning.
