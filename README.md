@@ -269,7 +269,8 @@ lucene:
     reconciliation-enabled: true           # Skip unchanged files, remove orphans (default: true)
 
     # Search passages
-    max-passages: 5                        # Max highlighted passages per search result (default: 5)
+    max-passages: 3                        # Max highlighted passages per search result (default: 3)
+    max-passage-char-length: 200           # Max character length per passage; longer ones are truncated (default: 200, 0 = no limit)
 ```
 
 **Supported File Formats:**
@@ -430,6 +431,9 @@ Get statistics about the Lucene index.
 **Returns:**
 - `documentCount`: Total number of documents in the index
 - `indexPath`: Path to the index directory
+- `schemaVersion`: Current index schema version
+- `softwareVersion`: Server software version
+- `buildTimestamp`: Server build timestamp
 
 ### `startCrawl`
 
@@ -880,12 +884,12 @@ Search results are optimized for MCP responses (< 1 MB) and include:
 
 - **Search Performance Metrics:** Every search response includes `searchTimeMs` showing the exact execution time in milliseconds, enabling performance monitoring and optimization.
 
-- **Passages with Highlighting:** The full `content` field is NOT included in search results to keep response sizes manageable. Instead, each document contains a `passages` array with up to `max-passages` (default: 5) highlighted excerpts. Passages are ordered by relevance (best first). Each passage includes:
+- **Passages with Highlighting:** The full `content` field is NOT included in search results to keep response sizes manageable. Instead, each document contains a `passages` array with up to `max-passages` (default: 3) individually highlighted excerpts. Each passage is a separate sentence-level excerpt (not a single joined string), ordered by relevance (best first). Long passages are truncated to `max-passage-char-length` (default: 200) centred around the highlighted terms, trimming irrelevant leading/trailing text. Each passage includes:
   - `text` -- The highlighted excerpt with matched terms wrapped in `<em>` tags.
-  - `score` -- Normalised relevance score (0.0-1.0). The best passage scores 1.0; subsequent passages decay linearly to 0.5.
+  - `score` -- Normalised relevance score (0.0-1.0), derived from Lucene's BM25 passage scoring. The best passage scores 1.0; other passages are scored relative to the best.
   - `matchedTerms` -- The distinct query terms that appear in this passage (extracted from the `<em>` tags). Useful for understanding which parts of a multi-term query a passage satisfies.
   - `termCoverage` -- The fraction of all query terms present in this passage (0.0-1.0). A value of 1.0 means every query term matched. LLMs can use this to prefer passages that address the full query.
-  - `position` -- Approximate location within the source document (0.0 = start, 1.0 = end). Useful for citations or for understanding document structure.
+  - `position` -- Location within the source document (0.0 = start, 1.0 = end), derived from the passage's character offset. Useful for citations or for understanding document structure.
 
 - **Lucene Faceting:** The `facets` object uses **Lucene's SortedSetDocValues** for efficient faceted search. It shows actual facet values and document counts from the search results, not just available fields. Only facet dimensions that have values in the result set are returned.
 
@@ -969,6 +973,25 @@ Set `reconciliation-enabled: false` in `application.yaml` to always perform a fu
 ```
 This file records the last successful crawl's completion time, document count, and mode. It is written only after a crawl completes successfully.
 
+### Schema Version Management
+
+The server tracks the index schema version to detect when the schema changes between software updates. This eliminates the need for manual reindexing after upgrades.
+
+**How it works:**
+
+1. Each release embeds a `SCHEMA_VERSION` constant that reflects the current index field schema.
+2. The schema version is persisted in Lucene's commit metadata alongside the software version.
+3. On startup, the server compares the stored schema version with the current one.
+4. If they differ (or if a legacy index has no version), a full reindex is triggered automatically.
+
+**What triggers a schema version bump:**
+- Adding or removing indexed fields
+- Changing field analyzers
+- Modifying field indexing options (stored, term vectors, etc.)
+
+**Checking version information:**
+Use `getIndexStats` to see the current schema version, software version, and build timestamp.
+
 ### Real-time Monitoring
 
 With directory watching enabled (`watch-enabled: true`):
@@ -1036,21 +1059,27 @@ tail -n 100 ~/.mcplucene/log/mcplucene.log
 
 **When developing** (without the `deployed` profile), logs are written to the console instead of files.
 
-### Full reindex required after upgrading (content normalisation + passage changes + reverse token field)
+### Schema version changes and automatic reindexing
 
-A recent update introduced changes that affect stored index content:
+The server now includes **automatic schema version management**. When you upgrade to a new version that changes the index schema (e.g., adds new fields, changes analyzers, or modifies field indexing options), the server detects the version mismatch on startup and automatically triggers a full reindex.
 
-1. **Index-time content normalisation** -- Extracted text is now cleaned before indexing: NFKC Unicode normalisation expands ligatures and compatibility characters, control characters are stripped, and redundant whitespace is collapsed. This means the stored `content` field in existing index entries does not match what the server would produce today.
-2. **Passage upgrade** -- Search results now return a structured `passages` array (with `score`, `matchedTerms`, `termCoverage`, and `position` metadata) instead of a single `snippet` string. Passages are generated by Lucene's `UnifiedHighlighter` and enriched with quality signals. The highlighter uses the stored content to find the best passages around matched terms, so stale (un-normalised) content will produce lower-quality passages and inaccurate `position` values.
-3. **Reverse token field** -- A new `content_reversed` field stores reversed tokens for efficient leading wildcard queries (e.g., `*vertrag`). Existing documents lack this field, so leading wildcard queries will return no results until a full reindex is performed.
+**What happens:**
+1. On startup, the server compares the stored schema version with the current version
+2. If they differ, a full reindex is triggered automatically
+3. You'll see a log message: `Schema version changed — triggering full reindex`
+4. The reindex runs in the background; you can check progress with `getCrawlerStats`
 
-**What to do:** After upgrading, trigger a full reindex to ensure all documents are stored with normalised content:
+**Manual reindex:**
+If you need to force a manual reindex for any reason, you can still trigger it:
 
 ```
 Ask Claude: "Reindex all documents from scratch"
 ```
 
-This calls `startCrawl(fullReindex: true)`, which clears the existing index and re-crawls all configured directories. Search results and passages will improve once the reindex is complete.
+This calls `startCrawl(fullReindex: true)`, which clears the existing index and re-crawls all configured directories.
+
+**Version information:**
+Use `getIndexStats` to see the current schema version, software version, and build timestamp.
 
 ### Index lock file prevents startup (write.lock)
 

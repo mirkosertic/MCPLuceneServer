@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver;
 
 import com.google.common.io.Resources;
+import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlStatistics;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlerConfigurationManager;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentCrawlerService;
@@ -375,10 +376,14 @@ public class LuceneSearchTools {
         try {
             final long documentCount = indexService.getDocumentCount();
             final String indexPath = indexService.getIndexPath();
+            final int schemaVersion = indexService.getIndexSchemaVersion();
+            final String softwareVersion = BuildInfo.getVersion();
+            final String buildTimestamp = BuildInfo.getBuildTimestamp();
 
-            logger.info("Index stats: {} documents", documentCount);
+            logger.info("Index stats: {} documents, schema v{}", documentCount, schemaVersion);
 
-            return ToolResultHelper.createResult(IndexStatsResponse.success(documentCount, indexPath));
+            return ToolResultHelper.createResult(IndexStatsResponse.success(
+                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp));
 
         } catch (final IOException e) {
             logger.error("Error getting index stats", e);
@@ -694,7 +699,7 @@ public class LuceneSearchTools {
             // Check if another admin operation is running
             if (indexService.isAdminOperationRunning()) {
                 final LuceneIndexService.AdminOperationStatus status = indexService.getAdminStatus();
-                logger.warn("Another admin operation is running: {}", status.state());
+                logger.warn("Another admin operation is running: {}, cannot optimize the index", status.state());
                 return ToolResultHelper.createResult(OptimizeIndexResponse.alreadyRunning(status.operationId()));
             }
 
@@ -741,7 +746,7 @@ public class LuceneSearchTools {
             // Check if another admin operation is running
             if (indexService.isAdminOperationRunning()) {
                 final LuceneIndexService.AdminOperationStatus status = indexService.getAdminStatus();
-                logger.warn("Another admin operation is running: {}", status.state());
+                logger.warn("Another admin operation is running: {}, cannot purge the index", status.state());
                 return ToolResultHelper.createResult(PurgeIndexResponse.alreadyRunning(status.operationId()));
             }
 

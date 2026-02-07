@@ -63,7 +63,8 @@ public class ApplicationConfig {
     private int progressNotificationFiles = 100;
     private long progressNotificationIntervalMs = 30000;
     private boolean reconciliationEnabled = true;
-    private int maxPassages = 5;
+    private int maxPassages = 3;
+    private int maxPassageCharLength = 200;
 
     // Profile settings
     private boolean deployedMode = false;
@@ -214,6 +215,9 @@ public class ApplicationConfig {
         }
         if (crawlerConfig.containsKey("max-passages")) {
             this.maxPassages = ((Number) crawlerConfig.get("max-passages")).intValue();
+        }
+        if (crawlerConfig.containsKey("max-passage-char-length")) {
+            this.maxPassageCharLength = ((Number) crawlerConfig.get("max-passage-char-length")).intValue();
         }
     }
 
@@ -395,5 +399,9 @@ public class ApplicationConfig {
 
     public int getMaxPassages() {
         return maxPassages;
+    }
+
+    public int getMaxPassageCharLength() {
+        return maxPassageCharLength;
     }
 }

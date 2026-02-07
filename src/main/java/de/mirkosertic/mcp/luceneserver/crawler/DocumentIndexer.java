@@ -30,6 +30,12 @@ public class DocumentIndexer {
 
     private static final Logger logger = LoggerFactory.getLogger(DocumentIndexer.class);
 
+    /**
+     * Schema version for the index.
+     * MUST be incremented whenever the index schema changes (fields added/removed/modified, analyzers changed, etc.).
+     */
+    public static final int SCHEMA_VERSION = 1;
+
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;
 
