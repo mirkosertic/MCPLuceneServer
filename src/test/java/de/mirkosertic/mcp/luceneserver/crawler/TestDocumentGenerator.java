@@ -320,6 +320,168 @@ public final class TestDocumentGenerator {
         zos.closeEntry();
     }
 
+    /**
+     * Creates an EML file (RFC 822 email format) with test content.
+     */
+    public static void createEmlFile(final Path path) throws IOException {
+        final String emlContent = "From: " + TEST_AUTHOR + " <test@example.com>\r\n"
+                + "To: recipient@example.com\r\n"
+                + "Subject: " + TEST_TITLE + "\r\n"
+                + "Date: Mon, 1 Jan 2024 00:00:00 +0000\r\n"
+                + "MIME-Version: 1.0\r\n"
+                + "Content-Type: text/plain; charset=UTF-8\r\n"
+                + "\r\n"
+                + TEST_CONTENT;
+        Files.writeString(path, emlContent, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Creates an MSG file (Outlook message format) with test content.
+     * MSG files are OLE2 compound documents with specific property streams.
+     */
+    public static void createMsgFile(final Path path) throws IOException {
+        // MSG files are OLE2 compound documents. Create a minimal one using POI.
+        try (final org.apache.poi.poifs.filesystem.POIFSFileSystem fs = new org.apache.poi.poifs.filesystem.POIFSFileSystem()) {
+            // MSG properties are stored in specific streams
+            // Subject property (0x0037001F) - Unicode string
+            // Body property (0x1000001F) - Unicode string
+            final byte[] subjectBytes = TEST_TITLE.getBytes(StandardCharsets.UTF_16LE);
+            fs.createDocument(new java.io.ByteArrayInputStream(subjectBytes), "__substg1.0_0037001F");
+
+            final byte[] bodyBytes = TEST_CONTENT.getBytes(StandardCharsets.UTF_16LE);
+            fs.createDocument(new java.io.ByteArrayInputStream(bodyBytes), "__substg1.0_1000001F");
+
+            // Sender name property (0x0C1A001F)
+            final byte[] senderBytes = TEST_AUTHOR.getBytes(StandardCharsets.UTF_16LE);
+            fs.createDocument(new java.io.ByteArrayInputStream(senderBytes), "__substg1.0_0C1A001F");
+
+            // Properties stream (required for Tika to recognize as MSG)
+            // Minimal properties header: 32 bytes reserved + property entries
+            final byte[] propsHeader = new byte[32]; // Reserved/header bytes
+            fs.createDocument(new java.io.ByteArrayInputStream(propsHeader), "__properties_version1.0");
+
+            try (final OutputStream out = Files.newOutputStream(path)) {
+                fs.writeFilesystem(out);
+            }
+        }
+    }
+
+    /**
+     * Creates a Markdown file with test content.
+     */
+    public static void createMdFile(final Path path) throws IOException {
+        final String mdContent = "# " + TEST_TITLE + "\n\n"
+                + "**Author:** " + TEST_AUTHOR + "\n\n"
+                + TEST_CONTENT + "\n";
+        Files.writeString(path, mdContent, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Creates a reStructuredText file with test content.
+     */
+    public static void createRstFile(final Path path) throws IOException {
+        final String rstContent = TEST_TITLE + "\n"
+                + "=".repeat(TEST_TITLE.length()) + "\n\n"
+                + ":Author: " + TEST_AUTHOR + "\n\n"
+                + TEST_CONTENT + "\n";
+        Files.writeString(path, rstContent, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Creates an HTML file with test content.
+     */
+    public static void createHtmlFile(final Path path) throws IOException {
+        final String htmlContent = "<!DOCTYPE html>\n"
+                + "<html>\n"
+                + "<head>\n"
+                + "  <title>" + TEST_TITLE + "</title>\n"
+                + "  <meta name=\"author\" content=\"" + TEST_AUTHOR + "\">\n"
+                + "</head>\n"
+                + "<body>\n"
+                + "  <p>" + TEST_CONTENT + "</p>\n"
+                + "</body>\n"
+                + "</html>";
+        Files.writeString(path, htmlContent, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Creates an RTF file with test content.
+     */
+    public static void createRtfFile(final Path path) throws IOException {
+        final String rtfContent = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss Helvetica;}}"
+                + "{\\info{\\title " + TEST_TITLE + "}{\\author " + TEST_AUTHOR + "}}"
+                + "\\f0\\fs24 " + TEST_CONTENT + "}";
+        Files.writeString(path, rtfContent, StandardCharsets.US_ASCII);
+    }
+
+    /**
+     * Creates an EPUB file with test content.
+     * EPUB is a ZIP file with OPF metadata and XHTML content.
+     */
+    public static void createEpubFile(final Path path) throws IOException {
+        try (final OutputStream fos = Files.newOutputStream(path);
+             final ZipOutputStream zos = new ZipOutputStream(fos)) {
+
+            // mimetype must be first and uncompressed (EPUB spec)
+            zos.setMethod(ZipOutputStream.STORED);
+            final byte[] mimeBytes = "application/epub+zip".getBytes(StandardCharsets.UTF_8);
+            final ZipEntry mimeEntry = new ZipEntry("mimetype");
+            mimeEntry.setSize(mimeBytes.length);
+            mimeEntry.setCompressedSize(mimeBytes.length);
+            mimeEntry.setCrc(calculateCrc32(mimeBytes));
+            zos.putNextEntry(mimeEntry);
+            zos.write(mimeBytes);
+            zos.closeEntry();
+
+            zos.setMethod(ZipOutputStream.DEFLATED);
+
+            // META-INF/container.xml
+            final String container = """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                      <rootfiles>
+                        <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+                      </rootfiles>
+                    </container>
+                    """;
+            addZipEntry(zos, "META-INF/container.xml", container);
+
+            // content.opf (OPF package with metadata)
+            final String opf = """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+                      <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                        <dc:identifier id="uid">test-epub-001</dc:identifier>
+                        <dc:title>%s</dc:title>
+                        <dc:creator>%s</dc:creator>
+                        <dc:language>en</dc:language>
+                      </metadata>
+                      <manifest>
+                        <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+                      </manifest>
+                      <spine>
+                        <itemref idref="chapter1"/>
+                      </spine>
+                    </package>
+                    """.formatted(TEST_TITLE, TEST_AUTHOR);
+            addZipEntry(zos, "content.opf", opf);
+
+            // chapter1.xhtml (actual content)
+            final String chapter = """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <!DOCTYPE html>
+                    <html xmlns="http://www.w3.org/1999/xhtml">
+                    <head><title>%s</title></head>
+                    <body>
+                      <h1>%s</h1>
+                      <p>%s</p>
+                    </body>
+                    </html>
+                    """.formatted(TEST_TITLE, TEST_TITLE, TEST_CONTENT);
+            addZipEntry(zos, "chapter1.xhtml", chapter);
+        }
+    }
+
     private static long calculateCrc32(final byte[] data) {
         final java.util.zip.CRC32 crc = new java.util.zip.CRC32();
         crc.update(data);

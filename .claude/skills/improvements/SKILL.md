@@ -161,19 +161,22 @@ Tika supports Tesseract OCR. Scanned PDFs are a blind spot — the content extra
 **Key files**: `FileContentExtractor.java`, `application.yaml`
 
 #### 8. Expanded File Format Support
-**Status**: Not started
+**Status**: Done
 **Effort**: Low
 **Impact**: Low-Medium
 
-Tika already supports many formats. Just needs include-patterns and testing:
+Added default support for 8 new file formats (all handled natively by Tika 3.2.3, no new dependencies):
 - `.eml`, `.msg` (emails)
 - `.md`, `.rst` (markup)
 - `.html`, `.htm` (web pages)
 - `.rtf` (rich text)
 - `.epub` (ebooks)
-- `.csv` (spreadsheets as text)
 
-**Key files**: `application.yaml` (include-patterns), README.md
+Includes include-patterns in `application.yaml` + `ApplicationConfig.java`, test document generators, parameterized extraction tests, and README documentation.
+
+**Remaining**: `.csv` (spreadsheets as text) could still be added.
+
+**Key files**: `application.yaml`, `ApplicationConfig.java`, `TestDocumentGenerator.java`, `FileContentExtractorTest.java`, README.md
 
 ### Tier 3: Future Considerations
 

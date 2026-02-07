@@ -43,7 +43,9 @@ public class ApplicationConfig {
     private List<String> includePatterns = List.of(
             "*.pdf", "*.doc", "*.docx", "*.odt",
             "*.ppt", "*.pptx", "*.xls", "*.xlsx",
-            "*.ods", "*.txt"
+            "*.ods", "*.txt", "*.eml", "*.msg",
+            "*.md", "*.rst", "*.html", "*.htm",
+            "*.rtf", "*.epub"
     );
     private List<String> excludePatterns = List.of(
             "**/node_modules/**", "**/.git/**",

@@ -25,6 +25,14 @@ lucene:
       - "*.xlsx"
       - "*.ods"
       - "*.txt"
+      - "*.eml"
+      - "*.msg"
+      - "*.md"
+      - "*.rst"
+      - "*.html"
+      - "*.htm"
+      - "*.rtf"
+      - "*.epub"
 
     exclude-patterns:
       - "**/node_modules/**"

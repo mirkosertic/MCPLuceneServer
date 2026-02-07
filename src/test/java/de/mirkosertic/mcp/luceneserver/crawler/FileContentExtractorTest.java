@@ -58,7 +58,15 @@ class FileContentExtractorTest {
                 Arguments.of("pptx", (FileGenerator) TestDocumentGenerator::createPptxFile, "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
                 Arguments.of("ppt", (FileGenerator) TestDocumentGenerator::createPptFile, "application/vnd.ms-powerpoint"),
                 Arguments.of("odt", (FileGenerator) TestDocumentGenerator::createOdtFile, "application/vnd.oasis.opendocument.text"),
-                Arguments.of("ods", (FileGenerator) TestDocumentGenerator::createOdsFile, "application/vnd.oasis.opendocument.spreadsheet")
+                Arguments.of("ods", (FileGenerator) TestDocumentGenerator::createOdsFile, "application/vnd.oasis.opendocument.spreadsheet"),
+                Arguments.of("eml", (FileGenerator) TestDocumentGenerator::createEmlFile, "message/rfc822"),
+                Arguments.of("msg", (FileGenerator) TestDocumentGenerator::createMsgFile, "application/vnd.ms-outlook"),
+                Arguments.of("md", (FileGenerator) TestDocumentGenerator::createMdFile, "text/x-web-markdown"),
+                Arguments.of("rst", (FileGenerator) TestDocumentGenerator::createRstFile, "text/x-rst"),
+                Arguments.of("html", (FileGenerator) TestDocumentGenerator::createHtmlFile, "text/html"),
+                Arguments.of("htm", (FileGenerator) TestDocumentGenerator::createHtmlFile, "text/html"),
+                Arguments.of("rtf", (FileGenerator) TestDocumentGenerator::createRtfFile, "application/rtf"),
+                Arguments.of("epub", (FileGenerator) TestDocumentGenerator::createEpubFile, "application/epub+zip")
         );
     }
 
@@ -133,7 +141,11 @@ class FileContentExtractorTest {
                 Arguments.of("pptx", (FileGenerator) TestDocumentGenerator::createPptxFile, "dc:title", "dc:creator"),
                 Arguments.of("xls", (FileGenerator) TestDocumentGenerator::createXlsFile, "dc:title", "dc:creator"),
                 Arguments.of("odt", (FileGenerator) TestDocumentGenerator::createOdtFile, "dc:title", "dc:creator"),
-                Arguments.of("ods", (FileGenerator) TestDocumentGenerator::createOdsFile, "dc:title", "dc:creator")
+                Arguments.of("ods", (FileGenerator) TestDocumentGenerator::createOdsFile, "dc:title", "dc:creator"),
+                Arguments.of("eml", (FileGenerator) TestDocumentGenerator::createEmlFile, "dc:title", "dc:creator"),
+                Arguments.of("html", (FileGenerator) TestDocumentGenerator::createHtmlFile, "dc:title", "dc:creator"),
+                Arguments.of("rtf", (FileGenerator) TestDocumentGenerator::createRtfFile, "dc:title", "dc:creator"),
+                Arguments.of("epub", (FileGenerator) TestDocumentGenerator::createEpubFile, "dc:title", "dc:creator")
         );
     }
 
@@ -175,7 +187,15 @@ class FileContentExtractorTest {
                 Arguments.of("pptx", (FileGenerator) TestDocumentGenerator::createPptxFile),
                 Arguments.of("ppt", (FileGenerator) TestDocumentGenerator::createPptFile),
                 Arguments.of("odt", (FileGenerator) TestDocumentGenerator::createOdtFile),
-                Arguments.of("ods", (FileGenerator) TestDocumentGenerator::createOdsFile)
+                Arguments.of("ods", (FileGenerator) TestDocumentGenerator::createOdsFile),
+                Arguments.of("eml", (FileGenerator) TestDocumentGenerator::createEmlFile),
+                Arguments.of("msg", (FileGenerator) TestDocumentGenerator::createMsgFile),
+                Arguments.of("md", (FileGenerator) TestDocumentGenerator::createMdFile),
+                Arguments.of("rst", (FileGenerator) TestDocumentGenerator::createRstFile),
+                Arguments.of("html", (FileGenerator) TestDocumentGenerator::createHtmlFile),
+                Arguments.of("htm", (FileGenerator) TestDocumentGenerator::createHtmlFile),
+                Arguments.of("rtf", (FileGenerator) TestDocumentGenerator::createRtfFile),
+                Arguments.of("epub", (FileGenerator) TestDocumentGenerator::createEpubFile)
         );
     }
 
