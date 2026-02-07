@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver;
 
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
+import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.Passage;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
@@ -15,6 +16,7 @@ import org.apache.lucene.facet.LabelAndValue;
 import org.apache.lucene.facet.sortedset.DefaultSortedSetDocValuesReaderState;
 import org.apache.lucene.facet.sortedset.SortedSetDocValuesFacetCounts;
 import org.apache.lucene.facet.sortedset.SortedSetDocValuesReaderState;
+import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.queryparser.classic.ParseException;
@@ -29,9 +31,7 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.SearcherManager;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
-import org.apache.lucene.search.TotalHits;
 import org.apache.lucene.search.WildcardQuery;
-import org.apache.lucene.search.uhighlight.DefaultPassageFormatter;
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
@@ -84,6 +84,7 @@ public class LuceneIndexService {
     private ScheduledExecutorService refreshScheduler;
     private final Analyzer analyzer;
     private final DocumentIndexer documentIndexer;
+    private boolean schemaUpgradeRequired = false;
 
     // Lock object for admin operation state transitions
     private final Object adminStateLock = new Object();
@@ -117,6 +118,7 @@ public class LuceneIndexService {
 
     /**
      * Initialize the Lucene index. Must be called before using the service.
+     * Detects schema version changes and sets schemaUpgradeRequired flag if needed.
      */
     public void init() throws IOException {
         final Path path = Path.of(indexPath);
@@ -126,12 +128,54 @@ public class LuceneIndexService {
         }
 
         directory = FSDirectory.open(path);
+
+        // Check if index exists and read schema version
+        int storedSchemaVersion = -1;
+        boolean indexExists = false;
+        if (DirectoryReader.indexExists(directory)) {
+            indexExists = true;
+            try (final DirectoryReader reader = DirectoryReader.open(directory)) {
+                final Map<String, String> userData = reader.getIndexCommit().getUserData();
+                final String versionStr = userData.get("schema_version");
+                if (versionStr != null) {
+                    storedSchemaVersion = Integer.parseInt(versionStr);
+                    logger.info("Existing index has schema version: {}", storedSchemaVersion);
+                } else {
+                    logger.warn("Existing index has no schema version (legacy index)");
+                }
+            }
+        }
+
+        // Open IndexWriter
         final IndexWriterConfig config = new IndexWriterConfig(analyzer);
         config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
         indexWriter = new IndexWriter(directory, config);
 
-        // Commit to ensure index files are created
+        // Set commit user data with current schema version and software version
+        indexWriter.setLiveCommitData(Map.of(
+                "schema_version", String.valueOf(DocumentIndexer.SCHEMA_VERSION),
+                "software_version", BuildInfo.getVersion()
+        ).entrySet());
+
+        // Commit to ensure index files and metadata are created
         indexWriter.commit();
+
+        // Determine if schema upgrade is required
+        if (indexExists) {
+            if (storedSchemaVersion == -1) {
+                // Legacy index with no version - requires upgrade
+                schemaUpgradeRequired = true;
+                logger.warn("Schema upgrade required: legacy index detected (no version metadata)");
+            } else if (storedSchemaVersion != DocumentIndexer.SCHEMA_VERSION) {
+                schemaUpgradeRequired = true;
+                logger.warn("Schema upgrade required: version mismatch (stored={}, current={})",
+                        storedSchemaVersion, DocumentIndexer.SCHEMA_VERSION);
+            } else {
+                logger.info("Schema version matches: {}", storedSchemaVersion);
+            }
+        } else {
+            logger.info("New index created with schema version: {}", DocumentIndexer.SCHEMA_VERSION);
+        }
 
         // Initialize SearcherManager from IndexWriter for NRT support
         // This allows searchers to see uncommitted changes directly from writer's RAM buffer
@@ -252,25 +296,26 @@ public class LuceneIndexService {
             final TopDocs topDocs = result.topDocs();
             final long totalHits = topDocs.totalHits.value();
 
-            // Build a UnifiedHighlighter for passage generation.
-            // highlight() is called with a single-doc TopDocs per result so that the
-            // highlighter reads term vectors (positions + offsets) stored in the index
-            // rather than re-analysing the content text.  This is critical for correct
-            // <em> tagging when ICUFoldingFilter is in play: the stored offsets map
-            // directly to the original surface forms in the stored value.
-            // The formatter wraps matched terms in <em>...</em> tags.
+            // Build a PassageAwareHighlighter for passage generation.
+            // It uses IndividualPassageFormatter to return each passage as a separate
+            // object (with its own Lucene score and character offsets) instead of
+            // joining them into a single string.  The underlying highlightFieldsAsObjects
+            // API reads term vectors (positions + offsets) stored in the index, which is
+            // critical for correct <em> tagging when ICUFoldingFilter is in play.
             // We use mainQuery (before the filter clause) so that only the user's
             // actual search terms are highlighted, not filter values.
             // maxNoHighlightPassages=1 ensures a fallback passage is returned even if
             // no terms match within the highlighter's view of the document.
             final int maxPassages = config.getMaxPassages();
-            final UnifiedHighlighter highlighter = UnifiedHighlighter.builder(searcher, analyzer)
-                    .withMaxLength(10_000) // read up to 10 000 chars of stored value to find more passages
-                    .withFormatter(new DefaultPassageFormatter("<em>", "</em>", "...", false))  // false = no HTML escaping (LLM output, not browser)
-                    .withHandleMultiTermQuery(true)
-                    .withBreakIterator(BreakIterator::getSentenceInstance)
-                    .withMaxNoHighlightPassages(1)
-                    .build();
+            final int maxPassageCharLength = config.getMaxPassageCharLength();
+            final PassageAwareHighlighter highlighter = new PassageAwareHighlighter(
+                    UnifiedHighlighter.builder(searcher, analyzer)
+                            .withMaxLength(10_000) // read up to 10 000 chars of stored value to find more passages
+                            .withFormatter(new IndividualPassageFormatter())
+                            .withHandleMultiTermQuery(true)
+                            .withBreakIterator(BreakIterator::getSentenceInstance)
+                            .withMaxNoHighlightPassages(1)
+            );
 
             // Extract query terms for termCoverage calculation.
             // Query.toString() produces a human-readable representation; we strip
@@ -289,7 +334,7 @@ public class LuceneIndexService {
                 logger.debug("Query for highlighting: {}", mainQuery);
                 final String content = doc.get("content");
                 final List<Passage> passages = createPassages(
-                        content, mainQuery, highlighter, maxPassages, queryTerms, scoreDocs[i]);
+                        content, mainQuery, highlighter, maxPassages, maxPassageCharLength, queryTerms, scoreDocs[i]);
 
                 final SearchDocument searchDoc = SearchDocument.builder()
                         .score(scoreDocs[i].score)
@@ -426,6 +471,52 @@ public class LuceneIndexService {
 
     public String getIndexPath() {
         return indexPath;
+    }
+
+    /**
+     * Check if a schema upgrade is required.
+     * This flag is set during init() if the stored schema version differs from the current version.
+     *
+     * @return true if reindex is needed, false otherwise
+     */
+    public boolean isSchemaUpgradeRequired() {
+        return schemaUpgradeRequired;
+    }
+
+    /**
+     * Get the current schema version stored in the index commit metadata.
+     *
+     * @return schema version, or 0 if not found
+     * @throws IOException if reading from index fails
+     */
+    public int getIndexSchemaVersion() throws IOException {
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            final DirectoryReader reader = (DirectoryReader) searcher.getIndexReader();
+            final Map<String, String> userData = reader.getIndexCommit().getUserData();
+            final String versionStr = userData.get("schema_version");
+            return versionStr != null ? Integer.parseInt(versionStr) : 0;
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    /**
+     * Get the software version stored in the index commit metadata.
+     *
+     * @return software version, or empty string if not found
+     * @throws IOException if reading from index fails
+     */
+    public String getIndexSoftwareVersion() throws IOException {
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            final DirectoryReader reader = (DirectoryReader) searcher.getIndexReader();
+            final Map<String, String> userData = reader.getIndexCommit().getUserData();
+            final String version = userData.get("software_version");
+            return version != null ? version : "";
+        } finally {
+            searcherManager.release(searcher);
+        }
     }
 
     // ==================== Reconciliation Support Methods ====================
@@ -789,6 +880,13 @@ public class LuceneIndexService {
         final IndexWriterConfig config = new IndexWriterConfig(analyzer);
         config.setOpenMode(IndexWriterConfig.OpenMode.CREATE);
         indexWriter = new IndexWriter(directory, config);
+
+        // Set commit user data with current schema version and software version
+        indexWriter.setLiveCommitData(Map.of(
+                "schema_version", String.valueOf(DocumentIndexer.SCHEMA_VERSION),
+                "software_version", BuildInfo.getVersion()
+        ).entrySet());
+
         indexWriter.commit();
         searcherManager = new SearcherManager(indexWriter, null);
 
@@ -824,34 +922,41 @@ public class LuceneIndexService {
     /**
      * Produce a list of structured passages for a single document using Lucene's UnifiedHighlighter.
      *
+     * <p>Uses {@link PassageAwareHighlighter} with {@link IndividualPassageFormatter} to
+     * obtain each passage as a separate object with its own Lucene-computed BM25 score
+     * and character offsets.  This avoids the bug where all passages were joined into a
+     * single string by the default formatter, resulting in only one Passage DTO per document.</p>
+     *
      * <p>The highlighter reads term vectors (positions + offsets) stored in the index so that
      * matched terms are located precisely without re-analysing the content.  This is
      * particularly important when ICUFoldingFilter is in the analyzer chain: the stored
      * offsets map directly to the original surface forms, ensuring {@code <em>} tags wrap
      * the correct character spans.</p>
      *
-     * <p>The highlighter returns passages in relevance order (best first). Each passage is
-     * enriched with metadata: a normalised relevance score, the set of query terms that
-     * matched within the passage, the fraction of all query terms covered, and the
-     * approximate position of the passage in the original document.</p>
+     * <p>Each passage is enriched with metadata: a normalised relevance score (derived from
+     * Lucene's BM25 passage scoring), the set of query terms that matched within the
+     * passage, the fraction of all query terms covered, and the position of the passage
+     * in the original document (computed from the passage's start offset).</p>
      *
      * <p>If the content is null or empty an empty list is returned.  If highlighting
      * fails entirely a single fallback passage is synthesised from the beginning of the
      * content so the caller always receives at least one passage when content exists.</p>
      *
-     * @param content     the stored content field value (may be null)
-     * @param query       the user's search query (filter clauses excluded)
-     * @param highlighter the configured highlighter instance (shared across the result page)
-     * @param maxPassages maximum number of passages to return
-     * @param queryTerms  the set of query terms extracted from the query for coverage calculation
-     * @param scoreDoc    the ScoreDoc for this document, used to build the single-doc TopDocs
-     *                    that highlight() requires to read term vectors from the index
+     * @param content              the stored content field value (may be null)
+     * @param query                the user's search query (filter clauses excluded)
+     * @param highlighter          the configured highlighter instance (shared across the result page)
+     * @param maxPassages          maximum number of passages to return
+     * @param maxPassageCharLength maximum character length per passage; longer passages are truncated
+     *                             at a word boundary (preserving {@code <em>} tags) and "..." is appended
+     * @param queryTerms           the set of query terms extracted from the query for coverage calculation
+     * @param scoreDoc             the ScoreDoc for this document (doc ID used to read term vectors)
      * @return list of Passage records, each containing text, score, matchedTerms, termCoverage, position
      */
     private List<Passage> createPassages(final String content,
                                          final Query query,
-                                         final UnifiedHighlighter highlighter,
+                                         final PassageAwareHighlighter highlighter,
                                          final int maxPassages,
+                                         final int maxPassageCharLength,
                                          final Set<String> queryTerms,
                                          final ScoreDoc scoreDoc) {
         // Null or empty content -- nothing to extract
@@ -859,100 +964,77 @@ public class LuceneIndexService {
             return List.of();
         }
 
-        // Attempt to obtain highlighted passages from the UnifiedHighlighter.
-        // A single-doc TopDocs is constructed so that highlight() can read the term
-        // vectors (positions + offsets) that were stored at index time.  This avoids
-        // the re-analysis path of highlightWithoutSearcher() which does not use term
-        // vectors and therefore cannot produce correct <em> tags when the analyzer
-        // applies folding or normalization filters.
-        String[] highlightedPassages = null;
+        // Obtain individual highlighted passages via the lower-level highlightFieldsAsObjects API.
+        // Each FormattedPassage carries its own Lucene BM25 score and character offsets.
+        List<IndividualPassageFormatter.FormattedPassage> formattedPassages = null;
         try {
-            final TopDocs singleDocTopDocs = new TopDocs(
-                    new TotalHits(1, TotalHits.Relation.EQUAL_TO),
-                    new ScoreDoc[]{scoreDoc}
-            );
-            final String[] highlightResults = highlighter.highlight("content", query, singleDocTopDocs, maxPassages);
-            logger.debug("Highlighting query '{}' against doc {}, result: {}",
+            formattedPassages = highlighter.highlightField("content", query, scoreDoc.doc, maxPassages);
+            logger.debug("Highlighting query '{}' against doc {}, got {} passages",
                     query, scoreDoc.doc,
-                    highlightResults == null ? "null" : "String[" + highlightResults.length + "]");
-            if (highlightResults != null && highlightResults.length > 0 && highlightResults[0] != null && !highlightResults[0].isBlank()) {
-                // highlight() returns one joined string per document (passages separated by
-                // the formatter's separator "...").  Wrap in array for uniform handling below.
-                highlightedPassages = new String[]{highlightResults[0]};
-            }
+                    formattedPassages != null ? formattedPassages.size() : 0);
         } catch (final Exception e) {
-            logger.warn("UnifiedHighlighter.highlight() failed for doc {}; synthesising fallback passage", scoreDoc.doc, e);
+            logger.warn("Highlighting failed for doc {}; synthesising fallback passage", scoreDoc.doc, e);
         }
 
         // Fallback: synthesise a single passage from the start of the content
-        if (highlightedPassages == null || highlightedPassages.length == 0) {
-            final int fallbackLength = Math.min(300, content.length());
-            final String fallbackText = cleanPassageText(
-                    content.substring(0, fallbackLength) +
-                    (content.length() > fallbackLength ? "..." : ""));
-            return List.of(new Passage(fallbackText, 0.0, List.of(), 0.0, 0.0));
+        if (formattedPassages == null || formattedPassages.isEmpty()) {
+            return List.of(createFallbackPassage(content));
         }
 
-        // Build Passage records from the highlighted strings
-        final List<Passage> passages = new ArrayList<>(highlightedPassages.length);
-        final int totalPassages = highlightedPassages.length;
+        // Find the maximum passage score for normalisation to [0, 1]
+        float maxScore = 0f;
+        for (final IndividualPassageFormatter.FormattedPassage fp : formattedPassages) {
+            if (fp.score() > maxScore) {
+                maxScore = fp.score();
+            }
+        }
 
-        for (int idx = 0; idx < totalPassages; idx++) {
-            final String rawPassageText = highlightedPassages[idx];
-            if (rawPassageText == null || rawPassageText.isBlank()) {
+        // Build Passage DTOs from individual formatted passages
+        final List<Passage> passages = new ArrayList<>(formattedPassages.size());
+
+        for (final IndividualPassageFormatter.FormattedPassage fp : formattedPassages) {
+            // Clean passage text for display: collapse newlines and extra whitespace,
+            // then truncate to the configured limit at a word boundary
+            final String passageText = truncatePassage(cleanPassageText(fp.text()), maxPassageCharLength);
+            if (passageText.isBlank()) {
                 continue;
             }
 
-            // Clean passage text for display: collapse newlines and extra whitespace
-            final String passageText = cleanPassageText(rawPassageText);
+            // --- score: normalise to 0-1 using the best passage's score as the maximum ---
+            final double normalizedScore = maxScore > 0
+                    ? Math.round((double) fp.score() / maxScore * 100.0) / 100.0
+                    : 0.0;
 
-            // --- score: normalised 0-1 using linear decay from position in the array ---
-            // The highlighter returns passages in relevance order; first is best.
-            final double score = totalPassages == 1 ? 1.0 :
-                    1.0 - ((double) idx / (totalPassages - 1)) * 0.5;
-            // Clamp to [0.0, 1.0] and round to 2 decimal places for clean output
-            final double roundedScore = Math.round(score * 100.0) / 100.0;
-
-            // --- matchedTerms: extract text between <em> tags, with fallback to direct query-term matching ---
+            // --- matchedTerms: extract text between <em> tags, with fallback to query-term scanning ---
             final List<String> matchedTerms = extractMatchedTerms(passageText, queryTerms);
 
             // --- termCoverage: unique matched terms / total query terms ---
-            final double termCoverage;
-            if (queryTerms.isEmpty()) {
-                termCoverage = matchedTerms.isEmpty() ? 0.0 : 1.0;
-            } else {
-                // Normalize both sides with NFKC + lowercase for robust comparison
-                final Set<String> matchedNormalized = new HashSet<>();
-                for (final String t : matchedTerms) {
-                    matchedNormalized.add(normalizeForComparison(t));
-                }
+            final double termCoverage = calculateTermCoverage(matchedTerms, queryTerms);
 
-                long coveredCount = 0;
-                for (final String qt : queryTerms) {
-                    final String qtNormalized = normalizeForComparison(qt);
-                    if (matchedNormalized.contains(qtNormalized)) {
-                        coveredCount++;
-                    }
-                }
-                termCoverage = Math.round((double) coveredCount / queryTerms.size() * 100.0) / 100.0;
-            }
+            // --- position: derived directly from the passage's start offset ---
+            // (content is guaranteed non-empty by the early return at the top of this method)
+            final double position = Math.round((double) fp.startOffset() / content.length() * 100.0) / 100.0;
 
-            // --- position: find where the plain (un-tagged) passage text first appears in content ---
-            final double position = calculatePosition(passageText, content);
-
-            passages.add(new Passage(passageText, roundedScore, matchedTerms, termCoverage, position));
+            passages.add(new Passage(passageText, normalizedScore, matchedTerms, termCoverage, position));
         }
 
         // If all passages were blank (unlikely but defensive), return a fallback
         if (passages.isEmpty()) {
-            final int fallbackLength = Math.min(300, content.length());
-            final String fallbackText = cleanPassageText(
-                    content.substring(0, fallbackLength) +
-                    (content.length() > fallbackLength ? "..." : ""));
-            return List.of(new Passage(fallbackText, 0.0, List.of(), 0.0, 0.0));
+            return List.of(createFallbackPassage(content));
         }
 
         return passages;
+    }
+
+    /**
+     * Create a fallback passage from the beginning of the content when highlighting fails.
+     */
+    private static Passage createFallbackPassage(final String content) {
+        final int fallbackLength = Math.min(300, content.length());
+        final String fallbackText = cleanPassageText(
+                content.substring(0, fallbackLength) +
+                (content.length() > fallbackLength ? "..." : ""));
+        return new Passage(fallbackText, 0.0, List.of(), 0.0, 0.0);
     }
 
     /**
@@ -1007,45 +1089,27 @@ public class LuceneIndexService {
     }
 
     /**
-     * Calculate the approximate position (0.0-1.0) of a highlighted passage within
-     * the original content.  The method strips {@code <em>} tags and the leading
-     * ellipsis from the passage, then searches for the first substantial fragment
-     * in the original text.
+     * Calculate the term coverage: fraction of query terms that appear among the matched terms.
      *
-     * @return position fraction, rounded to 2 decimal places; 0.0 if not found
+     * @param matchedTerms terms found in this passage (from {@code <em>} tags or fallback scan)
+     * @param queryTerms   the full set of query terms
+     * @return coverage fraction in [0.0, 1.0], rounded to 2 decimal places
      */
-    private static double calculatePosition(final String highlightedPassage, final String content) {
-        // Strip all <em> and </em> tags to get plain text
-        String plain = highlightedPassage.replace("<em>", "").replace("</em>", "");
-
-        // The DefaultPassageFormatter prepends "..." to passages that are not at
-        // the very start of the text.  Strip leading/trailing ellipsis and whitespace.
-        plain = plain.strip();
-        if (plain.startsWith("...")) {
-            plain = plain.substring(3).strip();
+    private static double calculateTermCoverage(final List<String> matchedTerms, final Set<String> queryTerms) {
+        if (queryTerms.isEmpty()) {
+            return matchedTerms.isEmpty() ? 0.0 : 1.0;
         }
-        if (plain.endsWith("...")) {
-            plain = plain.substring(0, plain.length() - 3).strip();
+        final Set<String> matchedNormalized = new HashSet<>();
+        for (final String t : matchedTerms) {
+            matchedNormalized.add(normalizeForComparison(t));
         }
-
-        if (plain.isEmpty() || content.isEmpty()) {
-            return 0.0;
+        long coveredCount = 0;
+        for (final String qt : queryTerms) {
+            if (matchedNormalized.contains(normalizeForComparison(qt))) {
+                coveredCount++;
+            }
         }
-
-        // Use the first 80 characters of the cleaned passage as the search needle;
-        // this avoids expensive searches on very long strings while being long enough
-        // to locate uniquely in almost all documents.
-        final int needleLen = Math.min(80, plain.length());
-        final String needle = plain.substring(0, needleLen);
-
-        final int idx = content.indexOf(needle);
-        if (idx < 0) {
-            // Needle not found (possible if content was normalised differently).
-            // Return 0.0 rather than crashing.
-            return 0.0;
-        }
-
-        return Math.round((double) idx / content.length() * 100.0) / 100.0;
+        return Math.round((double) coveredCount / queryTerms.size() * 100.0) / 100.0;
     }
 
     /**
@@ -1061,6 +1125,116 @@ public class LuceneIndexService {
         return passageText.replace('\n', ' ')
                           .replaceAll(" +", " ")
                           .trim();
+    }
+
+    /**
+     * Truncate a passage to the given maximum character length, centred around the
+     * highlighted terms.
+     *
+     * <p>If the text is already within the limit it is returned unchanged.
+     * When truncation is needed, the method locates the span of {@code <em>} tags
+     * and creates a window of {@code maxLength} characters centred on that span,
+     * distributing available context evenly before and after the highlights.
+     * Both ends are trimmed to word boundaries and "..." is prepended/appended
+     * as needed.</p>
+     *
+     * <p>If no {@code <em>} tags are present (fallback passages), truncation
+     * falls back to trimming from the end.</p>
+     *
+     * @param text      the cleaned passage text (may contain {@code <em>} markup)
+     * @param maxLength the maximum character length; values &le; 0 disable truncation
+     * @return the (possibly truncated) text
+     */
+    static String truncatePassage(final String text, final int maxLength) {
+        if (maxLength <= 0 || text == null || text.length() <= maxLength) {
+            return text;
+        }
+
+        // Locate the span of highlighted terms
+        final int firstEmStart = text.indexOf("<em>");
+        final int lastEmEndTag = text.lastIndexOf("</em>");
+        final int lastEmEnd = lastEmEndTag >= 0 ? lastEmEndTag + 5 : -1; // past "</em>"
+
+        // No highlights — simple tail truncation
+        if (firstEmStart < 0) {
+            return truncateFromEnd(text, maxLength);
+        }
+
+        final int highlightSpan = lastEmEnd - firstEmStart;
+
+        // If the highlight span alone exceeds the limit, show from first highlight
+        if (highlightSpan >= maxLength) {
+            final boolean trimmedStart = firstEmStart > 0;
+            final String window = text.substring(firstEmStart, Math.min(text.length(), firstEmStart + maxLength));
+            return (trimmedStart ? "..." : "") + truncateFromEnd(window, maxLength);
+        }
+
+        // Distribute remaining budget evenly before and after the highlight span
+        final int availableContext = maxLength - highlightSpan;
+        int contextBefore = availableContext / 2;
+        int contextAfter = availableContext - contextBefore;
+
+        // Compute raw window boundaries
+        int windowStart = firstEmStart - contextBefore;
+        int windowEnd = lastEmEnd + contextAfter;
+
+        // Clamp and redistribute if one side hits the text boundary
+        if (windowStart < 0) {
+            // Extra budget from the start side goes to the end side
+            windowEnd = Math.min(text.length(), windowEnd + (-windowStart));
+            windowStart = 0;
+        }
+        if (windowEnd > text.length()) {
+            // Extra budget from the end side goes to the start side
+            windowStart = Math.max(0, windowStart - (windowEnd - text.length()));
+            windowEnd = text.length();
+        }
+
+        // Adjust to word boundaries (find nearest space)
+        if (windowStart > 0) {
+            final int space = text.indexOf(' ', windowStart);
+            if (space >= 0 && space < firstEmStart) {
+                windowStart = space + 1;
+            }
+        }
+        if (windowEnd < text.length()) {
+            final int space = text.lastIndexOf(' ', windowEnd);
+            if (space > lastEmEnd) {
+                windowEnd = space;
+            }
+        }
+
+        // Build the result with ellipsis indicators
+        final StringBuilder sb = new StringBuilder();
+        if (windowStart > 0) {
+            sb.append("...");
+        }
+        sb.append(text, windowStart, windowEnd);
+        if (windowEnd < text.length()) {
+            // Strip trailing space before appending ellipsis
+            while (!sb.isEmpty() && sb.charAt(sb.length() - 1) == ' ') {
+                sb.setLength(sb.length() - 1);
+            }
+            sb.append("...");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Simple tail truncation: cut at a word boundary near {@code maxLength} and append "...".
+     */
+    private static String truncateFromEnd(final String text, final int maxLength) {
+        if (text.length() <= maxLength) {
+            return text;
+        }
+        int cutPoint = maxLength;
+        while (cutPoint > 0 && text.charAt(cutPoint) != ' ') {
+            cutPoint--;
+        }
+        if (cutPoint == 0) {
+            cutPoint = maxLength;
+        }
+        return text.substring(0, cutPoint).stripTrailing() + "...";
     }
 
     /**
@@ -1284,6 +1458,42 @@ public class LuceneIndexService {
 
         public boolean hasPreviousPage() {
             return page > 0;
+        }
+    }
+
+    /**
+     * Thin subclass of {@link UnifiedHighlighter} that exposes the {@code protected}
+     * {@link #highlightFieldsAsObjects} method.  This allows callers to receive the
+     * raw {@link Object} returned by the {@link IndividualPassageFormatter} (a
+     * {@code List<FormattedPassage>}) instead of having it cast to {@link String}.
+     */
+    static class PassageAwareHighlighter extends UnifiedHighlighter {
+
+        PassageAwareHighlighter(final Builder builder) {
+            super(builder);
+        }
+
+        /**
+         * Highlight a single field for a single document and return the individual
+         * passages produced by {@link IndividualPassageFormatter}.
+         *
+         * @param field       the field to highlight (must have stored term vectors)
+         * @param query       the query whose terms should be highlighted
+         * @param docId       the Lucene internal document ID
+         * @param maxPassages maximum number of passages to extract
+         * @return list of formatted passages, or empty list if nothing matched
+         * @throws IOException if reading from the index fails
+         */
+        @SuppressWarnings("unchecked")
+        List<IndividualPassageFormatter.FormattedPassage> highlightField(
+                final String field, final Query query, final int docId, final int maxPassages) throws IOException {
+            final Map<String, Object[]> result = highlightFieldsAsObjects(
+                    new String[]{field}, query, new int[]{docId}, new int[]{maxPassages});
+            final Object[] fieldResults = result.get(field);
+            if (fieldResults == null || fieldResults.length == 0 || fieldResults[0] == null) {
+                return List.of();
+            }
+            return (List<IndividualPassageFormatter.FormattedPassage>) fieldResults[0];
         }
     }
 }

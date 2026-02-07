@@ -10,8 +10,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 
 1. Update `DocumentIndexer.java` - add the field to `FacetsConfig`
 2. Add the field to the Lucene document in the indexing method
-3. Update README.md field schema table
-4. **Note**: This is a breaking change -- requires full reindex of all documents
+3. **Bump `SCHEMA_VERSION`** in `DocumentIndexer.java` (triggers automatic reindex on upgrade)
+4. Update README.md field schema table
 
 ## Adding File Format Support
 
@@ -54,15 +54,13 @@ Checklist:
 
 ## Adding a New Indexed Field
 
-**WARNING**: Adding a new indexed field is a breaking change. Existing documents in the index will not have the new field.
-
 Steps:
 1. Add field in `DocumentIndexer.java` document creation
 2. If field needs special analysis: update `PerFieldAnalyzerWrapper` in `LuceneIndexService`
 3. If field should be searchable: update query parsing in `LuceneIndexService`
 4. If field should be highlighted: ensure it has `Store.YES` and term vectors
-5. Update README.md field schema table
-6. Document in README.md that reindex is required
+5. **Bump `SCHEMA_VERSION`** in `DocumentIndexer.java` (triggers automatic reindex on upgrade)
+6. Update README.md field schema table
 7. Test with `SearchHighlightingIntegrationTest` patterns
 
 ## Testing Patterns

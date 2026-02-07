@@ -29,6 +29,7 @@
 		<maven.compiler.source>${java.version}</maven.compiler.source>
 		<maven.compiler.target>${java.version}</maven.compiler.target>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<maven.build.timestamp.format>yyyy-MM-dd'T'HH:mm:ss'Z'</maven.build.timestamp.format>
 		<mcp.sdk.version>0.17.2</mcp.sdk.version>
 		<lucene.version>10.3.2</lucene.version>
 		<tika.version>3.2.3</tika.version>
@@ -194,6 +195,16 @@
 			<resource>
 				<directory>${basedir}/src/main/resources</directory>
 				<filtering>false</filtering>
+				<excludes>
+					<exclude>build-info.properties</exclude>
+				</excludes>
+			</resource>
+			<resource>
+				<directory>${basedir}/src/main/resources</directory>
+				<filtering>true</filtering>
+				<includes>
+					<include>build-info.properties</include>
+				</includes>
 			</resource>
 			<resource>
 				<directory>${basedir}/src/apps/index-admin/dist</directory>

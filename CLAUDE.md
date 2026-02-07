@@ -15,6 +15,8 @@ For user-facing documentation, see **README.md**.
 3. **NEVER duplicate README content here** - this file is for development context only
 4. **Test with real documents** before considering a feature complete
 5. Always use Context7 MCP when I need library/API documentation, code generation, setup or configuration steps without me having to explicitly ask.
+6. **ALWAYS bump `SCHEMA_VERSION`** in `DocumentIndexer.java` when changing the index schema
+   (adding/removing/renaming fields, changing analyzers, or modifying field indexing options)
 
 ---
 
@@ -55,6 +57,7 @@ The following skills provide detailed guidance that is loaded only when needed. 
 | **Add MCP Tool** | `/add-mcp-tool` | Step-by-step guide for creating new MCP tool endpoints |
 | **Architecture** | `/architecture` | Design decisions, processing patterns, system internals, limitations |
 | **Dev Tasks** | `/dev-tasks` | Recipes for facets, file formats, STDIO debugging, performance tuning, testing |
+| **Improvements** | `/improvements` | Roadmap, feature priorities, trade-off analysis, rejected ideas with reasoning |
 
 Skills are defined in `.claude/skills/` and checked into Git. They should be **actively maintained**: update or extend them whenever new patterns, decisions, or procedures emerge during development.
 

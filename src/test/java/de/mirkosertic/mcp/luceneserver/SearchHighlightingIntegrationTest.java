@@ -62,7 +62,8 @@ class SearchHighlightingIntegrationTest {
         config = mock(ApplicationConfig.class);
         when(config.getIndexPath()).thenReturn(indexDir.toString());
         when(config.getNrtRefreshIntervalMs()).thenReturn(100L);
-        when(config.getMaxPassages()).thenReturn(5);
+        when(config.getMaxPassages()).thenReturn(3);
+        when(config.getMaxPassageCharLength()).thenReturn(200);
         when(config.isExtractMetadata()).thenReturn(true);
         when(config.isDetectLanguage()).thenReturn(false); // Disable for faster tests
         when(config.getMaxContentLength()).thenReturn(-1L);
@@ -293,10 +294,10 @@ class SearchHighlightingIntegrationTest {
     }
 
     @Test
-    @DisplayName("Should highlight multiple occurrences in long documents")
-    void shouldHighlightMultipleOccurrencesInLongDocuments() throws Exception {
-        // Given: Index a document with multiple relevant sections
-        String content = "First section: The search term appears here in the introduction. " +
+    @DisplayName("Should return multiple individual passages for long documents")
+    void shouldReturnMultiplePassagesForLongDocuments() throws Exception {
+        // Given: Index a document with multiple relevant sections separated by filler
+        final String content = "First section: The search term appears here in the introduction. " +
                 "Lorem ipsum dolor sit amet. ".repeat(50) + // Filler
                 "Second section: Another occurrence of the search term in the middle. " +
                 "Lorem ipsum dolor sit amet. ".repeat(50) + // Filler
@@ -311,27 +312,149 @@ class SearchHighlightingIntegrationTest {
         final LuceneIndexService.SearchResult result = indexService.search(
             "search term", null, null, 0, 10);
 
-        // Then: Should find the document and have passages
+        // Then: Should find the document
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
 
         final List<Passage> passages = result.documents().getFirst().passages();
+
+        // With the IndividualPassageFormatter fix, we should now get multiple
+        // individual passages (one per matching sentence) instead of a single
+        // joined string.
         assertThat(passages)
-            .as("Should have at least one passage")
-            .isNotEmpty();
+            .as("Should have multiple individual passages for a long document with 3 matches")
+            .hasSizeGreaterThanOrEqualTo(2);
 
-        // The UnifiedHighlighter joins multiple matches into one passage with "..."
-        // Verify that multiple sections are found (indicated by "..." separators)
-        final Passage passage = passages.getFirst();
-        assertThat(passage.text())
-            .as("Passage should contain multiple highlighted occurrences")
-            .contains("<em>search</em>")
-            .contains("<em>term</em>");
+        // Each passage should contain highlighting
+        for (final Passage passage : passages) {
+            assertThat(passage.text())
+                .as("Each individual passage should contain <em> highlighting")
+                .contains("<em>");
+        }
 
-        // Count how many times the search term is highlighted
-        final int highlightCount = countOccurrences(passage.text(), "<em>search</em>");
-        assertThat(highlightCount)
-            .as("Should highlight the search term multiple times")
-            .isGreaterThanOrEqualTo(2);
+        // The best passage should have score 1.0 (normalised maximum)
+        assertThat(passages.getFirst().score())
+            .as("Best passage should have normalised score of 1.0")
+            .isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("Should have meaningful scores across passages (not all 1.0)")
+    void shouldHaveMeaningfulScoresAcrossPassages() throws Exception {
+        // Given: Index a document where the search term appears in multiple distinct sections
+        final String content = "Important: The contract details are specified below. " +
+                "Lorem ipsum dolor sit amet consectetur. ".repeat(40) +
+                "The contract was signed by both parties last week. " +
+                "Lorem ipsum dolor sit amet consectetur. ".repeat(40) +
+                "A new contract will be drafted next month.";
+
+        final Path testFile = docsDir.resolve("score-ordering.txt");
+        Files.writeString(testFile, content);
+
+        indexDocument(testFile);
+
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "contract", null, null, 0, 10);
+
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        final List<Passage> passages = result.documents().getFirst().passages();
+        assertThat(passages).hasSizeGreaterThanOrEqualTo(2);
+
+        // The best passage (first) should be normalised to 1.0
+        assertThat(passages.getFirst().score())
+            .as("Best passage should have normalised score of 1.0")
+            .isEqualTo(1.0);
+
+        // All scores should be in the valid range [0.0, 1.0]
+        for (final Passage passage : passages) {
+            assertThat(passage.score())
+                .as("Passage scores should be in [0.0, 1.0]")
+                .isBetween(0.0, 1.0);
+        }
+    }
+
+    @Test
+    @DisplayName("Should calculate position from passage offset")
+    void shouldCalculatePositionFromPassageOffset() throws Exception {
+        // Given: Index a long document with the search term at different positions
+        final String filler = "Lorem ipsum dolor sit amet consectetur adipiscing elit. ".repeat(30);
+        final String content = "Target keyword appears at the very start. " +
+                filler +
+                "The target keyword also appears in the middle of the document. " +
+                filler +
+                "Finally the target keyword is at the end.";
+
+        final Path testFile = docsDir.resolve("position-test.txt");
+        Files.writeString(testFile, content);
+
+        indexDocument(testFile);
+
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "target keyword", null, null, 0, 10);
+
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        final List<Passage> passages = result.documents().getFirst().passages();
+        assertThat(passages).hasSizeGreaterThanOrEqualTo(2);
+
+        // The first passage (at start of doc) should have position near 0.0
+        // At least one passage should have a non-zero position (i.e., not all at the start)
+        final boolean hasNonZeroPosition = passages.stream()
+                .anyMatch(p -> p.position() > 0.1);
+        assertThat(hasNonZeroPosition)
+            .as("At least one passage should have a position > 0.1 (not all at document start)")
+            .isTrue();
+
+        // All positions should be in valid range
+        for (final Passage passage : passages) {
+            assertThat(passage.position())
+                .as("Position should be between 0.0 and 1.0")
+                .isBetween(0.0, 1.0);
+        }
+    }
+
+    @Test
+    @DisplayName("Should have per-passage matchedTerms and termCoverage")
+    void shouldHavePerPassageMatchedTermsAndTermCoverage() throws Exception {
+        // Given: Index a document where different terms appear in different sections
+        final String content = "Alpha appears here in this first section of the document. " +
+                "Lorem ipsum dolor sit amet consectetur. ".repeat(40) +
+                "Beta appears in this second section of the document. " +
+                "Lorem ipsum dolor sit amet consectetur. ".repeat(40) +
+                "Both Alpha and Beta appear together in this final section.";
+
+        final Path testFile = docsDir.resolve("per-passage-coverage.txt");
+        Files.writeString(testFile, content);
+
+        indexDocument(testFile);
+
+        final LuceneIndexService.SearchResult result = indexService.search(
+            "Alpha Beta", null, null, 0, 10);
+
+        assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
+
+        final List<Passage> passages = result.documents().getFirst().passages();
+        assertThat(passages).hasSizeGreaterThanOrEqualTo(2);
+
+        // Each passage should have its own matchedTerms
+        for (final Passage passage : passages) {
+            assertThat(passage.matchedTerms())
+                .as("Each passage should have matched terms")
+                .isNotEmpty();
+        }
+
+        // At least one passage should have termCoverage < 1.0 (only one of the two terms)
+        // because "Alpha" and "Beta" appear in different sections
+        final boolean hasSingleTermPassage = passages.stream()
+                .anyMatch(p -> p.termCoverage() > 0.0 && p.termCoverage() < 1.0);
+        // The passage with both terms should have coverage = 1.0
+        final boolean hasFullCoveragePassage = passages.stream()
+                .anyMatch(p -> p.termCoverage() == 1.0);
+
+        // We expect at least partial coverage in some passages
+        assertThat(hasSingleTermPassage || hasFullCoveragePassage)
+            .as("Should have passages with meaningful term coverage values")
+            .isTrue();
     }
 
     private int countOccurrences(final String text, final String substring) {

@@ -7,13 +7,18 @@ public record IndexStatsResponse(
         boolean success,
         long documentCount,
         String indexPath,
+        int schemaVersion,
+        String softwareVersion,
+        String buildTimestamp,
         String error
 ) {
-    public static IndexStatsResponse success(final long documentCount, final String indexPath) {
-        return new IndexStatsResponse(true, documentCount, indexPath, null);
+    public static IndexStatsResponse success(final long documentCount, final String indexPath,
+                                              final int schemaVersion, final String softwareVersion,
+                                              final String buildTimestamp) {
+        return new IndexStatsResponse(true, documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp, null);
     }
 
     public static IndexStatsResponse error(final String errorMessage) {
-        return new IndexStatsResponse(false, 0, null, errorMessage);
+        return new IndexStatsResponse(false, 0, null, 0, null, null, errorMessage);
     }
 }

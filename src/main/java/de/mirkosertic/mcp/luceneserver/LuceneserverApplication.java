@@ -2,6 +2,7 @@ package de.mirkosertic.mcp.luceneserver;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
+import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.config.LoggingConfigurator;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlExecutorService;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlStatisticsTracker;
@@ -104,6 +105,12 @@ public class LuceneserverApplication {
         // Initialize crawler
         crawlerService.init();
 
+        // Check if schema upgrade is required and trigger automatic reindex
+        if (indexService.isSchemaUpgradeRequired()) {
+            logger.warn("Schema version changed — triggering full reindex");
+            crawlerService.startCrawl(true);
+        }
+
         logger.info("All services initialized successfully");
     }
 
@@ -122,7 +129,7 @@ public class LuceneserverApplication {
         // Create server info
         final McpSchema.Implementation serverInfo = new McpSchema.Implementation(
                 "MCP Lucene Server",
-                "1.0.0"
+                BuildInfo.getVersion()
         );
 
         // Create JSON mapper for MCP protocol
