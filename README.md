@@ -355,11 +355,48 @@ Ask Claude: "Can you invoke the indexAdmin tool please?"
 Search the Lucene fulltext index using **lexical matching** (exact word forms only).
 
 **Parameters:**
-- `query` (required): The search query using Lucene query syntax
-- `filterField` (optional): Field name to filter results (use facets to discover available values)
-- `filterValue` (optional): Value for the filter field
+- `query` (optional): The search query using Lucene query syntax. Can be `null` or `"*"` to match all documents (useful with filters).
+- `filters` (optional): Array of structured filters for precise field-level filtering (see **Structured Filters** below)
+- `filterField` (optional, **deprecated** — use `filters[]` instead): Field name to filter results
+- `filterValue` (optional, **deprecated** — use `filters[]` instead): Value for the filter field
 - `page` (optional): Page number, 0-based (default: 0)
 - `pageSize` (optional): Results per page (default: 10, max: 100)
+
+**Structured Filters:**
+
+The `filters` array accepts objects with these fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `field` | yes | Field name to filter on |
+| `operator` | no | `eq` (default), `in`, `not`, `not_in`, `range` |
+| `value` | for eq/not | Single value for exact match or exclusion |
+| `values` | for in/not_in | Array of values (OR semantics within the field) |
+| `from` | for range | Range start (inclusive) |
+| `to` | for range | Range end (inclusive) |
+| `addedAt` | no | Client timestamp — round-tripped in `activeFilters` response |
+
+**Operator reference:**
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `eq` | Exact match (default) | `{field: "language", value: "en"}` |
+| `in` | Match any of values | `{field: "file_extension", operator: "in", values: ["pdf", "docx"]}` |
+| `not` | Exclude value | `{field: "language", operator: "not", value: "unknown"}` |
+| `not_in` | Exclude multiple values | `{field: "language", operator: "not_in", values: ["unknown", ""]}` |
+| `range` | Numeric/date range | `{field: "modified_date", operator: "range", from: "2024-01-01", to: "2025-12-31"}` |
+
+**Filterable fields:**
+- **Faceted** (DrillSideways): `language`, `file_extension`, `file_type`, `author`, `creator`, `subject`
+- **String (exact match)**: `file_path`, `content_hash`
+- **Numeric/date (range)**: `file_size`, `created_date`, `modified_date`, `indexed_date`
+
+**Date format:** ISO-8601 — `"2024-01-15"`, `"2024-01-15T10:30:00"`, or `"2024-01-15T10:30:00Z"`
+
+**Filter combination rules:**
+- Filters on **different** fields use AND logic
+- Multiple `eq` filters or `in` values on the **same** faceted field use OR logic (DrillSideways)
+- `not`/`not_in` filters are applied as MUST_NOT clauses
 
 **🤖 AI-Powered Synonym Expansion:**
 
@@ -433,8 +470,29 @@ Leading wildcard queries are optimised internally using a reverse token index (`
 **Returns:**
 - Paginated document results, each containing a `passages` array with highlighted text and quality metadata
 - Document-level relevance scores
-- Facets with actual values and counts from the result set
+- `facets`: Facet values and counts from the result set (uses DrillSideways when facet filters are active, showing alternative values)
+- `activeFilters`: Mirrors the input `filters` with a `matchCount` for each filter (count from facets, or -1 for range/non-faceted filters)
 - Search execution time in milliseconds (`searchTimeMs`)
+
+**Filter examples:**
+```json
+// Browse all English PDFs
+{ "query": null, "filters": [
+    { "field": "language", "value": "en" },
+    { "field": "file_extension", "value": "pdf" }
+]}
+
+// Date range filter
+{ "query": "contract*", "filters": [
+    { "field": "modified_date", "operator": "range", "from": "2024-01-01", "to": "2025-12-31" }
+]}
+
+// Multiple values with exclusion
+{ "query": "report", "filters": [
+    { "field": "file_extension", "operator": "in", "values": ["pdf", "docx"] },
+    { "field": "language", "operator": "not", "value": "unknown" }
+]}
+```
 
 ### `getIndexStats`
 
@@ -446,6 +504,7 @@ Get statistics about the Lucene index.
 - `schemaVersion`: Current index schema version
 - `softwareVersion`: Server software version
 - `buildTimestamp`: Server build timestamp
+- `dateFieldHints`: Min/max date ranges for date fields (`created_date`, `modified_date`, `indexed_date`) in ISO-8601 format — useful for building date range filters
 
 ### `startCrawl`
 

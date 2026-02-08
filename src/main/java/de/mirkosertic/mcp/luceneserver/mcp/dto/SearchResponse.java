@@ -22,6 +22,7 @@ public record SearchResponse(
         boolean hasNextPage,
         boolean hasPreviousPage,
         Map<String, List<FacetValue>> facets,
+        List<ActiveFilter> activeFilters,
         long searchTimeMs,
         String error
 ) {
@@ -37,10 +38,11 @@ public record SearchResponse(
             final boolean hasNextPage,
             final boolean hasPreviousPage,
             final Map<String, List<FacetValue>> facets,
+            final List<ActiveFilter> activeFilters,
             final long searchTimeMs) {
         return new SearchResponse(
                 true, documents, totalHits, page, pageSize,
-                totalPages, hasNextPage, hasPreviousPage, facets, searchTimeMs, null
+                totalPages, hasNextPage, hasPreviousPage, facets, activeFilters, searchTimeMs, null
         );
     }
 
@@ -49,7 +51,7 @@ public record SearchResponse(
      */
     public static SearchResponse error(final String errorMessage) {
         return new SearchResponse(
-                false, null, 0, 0, 0, 0, false, false, null, 0, errorMessage
+                false, null, 0, 0, 0, 0, false, false, null, null, 0, errorMessage
         );
     }
 

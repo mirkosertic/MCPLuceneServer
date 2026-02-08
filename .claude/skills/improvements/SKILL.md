@@ -43,30 +43,11 @@ This means:
 These improve the **AI client's ability to use the server effectively** without duplicating semantic logic.
 
 #### 1. Structured Multi-Filter Support
-**Status**: Not started
+**Status**: Done
 **Effort**: Medium
 **Impact**: High
 
-Currently only one `filterField`/`filterValue` pair is supported. Real-world queries need:
-- `language:de AND file_extension:pdf AND author:"John Doe"`
-- Date range filtering: "documents modified in the last 30 days"
-- Numeric ranges on `file_size`
-
-The AI currently has to encode all filters into the Lucene query string, which is fragile and error-prone.
-
-**Approach**: Add a `filters` array parameter to the `search` tool:
-```json
-{
-  "query": "contract*",
-  "filters": [
-    {"field": "language", "value": "de"},
-    {"field": "file_extension", "value": "pdf"},
-    {"field": "modified_date", "from": "2025-01-01", "to": "2025-12-31"}
-  ]
-}
-```
-
-**Key files**: `SearchRequest.java`, `LuceneIndexService.search()`, `LuceneSearchTools.SEARCH_DESCRIPTION`
+Implemented `filters[]` array with operators (`eq`, `in`, `not`, `not_in`, `range`), DrillSideways faceting for faceted fields, ISO-8601 date parsing, `activeFilters` with `matchCount` in response, `dateFieldHints` in `getIndexStats`, and backward compatibility with legacy `filterField`/`filterValue`. Also addresses item 6 (Date-Friendly Query Parameters) via the `range` operator with ISO-8601 support.
 
 #### 2. Index Observability Tools
 **Status**: Not started
@@ -137,13 +118,11 @@ Lucene has `MoreLikeThis` built in. A `findSimilar` tool that takes a `file_path
 **Key files**: New tool in `LuceneSearchTools.java`, new method in `LuceneIndexService.java`
 
 #### 6. Date-Friendly Query Parameters
-**Status**: Not started
+**Status**: Done (addressed by Structured Multi-Filter Support)
 **Effort**: Low
 **Impact**: Medium
 
-Date range queries exist in Lucene syntax but require epoch milliseconds, which is unfriendly even for an AI. Add `dateFrom`/`dateTo` parameters with ISO-8601 support to the `search` tool.
-
-**Key files**: `SearchRequest.java`, `LuceneIndexService.search()`
+Implemented as part of the `filters[]` array with `range` operator and ISO-8601 date parsing. The `getIndexStats` tool now also returns `dateFieldHints` with min/max dates.
 
 #### 7. OCR Support for Scanned PDFs
 **Status**: Not started
