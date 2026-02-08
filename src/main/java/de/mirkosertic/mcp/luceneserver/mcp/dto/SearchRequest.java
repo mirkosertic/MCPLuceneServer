@@ -3,20 +3,29 @@ package de.mirkosertic.mcp.luceneserver.mcp.dto;
 import de.mirkosertic.mcp.luceneserver.mcp.Description;
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
 /**
  * Request DTO for the search tool.
  */
 public record SearchRequest(
-        @Description("The search query using Lucene query syntax")
+        @Nullable
+        @Description("The search query using Lucene query syntax. Can be null or '*' to match all documents (useful with filters).")
         String query,
 
         @Nullable
-        @Description("Optional field name to filter results. Use together with filterValue.")
+        @Description("Deprecated: use filters[] instead. Optional field name to filter results.")
         String filterField,
 
         @Nullable
-        @Description("Optional value for the filter field. Use together with filterField.")
+        @Description("Deprecated: use filters[] instead. Optional value for the filter field.")
         String filterValue,
+
+        @Nullable
+        @Description("Structured filters array. Each filter specifies a field, operator, and value(s).")
+        List<SearchFilter> filters,
 
         @Nullable
         @Description("Page number (0-based). Default is 0.")
@@ -29,11 +38,25 @@ public record SearchRequest(
     /**
      * Create a SearchRequest from a Map of arguments.
      */
-    public static SearchRequest fromMap(final java.util.Map<String, Object> args) {
+    @SuppressWarnings("unchecked")
+    public static SearchRequest fromMap(final Map<String, Object> args) {
+        final List<SearchFilter> filters;
+        if (args.get("filters") instanceof List<?> rawFilters) {
+            filters = new ArrayList<>(rawFilters.size());
+            for (final Object item : rawFilters) {
+                if (item instanceof Map<?, ?> filterMap) {
+                    filters.add(SearchFilter.fromMap((Map<String, Object>) filterMap));
+                }
+            }
+        } else {
+            filters = null;
+        }
+
         return new SearchRequest(
                 (String) args.get("query"),
                 (String) args.get("filterField"),
                 (String) args.get("filterValue"),
+                filters,
                 args.get("page") != null ? ((Number) args.get("page")).intValue() : null,
                 args.get("pageSize") != null ? ((Number) args.get("pageSize")).intValue() : null
         );
@@ -51,5 +74,36 @@ public record SearchRequest(
      */
     public int effectivePageSize() {
         return (pageSize != null && pageSize > 0) ? Math.min(pageSize, 100) : 10;
+    }
+
+    /**
+     * Get the effective query string — returns null for blank or "*" queries (signals MatchAllDocsQuery).
+     */
+    public @Nullable String effectiveQuery() {
+        if (query == null || query.isBlank() || "*".equals(query.trim())) {
+            return null;
+        }
+        return query;
+    }
+
+    /**
+     * Merge legacy filterField/filterValue with the new filters[] array.
+     * Legacy parameters are converted to a single "eq" filter and prepended.
+     */
+    public List<SearchFilter> effectiveFilters() {
+        final List<SearchFilter> result = new ArrayList<>();
+
+        // Convert legacy filterField/filterValue to an eq filter
+        if (filterField != null && !filterField.isBlank()
+                && filterValue != null && !filterValue.isBlank()) {
+            result.add(new SearchFilter(filterField, "eq", filterValue, null, null, null, null));
+        }
+
+        // Append structured filters
+        if (filters != null) {
+            result.addAll(filters);
+        }
+
+        return result;
     }
 }
