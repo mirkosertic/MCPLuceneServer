@@ -98,11 +98,19 @@ public final class SchemaGenerator {
             // Nested record - inline the schema
             schema.put("type", "object");
             final Map<String, Object> nestedProperties = new LinkedHashMap<>();
+            final List<String> nestedRequired = new ArrayList<>();
             for (final RecordComponent component : clazz.getRecordComponents()) {
                 nestedProperties.put(component.getName(),
                         generatePropertySchema(component.getGenericType(), component));
+                final boolean isNullable = component.isAnnotationPresent(Nullable.class);
+                if (!isNullable && !isOptionalType(component.getGenericType())) {
+                    nestedRequired.add(component.getName());
+                }
             }
             schema.put("properties", nestedProperties);
+            if (!nestedRequired.isEmpty()) {
+                schema.put("required", nestedRequired);
+            }
         } else {
             // Default to object for unknown types
             schema.put("type", "object");

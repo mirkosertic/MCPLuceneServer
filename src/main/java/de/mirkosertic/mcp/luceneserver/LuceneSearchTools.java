@@ -56,8 +56,17 @@ public class LuceneSearchTools {
             No stemming: use wildcards + OR groups for inflections, e.g. '(vertrag* OR vertraeg*)' or '(run OR running OR ran)'. \
             German compound word strategy: use leading wildcards for suffixes (*vertrag), trailing wildcards for prefixes (vertrag*), \
             or infix wildcards for substrings (*vertrag*). \
-            Best practices: Combine related terms with OR, use wildcards for inflections, leverage facets for drill-down. \
-            Returns: paginated results with a passages array per document (each passage contains highlighted text, a relevance score, matchedTerms, termCoverage, and position), document-level relevance scores, facets (with counts), and searchTimeMs.""";
+            STRUCTURED FILTERS: Use the 'filters' array for precise field-level filtering. \
+            Operators: eq (exact match, default), in (any of values), not (exclude value), not_in (exclude values), range (numeric/date range). \
+            Filterable fields: language, file_extension, file_type, author, creator, subject (faceted); file_path, content_hash (exact string); \
+            file_size, created_date, modified_date, indexed_date (numeric/date, support range). \
+            Date values use ISO-8601: '2024-01-15', '2024-01-15T10:30:00', or '2024-01-15T10:30:00Z'. \
+            Filters on same field use OR logic; filters on different fields use AND logic. \
+            The query can be null or '*' to match all documents when using filters only. \
+            Best practices: Combine related terms with OR, use wildcards for inflections, leverage facets for drill-down, \
+            use filters to narrow by metadata (language, date range, file type). \
+            Returns: paginated results with passages array per document, relevance scores, facets (DrillSideways counts when filtered), \
+            activeFilters (mirrors input filters with matchCount), and searchTimeMs.""";
 
     private static final String ADMIN_APP_RESOURCE_ID = "ui://indexadmin/index.html";
 
@@ -321,16 +330,16 @@ public class LuceneSearchTools {
 
     private McpSchema.CallToolResult search(final Map<String, Object> args) {
         final SearchRequest request = SearchRequest.fromMap(args);
+        final List<SearchFilter> effectiveFilters = request.effectiveFilters();
 
-        logger.info("Search request: query='{}', filterField='{}', filterValue='{}', page={}, pageSize={}",
-                request.query(), request.filterField(), request.filterValue(), request.page(), request.pageSize());
+        logger.info("Search request: query='{}', filters={}, page={}, pageSize={}",
+                request.query(), effectiveFilters.size(), request.page(), request.pageSize());
 
         try {
             final long startTime = System.nanoTime();
             final LuceneIndexService.SearchResult result = indexService.search(
-                    request.query(),
-                    request.filterField(),
-                    request.filterValue(),
+                    request.effectiveQuery(),
+                    effectiveFilters,
                     request.effectivePage(),
                     request.effectivePageSize());
             final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
@@ -353,14 +362,19 @@ public class LuceneSearchTools {
                     result.hasNextPage(),
                     result.hasPreviousPage(),
                     facets,
+                    result.activeFilters(),
                     durationMs
             );
 
-            logger.info("Search completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions available",
-                    durationMs, result.totalHits(), result.page(), result.totalPages(), result.facets().size());
+            logger.info("Search completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions, {} active filters",
+                    durationMs, result.totalHits(), result.page(), result.totalPages(),
+                    result.facets().size(), result.activeFilters().size());
 
             return ToolResultHelper.createResult(response);
 
+        } catch (final IllegalArgumentException e) {
+            logger.warn("Invalid filter: {}", e.getMessage());
+            return ToolResultHelper.createResult(SearchResponse.error("Invalid filter: " + e.getMessage()));
         } catch (final ParseException e) {
             logger.warn("Invalid query syntax: {}", e.getMessage());
             return ToolResultHelper.createResult(SearchResponse.error("Invalid query syntax: " + e.getMessage()));
@@ -380,10 +394,19 @@ public class LuceneSearchTools {
             final String softwareVersion = BuildInfo.getVersion();
             final String buildTimestamp = BuildInfo.getBuildTimestamp();
 
+            // Get date field ranges and convert to ISO-8601 strings
+            final Map<String, long[]> ranges = indexService.getDateFieldRanges();
+            final Map<String, IndexStatsResponse.DateFieldHint> dateFieldHints = new HashMap<>();
+            for (final var entry : ranges.entrySet()) {
+                final String minDate = java.time.Instant.ofEpochMilli(entry.getValue()[0]).toString();
+                final String maxDate = java.time.Instant.ofEpochMilli(entry.getValue()[1]).toString();
+                dateFieldHints.put(entry.getKey(), new IndexStatsResponse.DateFieldHint(minDate, maxDate));
+            }
+
             logger.info("Index stats: {} documents, schema v{}", documentCount, schemaVersion);
 
             return ToolResultHelper.createResult(IndexStatsResponse.success(
-                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp));
+                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp, dateFieldHints));
 
         } catch (final IOException e) {
             logger.error("Error getting index stats", e);

@@ -3,11 +3,16 @@ package de.mirkosertic.mcp.luceneserver;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ActiveFilter;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.Passage;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper;
 import org.apache.lucene.document.Document;
+import org.apache.lucene.document.LongPoint;
+import org.apache.lucene.facet.DrillDownQuery;
+import org.apache.lucene.facet.DrillSideways;
 import org.apache.lucene.facet.FacetResult;
 import org.apache.lucene.facet.Facets;
 import org.apache.lucene.facet.FacetsCollector;
@@ -19,6 +24,7 @@ import org.apache.lucene.facet.sortedset.SortedSetDocValuesReaderState;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.PointValues;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.index.Term;
@@ -42,9 +48,16 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.BreakIterator;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -62,6 +75,26 @@ public class LuceneIndexService {
 
     private static final Logger logger = LoggerFactory.getLogger(LuceneIndexService.class);
     private static final String WRITE_LOCK_FILE = "write.lock";
+
+    /** Fields indexed as SortedSetDocValuesFacetField (facetable via DrillSideways). */
+    static final Set<String> FACETED_FIELDS = Set.of(
+            "language", "file_extension", "file_type", "author", "creator", "subject");
+
+    /** Fields indexed as LongPoint (support range queries). */
+    static final Set<String> LONG_POINT_FIELDS = Set.of(
+            "file_size", "created_date", "modified_date", "indexed_date");
+
+    /** Subset of LONG_POINT_FIELDS that represent dates (epoch millis). */
+    static final Set<String> DATE_FIELDS = Set.of(
+            "created_date", "modified_date", "indexed_date");
+
+    /** Fields that are analyzed TextField — cannot be filtered with exact term match. */
+    static final Set<String> ANALYZED_FIELDS = Set.of(
+            "content", "content_reversed", "keywords", "file_name", "title", "author", "creator", "subject");
+
+    /** Fields that are StringField (exact match, not analyzed). */
+    static final Set<String> STRING_FIELDS = Set.of(
+            "file_path", "file_extension", "file_type", "language", "content_hash");
 
     /**
      * States for long-running admin operations.
@@ -251,86 +284,205 @@ public class LuceneIndexService {
 
     public SearchResult search(final String queryString, final String filterField, final String filterValue,
                                final int page, final int pageSize) throws IOException, ParseException {
+        // Backward-compatible: convert legacy filter to a SearchFilter list
+        final List<SearchFilter> filters = new ArrayList<>();
+        if (filterField != null && !filterField.isBlank()
+                && filterValue != null && !filterValue.isBlank()) {
+            filters.add(new SearchFilter(filterField, "eq", filterValue, null, null, null, null));
+        }
+        return search(queryString, filters, page, pageSize);
+    }
 
-        if (queryString == null || queryString.isBlank()) {
-            return new SearchResult(List.of(), 0, page, pageSize, Map.of());
+    /**
+     * Search the index with structured multi-filters and DrillSideways faceting.
+     *
+     * @param queryString the user query (null or blank = MatchAllDocsQuery)
+     * @param filters     list of structured filters (may be empty)
+     * @param page        0-based page number
+     * @param pageSize    results per page
+     * @return search results with documents, facets, and active filters
+     */
+    public SearchResult search(final String queryString, final List<SearchFilter> filters,
+                               final int page, final int pageSize) throws IOException, ParseException {
+
+        // Validate all filters first
+        for (final SearchFilter filter : filters) {
+            final String error = validateFilter(filter);
+            if (error != null) {
+                throw new IllegalArgumentException(error);
+            }
         }
 
-        // Acquire searcher from SearcherManager - this is thread-safe and reuses readers
         final IndexSearcher searcher = searcherManager.acquire();
         try {
-            // Build the main query (allow leading wildcards in syntax)
-            final QueryParser parser = new QueryParser("content", analyzer);
-            parser.setAllowLeadingWildcard(true);
-            final Query mainQuery = parser.parse(queryString);
-
-            // Rewrite leading wildcards to use the reversed-token field for efficiency
-            final Query optimizedQuery = rewriteLeadingWildcards(mainQuery);
-
-            // Apply filter if provided
-            final Query finalQuery;
-            if (filterField != null && !filterField.isBlank() &&
-                filterValue != null && !filterValue.isBlank()) {
-                final BooleanQuery.Builder builder = new BooleanQuery.Builder();
-                builder.add(optimizedQuery, BooleanClause.Occur.MUST);
-
-                final QueryParser filterParser = new QueryParser(filterField, analyzer);
-                final Query filterQuery = filterParser.parse(filterValue);
-                builder.add(filterQuery, BooleanClause.Occur.FILTER);
-
-                finalQuery = builder.build();
+            // 1. Build main query
+            final Query mainQuery;
+            if (queryString == null || queryString.isBlank()) {
+                mainQuery = new MatchAllDocsQuery();
             } else {
-                finalQuery = optimizedQuery;
+                final QueryParser parser = new QueryParser("content", analyzer);
+                parser.setAllowLeadingWildcard(true);
+                final Query parsed = parser.parse(queryString);
+                mainQuery = rewriteLeadingWildcards(parsed);
             }
 
-            // Calculate pagination
+            // 2. Classify filters
+            final List<SearchFilter> positiveFacetFilters = new ArrayList<>();
+            final List<SearchFilter> negativeFilters = new ArrayList<>();
+            final List<SearchFilter> rangeFilters = new ArrayList<>();
+            final List<SearchFilter> stringTermFilters = new ArrayList<>();
+            final List<SearchFilter> longPointEqFilters = new ArrayList<>();
+
+            for (final SearchFilter f : filters) {
+                final String op = f.effectiveOperator();
+                final String field = f.field();
+
+                switch (op) {
+                    case "not", "not_in" -> negativeFilters.add(f);
+                    case "range" -> rangeFilters.add(f);
+                    case "eq", "in" -> {
+                        if (FACETED_FIELDS.contains(field)) {
+                            positiveFacetFilters.add(f);
+                        } else if (LONG_POINT_FIELDS.contains(field)) {
+                            longPointEqFilters.add(f);
+                        } else if (STRING_FIELDS.contains(field)) {
+                            stringTermFilters.add(f);
+                        }
+                    }
+                    default -> throw new IllegalArgumentException("Unknown filter operator: " + op);
+                }
+            }
+
+            // 3. Build base BooleanQuery: mainQuery MUST + range FILTER + NOT MUST_NOT + string/longpoint FILTER
+            final BooleanQuery.Builder baseBuilder = new BooleanQuery.Builder();
+            baseBuilder.add(mainQuery, BooleanClause.Occur.MUST);
+
+            // Range filters
+            for (final SearchFilter rf : rangeFilters) {
+                final long fromVal = rf.from() != null ? parseLongFilterValue(rf.field(), rf.from()) : Long.MIN_VALUE;
+                final long toVal = rf.to() != null ? parseLongFilterValue(rf.field(), rf.to()) : Long.MAX_VALUE;
+                baseBuilder.add(LongPoint.newRangeQuery(rf.field(), fromVal, toVal), BooleanClause.Occur.FILTER);
+            }
+
+            // Negative filters
+            for (final SearchFilter nf : negativeFilters) {
+                final String op = nf.effectiveOperator();
+                if ("not".equals(op) && nf.value() != null) {
+                    if (FACETED_FIELDS.contains(nf.field()) || STRING_FIELDS.contains(nf.field())) {
+                        baseBuilder.add(new TermQuery(new Term(nf.field(), nf.value())), BooleanClause.Occur.MUST_NOT);
+                    } else if (LONG_POINT_FIELDS.contains(nf.field())) {
+                        final long val = parseLongFilterValue(nf.field(), nf.value());
+                        baseBuilder.add(LongPoint.newExactQuery(nf.field(), val), BooleanClause.Occur.MUST_NOT);
+                    }
+                } else if ("not_in".equals(op) && nf.values() != null) {
+                    for (final String v : nf.values()) {
+                        if (FACETED_FIELDS.contains(nf.field()) || STRING_FIELDS.contains(nf.field())) {
+                            baseBuilder.add(new TermQuery(new Term(nf.field(), v)), BooleanClause.Occur.MUST_NOT);
+                        } else if (LONG_POINT_FIELDS.contains(nf.field())) {
+                            final long val = parseLongFilterValue(nf.field(), v);
+                            baseBuilder.add(LongPoint.newExactQuery(nf.field(), val), BooleanClause.Occur.MUST_NOT);
+                        }
+                    }
+                }
+            }
+
+            // String term filters (eq/in on StringField, non-faceted)
+            for (final SearchFilter sf : stringTermFilters) {
+                if ("eq".equals(sf.effectiveOperator()) && sf.value() != null) {
+                    baseBuilder.add(new TermQuery(new Term(sf.field(), sf.value())), BooleanClause.Occur.FILTER);
+                } else if ("in".equals(sf.effectiveOperator()) && sf.values() != null) {
+                    final BooleanQuery.Builder orBuilder = new BooleanQuery.Builder();
+                    for (final String v : sf.values()) {
+                        orBuilder.add(new TermQuery(new Term(sf.field(), v)), BooleanClause.Occur.SHOULD);
+                    }
+                    baseBuilder.add(orBuilder.build(), BooleanClause.Occur.FILTER);
+                }
+            }
+
+            // LongPoint exact/in filters
+            for (final SearchFilter lf : longPointEqFilters) {
+                if ("eq".equals(lf.effectiveOperator()) && lf.value() != null) {
+                    final long val = parseLongFilterValue(lf.field(), lf.value());
+                    baseBuilder.add(LongPoint.newExactQuery(lf.field(), val), BooleanClause.Occur.FILTER);
+                } else if ("in".equals(lf.effectiveOperator()) && lf.values() != null) {
+                    final long[] vals = new long[lf.values().size()];
+                    for (int i = 0; i < lf.values().size(); i++) {
+                        vals[i] = parseLongFilterValue(lf.field(), lf.values().get(i));
+                    }
+                    baseBuilder.add(LongPoint.newSetQuery(lf.field(), vals), BooleanClause.Occur.FILTER);
+                }
+            }
+
+            final Query baseQuery = baseBuilder.build();
+
+            // 4. Pagination
             final int startIndex = page * pageSize;
             final int maxResults = startIndex + pageSize;
 
-            // Perform combined search and facet collection (Lucene 10+ API)
-            final FacetsCollectorManager facetsCollectorManager = new FacetsCollectorManager();
-            final FacetsCollectorManager.FacetsResult result = FacetsCollectorManager.search(
-                    searcher, finalQuery, maxResults, facetsCollectorManager);
+            // 5. Execute search — DrillSideways if positive facet filters exist, otherwise FacetsCollectorManager
+            final TopDocs topDocs;
+            final Map<String, List<FacetValue>> facets;
 
-            final FacetsCollector facetsCollector = result.facetsCollector();
-            final TopDocs topDocs = result.topDocs();
+            if (!positiveFacetFilters.isEmpty()) {
+                // DrillSideways path
+                final SortedSetDocValuesReaderState state = new DefaultSortedSetDocValuesReaderState(
+                        searcher.getIndexReader(), documentIndexer.getFacetsConfig());
+
+                final DrillDownQuery ddq = new DrillDownQuery(documentIndexer.getFacetsConfig(), baseQuery);
+                // Group positive facet filters by dimension — same dimension = OR
+                final Map<String, List<String>> facetValuesByDim = new LinkedHashMap<>();
+                for (final SearchFilter pf : positiveFacetFilters) {
+                    final List<String> vals = new ArrayList<>();
+                    if ("eq".equals(pf.effectiveOperator()) && pf.value() != null) {
+                        vals.add(pf.value());
+                    } else if ("in".equals(pf.effectiveOperator()) && pf.values() != null) {
+                        vals.addAll(pf.values());
+                    }
+                    facetValuesByDim.computeIfAbsent(pf.field(), k -> new ArrayList<>()).addAll(vals);
+                }
+                for (final var entry : facetValuesByDim.entrySet()) {
+                    for (final String val : entry.getValue()) {
+                        ddq.add(entry.getKey(), val);
+                    }
+                }
+
+                final DrillSideways ds = new DrillSideways(searcher, documentIndexer.getFacetsConfig(), state);
+                final DrillSideways.DrillSidewaysResult dsResult = ds.search(ddq, maxResults);
+
+                topDocs = dsResult.hits;
+                facets = buildFacetsFromDrillSideways(dsResult.facets);
+            } else {
+                // Standard FacetsCollectorManager path (preserves original behavior)
+                final FacetsCollectorManager facetsCollectorManager = new FacetsCollectorManager();
+                final FacetsCollectorManager.FacetsResult result = FacetsCollectorManager.search(
+                        searcher, baseQuery, maxResults, facetsCollectorManager);
+
+                topDocs = result.topDocs();
+                facets = buildFacets(searcher, result.facetsCollector());
+            }
+
             final long totalHits = topDocs.totalHits.value();
 
-            // Build a PassageAwareHighlighter for passage generation.
-            // It uses IndividualPassageFormatter to return each passage as a separate
-            // object (with its own Lucene score and character offsets) instead of
-            // joining them into a single string.  The underlying highlightFieldsAsObjects
-            // API reads term vectors (positions + offsets) stored in the index, which is
-            // critical for correct <em> tagging when ICUFoldingFilter is in play.
-            // We use mainQuery (before the filter clause) so that only the user's
-            // actual search terms are highlighted, not filter values.
-            // maxNoHighlightPassages=1 ensures a fallback passage is returned even if
-            // no terms match within the highlighter's view of the document.
+            // 6. Highlighting — uses mainQuery (only user search terms get <em> tags)
             final int maxPassages = config.getMaxPassages();
             final int maxPassageCharLength = config.getMaxPassageCharLength();
             final PassageAwareHighlighter highlighter = new PassageAwareHighlighter(
                     UnifiedHighlighter.builder(searcher, analyzer)
-                            .withMaxLength(10_000) // read up to 10 000 chars of stored value to find more passages
+                            .withMaxLength(10_000)
                             .withFormatter(new IndividualPassageFormatter())
                             .withHandleMultiTermQuery(true)
                             .withBreakIterator(BreakIterator::getSentenceInstance)
                             .withMaxNoHighlightPassages(1)
             );
-
-            // Extract query terms for termCoverage calculation.
-            // Query.toString() produces a human-readable representation; we strip
-            // field prefixes and punctuation to get the raw terms.
             final Set<String> queryTerms = extractQueryTerms(mainQuery);
 
-            // Collect results for the requested page
+            // 7. Collect results for the requested page
             final List<SearchDocument> results = new ArrayList<>();
             final ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 
             for (int i = startIndex; i < scoreDocs.length && i < maxResults; i++) {
                 final Document doc = searcher.storedFields().document(scoreDocs[i].doc);
 
-                // Generate structured passages using UnifiedHighlighter.highlight()
-                // which reads term-vector offsets from the index for precise <em> tagging.
                 logger.debug("Query for highlighting: {}", mainQuery);
                 final String content = doc.get("content");
                 final List<Passage> passages = createPassages(
@@ -357,12 +509,11 @@ public class LuceneIndexService {
                 results.add(searchDoc);
             }
 
-            // Build facets from collected data
-            final Map<String, List<FacetValue>> facets = buildFacets(searcher, facetsCollector);
+            // 8. Compute active filters
+            final List<ActiveFilter> activeFilters = computeActiveFilters(filters, facets);
 
-            return new SearchResult(results, totalHits, page, pageSize, facets);
+            return new SearchResult(results, totalHits, page, pageSize, facets, activeFilters);
         } finally {
-            // Always release the searcher back to the manager
             searcherManager.release(searcher);
         }
     }
@@ -1392,6 +1543,206 @@ public class LuceneIndexService {
         return query;
     }
 
+    /**
+     * Validate a filter and return an error message, or null if valid.
+     */
+    static String validateFilter(final SearchFilter filter) {
+        if (filter.field() == null || filter.field().isBlank()) {
+            return "Filter field must not be blank";
+        }
+        final String op = filter.effectiveOperator();
+        if (!Set.of("eq", "in", "not", "not_in", "range").contains(op)) {
+            return "Unknown filter operator: " + op;
+        }
+
+        // Disallow eq/in/not/not_in on analyzed TextFields (content, keywords, file_name, title, etc.)
+        // These fields are tokenized and cannot be filtered with exact term match.
+        // Note: author, creator, subject ARE in ANALYZED_FIELDS but they also have faceted fields,
+        // so they are allowed for facet-based filtering via FACETED_FIELDS.
+        if (ANALYZED_FIELDS.contains(filter.field()) && !FACETED_FIELDS.contains(filter.field())
+                && !STRING_FIELDS.contains(filter.field()) && !"range".equals(op)) {
+            return "Cannot filter on analyzed field '" + filter.field()
+                    + "' — use query syntax instead (e.g. field:value in the query string)";
+        }
+
+        // Range is only valid on LONG_POINT_FIELDS
+        if ("range".equals(op) && !LONG_POINT_FIELDS.contains(filter.field())) {
+            return "Range filter is only supported on numeric/date fields: " + LONG_POINT_FIELDS;
+        }
+
+        // Check required values
+        if (("eq".equals(op) || "not".equals(op)) && (filter.value() == null || filter.value().isBlank())) {
+            return "Filter operator '" + op + "' requires 'value'";
+        }
+        if (("in".equals(op) || "not_in".equals(op)) && (filter.values() == null || filter.values().isEmpty())) {
+            return "Filter operator '" + op + "' requires 'values' array";
+        }
+        if ("range".equals(op) && filter.from() == null && filter.to() == null) {
+            return "Range filter requires at least 'from' or 'to'";
+        }
+
+        return null;
+    }
+
+    /**
+     * Parse an ISO-8601 date string to epoch millis.
+     * Supports: "2024-01-15T14:30:00Z" (Instant), "2024-01-15T14:30:00" (LocalDateTime, UTC),
+     * "2024-01-15" (LocalDate, start of day UTC).
+     */
+    static long parseIso8601ToEpochMillis(final String value) {
+        // Try Instant (2024-01-15T14:30:00Z)
+        try {
+            return Instant.parse(value).toEpochMilli();
+        } catch (final DateTimeParseException ignored) {
+        }
+        // Try LocalDateTime (2024-01-15T14:30:00) — assume UTC
+        try {
+            return LocalDateTime.parse(value, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                    .toInstant(ZoneOffset.UTC).toEpochMilli();
+        } catch (final DateTimeParseException ignored) {
+        }
+        // Try LocalDate (2024-01-15) — start of day UTC
+        try {
+            return LocalDate.parse(value, DateTimeFormatter.ISO_LOCAL_DATE)
+                    .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
+        } catch (final DateTimeParseException ignored) {
+        }
+        throw new IllegalArgumentException("Cannot parse date: '" + value
+                + "'. Expected ISO-8601 format: '2024-01-15', '2024-01-15T10:30:00', or '2024-01-15T10:30:00Z'");
+    }
+
+    /**
+     * Parse a filter value to a long — uses ISO-8601 parsing for date fields, Long.parseLong otherwise.
+     */
+    static long parseLongFilterValue(final String field, final String value) {
+        if (DATE_FIELDS.contains(field)) {
+            return parseIso8601ToEpochMillis(value);
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (final NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "Cannot parse value '" + value + "' as number for field '" + field + "'");
+        }
+    }
+
+    /**
+     * Build facets map from DrillSideways result.
+     */
+    private Map<String, List<FacetValue>> buildFacetsFromDrillSideways(final Facets facetsResult) {
+        final Map<String, List<FacetValue>> facets = new HashMap<>();
+        final String[] facetDimensions = {
+                "language", "file_extension", "file_type", "author", "creator", "subject"
+        };
+        for (final String dimension : facetDimensions) {
+            try {
+                final FacetResult facetResult = facetsResult.getTopChildren(100, dimension);
+                if (facetResult != null && facetResult.labelValues.length > 0) {
+                    final List<FacetValue> values = new ArrayList<>();
+                    for (final LabelAndValue lv : facetResult.labelValues) {
+                        values.add(new FacetValue(lv.label, lv.value.intValue()));
+                    }
+                    facets.put(dimension, values);
+                }
+            } catch (final Exception e) {
+                logger.debug("Facet dimension {} not available in DrillSideways result", dimension);
+            }
+        }
+        return facets;
+    }
+
+    /**
+     * Compute active filters with matchCounts from the facets map.
+     */
+    private List<ActiveFilter> computeActiveFilters(final List<SearchFilter> filters,
+                                                    final Map<String, List<FacetValue>> facets) {
+        if (filters == null || filters.isEmpty()) {
+            return List.of();
+        }
+        final List<ActiveFilter> activeFilters = new ArrayList<>();
+        for (final SearchFilter filter : filters) {
+            final long matchCount = lookupCountInFacetMap(facets, filter);
+            activeFilters.add(ActiveFilter.fromFilter(filter, matchCount));
+        }
+        return activeFilters;
+    }
+
+    /**
+     * Look up the count for a filter value in the facets map.
+     * Returns -1 if the field/value is not found in facets (e.g. range or non-faceted filters).
+     */
+    private long lookupCountInFacetMap(final Map<String, List<FacetValue>> facets, final SearchFilter filter) {
+        final String op = filter.effectiveOperator();
+        // Only faceted eq/in can be looked up
+        if (!FACETED_FIELDS.contains(filter.field()) || "range".equals(op)) {
+            return -1;
+        }
+        final List<FacetValue> dimValues = facets.get(filter.field());
+        if (dimValues == null) {
+            return 0;
+        }
+
+        if (("eq".equals(op) || "not".equals(op)) && filter.value() != null) {
+            for (final FacetValue fv : dimValues) {
+                if (fv.value().equals(filter.value())) {
+                    return fv.count();
+                }
+            }
+            return 0;
+        }
+        if (("in".equals(op) || "not_in".equals(op)) && filter.values() != null) {
+            long total = 0;
+            for (final String v : filter.values()) {
+                for (final FacetValue fv : dimValues) {
+                    if (fv.value().equals(v)) {
+                        total += fv.count();
+                    }
+                }
+            }
+            return total;
+        }
+        return -1;
+    }
+
+    /**
+     * Get the min/max date ranges for all date LongPoint fields.
+     * Returns a map from field name to [minEpochMillis, maxEpochMillis].
+     * Returns empty map if index is empty or PointValues are unavailable.
+     */
+    public Map<String, long[]> getDateFieldRanges() throws IOException {
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            final Map<String, long[]> ranges = new LinkedHashMap<>();
+            for (final String field : DATE_FIELDS) {
+                try {
+                    for (final var leafCtx : searcher.getIndexReader().leaves()) {
+                        final PointValues pointValues = leafCtx.reader().getPointValues(field);
+                        if (pointValues != null && pointValues.getDocCount() > 0) {
+                            final byte[] minBytes = pointValues.getMinPackedValue();
+                            final byte[] maxBytes = pointValues.getMaxPackedValue();
+                            if (minBytes != null && maxBytes != null) {
+                                final long min = LongPoint.decodeDimension(minBytes, 0);
+                                final long max = LongPoint.decodeDimension(maxBytes, 0);
+                                final long[] existing = ranges.get(field);
+                                if (existing == null) {
+                                    ranges.put(field, new long[]{min, max});
+                                } else {
+                                    existing[0] = Math.min(existing[0], min);
+                                    existing[1] = Math.max(existing[1], max);
+                                }
+                            }
+                        }
+                    }
+                } catch (final Exception e) {
+                    logger.debug("Could not read point values for field {}", field, e);
+                }
+            }
+            return ranges;
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
     private Map<String, List<FacetValue>> buildFacets(final IndexSearcher searcher, final FacetsCollector facetsCollector) {
         final Map<String, List<FacetValue>> facets = new HashMap<>();
 
@@ -1446,7 +1797,8 @@ public class LuceneIndexService {
             long totalHits,
             int page,
             int pageSize,
-            Map<String, List<FacetValue>> facets
+            Map<String, List<FacetValue>> facets,
+            List<ActiveFilter> activeFilters
     ) {
         public int totalPages() {
             return (int) Math.ceil((double) totalHits / pageSize);
