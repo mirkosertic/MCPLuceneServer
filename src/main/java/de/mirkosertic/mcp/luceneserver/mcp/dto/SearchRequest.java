@@ -16,14 +16,6 @@ public record SearchRequest(
         String query,
 
         @Nullable
-        @Description("Deprecated: use filters[] instead. Optional field name to filter results.")
-        String filterField,
-
-        @Nullable
-        @Description("Deprecated: use filters[] instead. Optional value for the filter field.")
-        String filterValue,
-
-        @Nullable
         @Description("Structured filters array. Each filter specifies a field, operator, and value(s).")
         List<SearchFilter> filters,
 
@@ -54,8 +46,6 @@ public record SearchRequest(
 
         return new SearchRequest(
                 (String) args.get("query"),
-                (String) args.get("filterField"),
-                (String) args.get("filterValue"),
                 filters,
                 args.get("page") != null ? ((Number) args.get("page")).intValue() : null,
                 args.get("pageSize") != null ? ((Number) args.get("pageSize")).intValue() : null
@@ -87,23 +77,9 @@ public record SearchRequest(
     }
 
     /**
-     * Merge legacy filterField/filterValue with the new filters[] array.
-     * Legacy parameters are converted to a single "eq" filter and prepended.
+     * Get the effective filters list, returning an empty list if filters is null.
      */
     public List<SearchFilter> effectiveFilters() {
-        final List<SearchFilter> result = new ArrayList<>();
-
-        // Convert legacy filterField/filterValue to an eq filter
-        if (filterField != null && !filterField.isBlank()
-                && filterValue != null && !filterValue.isBlank()) {
-            result.add(new SearchFilter(filterField, "eq", filterValue, null, null, null, null));
-        }
-
-        // Append structured filters
-        if (filters != null) {
-            result.addAll(filters);
-        }
-
-        return result;
+        return filters != null ? filters : List.of();
     }
 }
