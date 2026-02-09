@@ -47,6 +47,9 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - [Usage Examples](#usage-examples)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
+  - [Running for Development](#running-for-development)
+  - [Debugging with MCP Inspector](#debugging-with-mcp-inspector)
+  - [Adding Documents to the Index](#adding-documents-to-the-index)
 
 ## Quick Start
 
@@ -357,8 +360,6 @@ Search the Lucene fulltext index using **lexical matching** (exact word forms on
 **Parameters:**
 - `query` (optional): The search query using Lucene query syntax. Can be `null` or `"*"` to match all documents (useful with filters).
 - `filters` (optional): Array of structured filters for precise field-level filtering (see **Structured Filters** below)
-- `filterField` (optional, **deprecated** — use `filters[]` instead): Field name to filter results
-- `filterValue` (optional, **deprecated** — use `filters[]` instead): Value for the filter field
 - `page` (optional): Page number, 0-based (default: 0)
 - `pageSize` (optional): Results per page (default: 10, max: 100)
 
@@ -978,21 +979,17 @@ Use facets to build drill-down queries and refine search results:
 
 ```
 # Filter by file type using facet values
-filterField: "file_extension"
-filterValue: "pdf"
+filters: [{ field: "file_extension", value: "pdf" }]
 
 # Filter by language using facet values
-filterField: "language"
-filterValue: "de"
+filters: [{ field: "language", value: "de" }]
 
 # Filter by author using facet values
-filterField: "author"
-filterValue: "John Doe"
+filters: [{ field: "author", value: "John Doe" }]
 
 # Combine search query with facet filter
-queryString: "contract agreement"
-filterField: "file_extension"
-filterValue: "pdf"
+query: "contract agreement"
+filters: [{ field: "file_extension", value: "pdf" }]
 ```
 
 **Facet-Driven Workflow:**
@@ -1262,8 +1259,7 @@ Search for "machine learning" in PDF documents only
 Claude will use:
 ```
 query: "machine learning"
-filterField: "file_extension"
-filterValue: "pdf"
+filters: [{ field: "file_extension", value: "pdf" }]
 ```
 
 ### Example 3: Find Documents by Author
@@ -1276,8 +1272,7 @@ Find all documents written by John Doe
 Claude will use:
 ```
 query: "*"
-filterField: "author"
-filterValue: "John Doe"
+filters: [{ field: "author", value: "John Doe" }]
 ```
 
 ### Example 4: Monitor Crawler Progress
@@ -1315,8 +1310,7 @@ Find German documents about "Technologie"
 Claude uses:
 ```
 query: "Technologie"
-filterField: "language"
-filterValue: "de"
+filters: [{ field: "language", value: "de" }]
 ```
 
 ### Example 7: Search with Passages
@@ -1430,8 +1424,7 @@ This matches: car, cars, automobile, automobiles, vehicle, vehicles, etc.
 **Real-world example - Finding contracts:**
 ```
 query: "(contract* OR agreement* OR deal*) AND (sign* OR execut* OR finali*)"
-filterField: "file_extension"
-filterValue: "pdf"
+filters: [{ field: "file_extension", value: "pdf" }]
 ```
 
 This will find documents containing variations like:
@@ -1463,6 +1456,23 @@ This gives you:
 # Use the deployed profile for clean STDIO
 java --enable-native-access=ALL-UNNAMED -Xmx2g -Dspring.profiles.active=deployed -jar target/luceneserver-0.0.1-SNAPSHOT.jar
 ```
+
+### Debugging with MCP Inspector
+
+The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) provides a visual debugging interface for testing MCP servers. Use it to inspect requests, responses, and debug tool behavior without needing a full MCP client like Claude Desktop.
+
+**Run the server with the inspector:**
+```bash
+npx @modelcontextprotocol/inspector java -jar --enable-native-access=ALL-UNNAMED -Xmx2g -Dspring.profiles.active=deployed -jar ./target/luceneserver-0.0.1-SNAPSHOT.jar
+```
+
+This opens a web-based UI where you can:
+- Test all MCP tools interactively
+- Inspect JSON request/response payloads
+- Debug STDIO communication issues
+- Verify tool parameters and return values
+
+**Note:** The inspector requires the same JVM arguments as production deployment (`--enable-native-access=ALL-UNNAMED`, `-Dspring.profiles.active=deployed`) to ensure consistent behavior.
 
 ### Adding Documents to the Index
 

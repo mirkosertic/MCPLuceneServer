@@ -108,7 +108,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search for a term we know is in the test content
         final LuceneIndexService.SearchResult result = indexService.search(
-            "test content", null, null, 0, 10);
+            "test content", List.of(), 0, 10);
 
         // Then: Verify search found the document
         assertThat(result.totalHits())
@@ -189,7 +189,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search for multiple terms
         final LuceneIndexService.SearchResult result = indexService.search(
-            "test verification", null, null, 0, 10);
+            "test verification", List.of(), 0, 10);
 
         // Then: Both terms should be highlighted
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
@@ -218,7 +218,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search for content (use terms that will definitely be in the text)
         final LuceneIndexService.SearchResult result = indexService.search(
-            "characters animation", null, null, 0, 10);
+            "characters animation", List.of(), 0, 10);
 
         // Then: Entities should be decoded in the indexed content
         assertThat(result.totalHits())
@@ -255,7 +255,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search for the name (with umlaut)
         final LuceneIndexService.SearchResult result = indexService.search(
-            "Muller", null, null, 0, 10);  // Search without umlaut
+            "Muller", List.of(), 0, 10);  // Search without umlaut
 
         // Then: Should find the document (ICU folding should handle this)
         assertThat(result.totalHits())
@@ -275,7 +275,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search for terms where only some appear
         final LuceneIndexService.SearchResult result = indexService.search(
-            "Alpha Beta Omega", null, null, 0, 10);
+            "Alpha Beta Omega", List.of(), 0, 10);
 
         // Then: Term coverage should reflect partial match
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
@@ -310,7 +310,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search for the repeated term
         final LuceneIndexService.SearchResult result = indexService.search(
-            "search term", null, null, 0, 10);
+            "search term", List.of(), 0, 10);
 
         // Then: Should find the document
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
@@ -353,7 +353,7 @@ class SearchHighlightingIntegrationTest {
         indexDocument(testFile);
 
         final LuceneIndexService.SearchResult result = indexService.search(
-            "contract", null, null, 0, 10);
+            "contract", List.of(), 0, 10);
 
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
 
@@ -390,7 +390,7 @@ class SearchHighlightingIntegrationTest {
         indexDocument(testFile);
 
         final LuceneIndexService.SearchResult result = indexService.search(
-            "target keyword", null, null, 0, 10);
+            "target keyword", List.of(), 0, 10);
 
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
 
@@ -429,7 +429,7 @@ class SearchHighlightingIntegrationTest {
         indexDocument(testFile);
 
         final LuceneIndexService.SearchResult result = indexService.search(
-            "Alpha Beta", null, null, 0, 10);
+            "Alpha Beta", List.of(), 0, 10);
 
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
 
@@ -457,16 +457,6 @@ class SearchHighlightingIntegrationTest {
             .isTrue();
     }
 
-    private int countOccurrences(final String text, final String substring) {
-        int count = 0;
-        int idx = 0;
-        while ((idx = text.indexOf(substring, idx)) != -1) {
-            count++;
-            idx += substring.length();
-        }
-        return count;
-    }
-
     @Test
     @DisplayName("Should handle wildcard queries")
     void shouldHandleWildcardQueries() throws Exception {
@@ -479,7 +469,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search with wildcard
         final LuceneIndexService.SearchResult result = indexService.search(
-            "test*", null, null, 0, 10);
+            "test*", List.of(), 0, 10);
 
         // Then: Should find and highlight matches
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
@@ -505,7 +495,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search
         final LuceneIndexService.SearchResult result = indexService.search(
-            "search term", null, null, 0, 10);
+            "search term", List.of(), 0, 10);
 
         // Then: Passages should not contain raw newlines
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
@@ -532,7 +522,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search with leading wildcard
         final LuceneIndexService.SearchResult result = indexService.search(
-            "*vertrag", null, null, 0, 10);
+            "*vertrag", List.of(), 0, 10);
 
         // Then: Should find the document
         assertThat(result.totalHits())
@@ -554,7 +544,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search with leading wildcard
         final LuceneIndexService.SearchResult result = indexService.search(
-            "*vertrag", null, null, 0, 10);
+            "*vertrag", List.of(), 0, 10);
 
         // Then: Should find and have passages (highlighting may not use <em> for
         // reversed-field queries, but passages should still be present)
@@ -582,7 +572,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search with infix wildcard
         final LuceneIndexService.SearchResult result = indexService.search(
-            "*vertrag*", null, null, 0, 10);
+            "*vertrag*", List.of(), 0, 10);
 
         // Then: Should find the document (matches both Vertragsbedingungen and Arbeitsvertrags)
         assertThat(result.totalHits())
@@ -602,7 +592,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search with trailing wildcard
         final LuceneIndexService.SearchResult result = indexService.search(
-            "contract*", null, null, 0, 10);
+            "contract*", List.of(), 0, 10);
 
         // Then: Should find the document
         assertThat(result.totalHits())
@@ -627,7 +617,7 @@ class SearchHighlightingIntegrationTest {
 
         // When: Search with leading wildcard (without umlaut, ICU folding handles this)
         final LuceneIndexService.SearchResult result = indexService.search(
-            "*bericht", null, null, 0, 10);
+            "*bericht", List.of(), 0, 10);
 
         // Then: Should find the document
         assertThat(result.totalHits())
