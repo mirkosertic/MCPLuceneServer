@@ -282,17 +282,6 @@ public class LuceneIndexService {
         return indexWriter;
     }
 
-    public SearchResult search(final String queryString, final String filterField, final String filterValue,
-                               final int page, final int pageSize) throws IOException, ParseException {
-        // Backward-compatible: convert legacy filter to a SearchFilter list
-        final List<SearchFilter> filters = new ArrayList<>();
-        if (filterField != null && !filterField.isBlank()
-                && filterValue != null && !filterValue.isBlank()) {
-            filters.add(new SearchFilter(filterField, "eq", filterValue, null, null, null, null));
-        }
-        return search(queryString, filters, page, pageSize);
-    }
-
     /**
      * Search the index with structured multi-filters and DrillSideways faceting.
      *

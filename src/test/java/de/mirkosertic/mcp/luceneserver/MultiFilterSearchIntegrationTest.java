@@ -517,26 +517,6 @@ class MultiFilterSearchIntegrationTest {
         }
     }
 
-    // ========== Backward Compatibility ==========
-
-    @Nested
-    @DisplayName("Backward Compatibility")
-    class BackwardCompatibility {
-
-        @Test
-        @DisplayName("Should work with legacy filterField and filterValue")
-        void shouldWorkWithLegacyFilterFieldAndValue() throws Exception {
-            indexDocumentWithMetadata("en-doc.txt", "English document about testing", "en", null);
-            indexDocumentWithMetadata("de-doc.txt", "German document about testing", "de", null);
-
-            // Use old method signature
-            final var result = indexService.search("document", "language", "en", 0, 10);
-
-            assertThat(result.totalHits()).isEqualTo(1);
-            assertThat(result.documents().getFirst().language()).isEqualTo("en");
-        }
-    }
-
     // ========== ISO-8601 Date Parsing ==========
 
     @Nested
