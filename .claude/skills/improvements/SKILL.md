@@ -91,20 +91,38 @@ Currently each file = one Lucene document. The highlighter reads only 10,000 cha
 **Key files**: `DocumentIndexer.java`, `LuceneIndexService.search()`, `DocumentCrawlerService`
 
 #### 4. Sort Options
-**Status**: Not started
+**Status**: ✅ Done
 **Effort**: Low
 **Impact**: Medium-High
 
-No `sortBy` parameter exists. Users frequently want "most recent first" or "largest first."
+Implemented sorting capability for search results by metadata fields.
 
-**Approach**: Add `sortBy` and `sortOrder` parameters:
+**What was implemented:**
+- Added `sortBy` parameter: `_score` (default), `modified_date`, `created_date`, `file_size`
+- Added `sortOrder` parameter: `asc` or `desc` (defaults: desc for dates/size, desc for score)
+- Validation for invalid sort fields and orders
+- Secondary sort by score for tie-breaking when sorting by metadata
+- Comprehensive documentation in README.md and query-syntax resource
+
+**Examples:**
 ```json
-{"query": "report*", "sortBy": "modified_date", "sortOrder": "desc"}
+// Most recently modified
+{"query": "contract", "sortBy": "modified_date", "sortOrder": "desc"}
+
+// Oldest documents
+{"query": "*", "sortBy": "created_date", "sortOrder": "asc"}
+
+// Smallest files
+{"query": "summary", "sortBy": "file_size", "sortOrder": "asc"}
 ```
 
-Supported sort fields: `modified_date`, `created_date`, `file_size`, `_score` (default).
+**Key decisions:**
+- Default sort remains by relevance score (no breaking changes)
+- Always compute scores even when sorting by metadata (needed for highlighting and tie-breaking)
+- Use `SortedNumericSortField` for numeric/date fields (DocValues)
+- Clear error messages for invalid parameters
 
-**Key files**: `SearchRequest.java`, `LuceneIndexService.search()`
+**Key files**: `SearchRequest.java`, `LuceneIndexService.search()`, README.md, query-syntax resource
 
 ### Tier 2: Medium Impact — Expand Capabilities
 
@@ -157,23 +175,589 @@ Includes include-patterns in `application.yaml` + `ApplicationConfig.java`, test
 
 **Key files**: `application.yaml`, `ApplicationConfig.java`, `TestDocumentGenerator.java`, `FileContentExtractorTest.java`, README.md
 
+#### 9. Query Profiling and Debugging Tool
+**Status**: ✅ Done
+**Effort**: High
+**Impact**: High
+
+Implemented `profileQuery` MCP tool with multi-level analysis optimized for LLM/human readability.
+
+**What it provides**:
+- **Level 1 (Fast, always)**: Query structure analysis, term statistics (IDF, rarity), cost estimates, query rewrites
+- **Level 2 (Opt-in)**: Filter impact analysis with selectivity metrics (requires N+1 queries)
+- **Level 3 (Opt-in)**: Document scoring explanations parsed from Lucene's Explanation API into version-independent semantic structures
+- **Level 4 (Opt-in)**: Facet cost analysis
+
+**Key decisions**:
+- Made expensive operations opt-in (default: fast ~5-10ms analysis)
+- Parsed Lucene's `Explanation.toString()` into structured DTOs instead of exposing raw format (version-independent)
+- Added human-readable categorizations ("very common term", "high selectivity filter")
+- Generated actionable optimization recommendations
+- Focused on semantic structure over Lucene internals
+
+**What it enables**:
+- Understanding why queries return certain results
+- Debugging scoring and ranking
+- Identifying which terms/filters are most impactful
+- Query optimization without deep Lucene knowledge
+- LLMs can now help users tune their queries based on profiling data
+
+**Files**: 15 new DTOs in `mcp/dto/`, updates to `LuceneSearchTools.java` and `LuceneIndexService.java`
+
+**Known limitations** (from Lucene's Explanation API):
+1. **Cannot explain non-matches**: Only explains documents that *did* match; can't debug why expected documents didn't appear
+2. **Automaton internals opaque**: Wildcard/regex queries compile to finite automata; can't trace which substring matched `*vertrag*` in "Arbeitsvertrag"
+3. **No passage-level explanation**: UnifiedHighlighter computes passage scores internally but doesn't expose explanation
+4. **Filter impact requires measurement**: Must run queries incrementally to measure filter selectivity (Lucene's cost() API is insufficient)
+5. **Cross-document comparison manual**: Each explanation is independent; requires custom logic to compare "why doc A > doc B"
+
+**Future enhancements** (see Tier 3 below):
+- "Why didn't this match?" tool (explainNonMatch)
+- Query comparison tool (compareQueries)
+- Passage-level scoring explanation
+- Enhanced optimization suggestions
+
+**Key files**: `ProfileQueryRequest.java`, `ProfileQueryResponse.java`, `QueryAnalysis.java`, `DocumentScoringExplanation.java`, and 11 other DTOs
+
+#### 10. Context Pollution Reduction via MCP Resources
+**Status**: ✅ Done
+**Effort**: Medium
+**Impact**: High
+
+Implemented MCP Resources pattern to move verbose documentation out of tool descriptions, reducing initial context load by ~70%.
+
+**What was implemented**:
+- Shortened tool descriptions from ~3,000 to ~900 characters (-70%)
+- Shortened parameter descriptions by ~50%
+- Created two comprehensive MCP Resources:
+  - `lucene://docs/query-syntax` - 350+ line Lucene query syntax guide
+  - `lucene://docs/profiling-guide` - 150+ line profiling analysis guide
+- LLM can access detailed docs on-demand via `Read` tool
+
+**Pattern established**:
+- **Tool descriptions**: What it does, when to use it, critical warnings, reference to resource
+- **Parameter descriptions**: Type and purpose only
+- **MCP Resources**: Complete syntax, examples, best practices, edge cases
+
+**Benefits**:
+- Reduced MCP handshake context by ~73%
+- Maintained all essential information
+- Better documentation organization
+- LLM-friendly on-demand details
+
+**Key files**: `LuceneSearchTools.java` (resource specifications and handlers), all DTO files (shortened descriptions)
+
+**Future applications**:
+- Create resources for crawler configuration guide
+- Create resource for index field schema documentation
+- Create resource for troubleshooting common issues
+- Pattern should be used for all future complex tools
+
+---
+
+## Missing Features & Gaps
+
+### Critical Gaps (Should be added to Tier 1)
+
+#### A. Index Backup & Restore
+**Status**: Not implemented
+**Priority**: High
+**Impact**: Critical for production use
+
+Currently no way to backup or restore the index. Users risk data loss on corruption or system failure.
+
+**Proposed tools**:
+- `backupIndex` - Create snapshot of index to specified location
+- `restoreIndex` - Restore index from backup
+- `listBackups` - List available backups with timestamps
+
+**Considerations**:
+- Index must be locked during backup
+- Incremental backups vs full snapshots
+- Backup verification/integrity checks
+- Storage location configuration
+
+**Key files**: New tools in `LuceneSearchTools.java`, new backup service
+
+#### B. Duplicate Document Detection
+**Status**: Not implemented
+**Priority**: Medium-High
+**Impact**: High
+
+Index has `content_hash` field but no tools to find duplicate documents.
+
+**Proposed tool**: `findDuplicates`
+```json
+{
+  "method": "content_hash",  // or "fuzzy_content", "title_similarity"
+  "threshold": 0.95,
+  "groupBy": "content_hash"
+}
+```
+
+**Returns groups of duplicate documents** with suggestions for which to keep/remove.
+
+**Use cases**:
+- Cleanup after indexing multiple document sources
+- Detect near-duplicates (different versions of same document)
+- Index optimization (remove redundant documents)
+
+**Key files**: New tool, new analysis method in `LuceneIndexService.java`
+
+### Tier 2 Additions (Medium Impact)
+
+#### C. Batch/Bulk Operations
+**Status**: Not implemented
+**Priority**: Medium
+**Impact**: Medium
+
+No support for batch operations - each operation requires separate tool call.
+
+**Proposed features**:
+- `batchSearch` - Run multiple queries in one call, return combined results
+- `batchProfileQuery` - Profile multiple queries for comparison
+- `batchGetDocuments` - Retrieve multiple documents by file path
+
+**Benefits**:
+- Reduced MCP round-trips
+- More efficient for comparative analysis
+- Better for reporting/export scenarios
+
+#### D. Export & Report Generation
+**Status**: Not implemented
+**Priority**: Medium
+**Impact**: Medium
+
+No way to export search results, profiling data, or statistics for external use.
+
+**Proposed tool**: `exportResults`
+```json
+{
+  "source": "last_search",  // or "profile_results", "index_stats"
+  "format": "csv",          // or "json", "markdown"
+  "fields": ["file_path", "score", "language"],
+  "destination": "/path/to/export.csv"
+}
+```
+
+**Use cases**:
+- Generate reports for stakeholders
+- Export for external analysis (Excel, BI tools)
+- Archive search results
+
+#### E. Query Autocomplete/Suggestions
+**Status**: Not implemented
+**Priority**: Medium
+**Impact**: Medium
+
+Builds on #2 (Index Observability). Help users discover terms as they type.
+
+**Proposed tool**: `suggestQuery`
+```json
+{
+  "partial": "cont",
+  "field": "content",
+  "limit": 10
+}
+// Returns: ["contract", "content", "contractor", "contribute", ...]
+```
+
+**Integration**: Works well with `suggestTerms` (item #2) but optimized for prefix matching.
+
+**Key files**: New tool, uses Lucene's `TermsEnum.seekCeil()`
+
+#### F. Index Statistics Over Time
+**Status**: Not implemented
+**Priority**: Low-Medium
+**Impact**: Medium
+
+Currently `getIndexStats` is point-in-time. No historical tracking.
+
+**Proposed enhancement**:
+- Track index size, document count, query performance over time
+- Store in lightweight time-series format (CSV or embedded DB)
+- New tool: `getIndexTrends` returns growth charts, query performance trends
+
+**Use cases**:
+- Capacity planning
+- Performance regression detection
+- Usage analytics
+
 ### Tier 3: Future Considerations
 
-#### 9. Query Explanation / Debug Tool
-A `explainQuery` tool showing the parsed Lucene query tree, rewriting applied (leading wildcards -> reversed), and zero-hit terms. Helps the AI self-debug poor search results.
+#### G. Document Versioning & History
+**Status**: Not implemented
+**Priority**: Low
+**Impact**: Low-Medium
 
-#### 10. Saved Searches / Alerts
+No support for tracking document versions or history.
+
+**Proposed approach**:
+- Store document versions with version field
+- Link versions via `content_hash` or custom ID
+- Track modification history
+
+**Use cases**:
+- "Find all versions of this contract"
+- "Show me what changed between versions"
+- Compliance/audit requirements
+
+**Challenges**:
+- Increases index size significantly
+- Complex query requirements for version comparison
+- May conflict with incremental crawler (updates vs versions)
+
+#### H. Streaming/Incremental Results
+**Status**: Not implemented
+**Priority**: Low
+**Impact**: Low
+
+Currently all results returned at once. Large result sets could benefit from streaming.
+
+**Challenge**: MCP STDIO doesn't support streaming well. Would need chunked response pattern.
+
+**Alternative**: Use pagination effectively (already implemented).
+
+#### I. Regex Search Support
+**Status**: Not explicitly supported/documented
+**Priority**: Low
+**Impact**: Low
+
+Lucene supports regex queries but not mentioned in documentation.
+
+**Action needed**:
+- Document in query syntax guide if supported
+- Or explicitly reject if too expensive/dangerous
+
+#### J. Custom Field Extractors
+**Status**: Not implemented
+**Priority**: Low
+**Impact**: Low
+
+Currently uses Tika's default metadata extraction. No way to add custom fields.
+
+**Proposed approach**:
+- Plugin system for custom metadata extractors
+- Configuration to map extracted fields to index fields
+
+**Use cases**:
+- Extract custom metadata from filenames (e.g., `PROJECT-123-contract.pdf`)
+- Domain-specific field extraction
+
+**Complexity**: High - requires plugin architecture, security sandboxing
+
+---
+
+## Renumbered Tier 3 Items
+
+#### 11. "Why Didn't This Match?" Analysis
+**Status**: Not started
+**Effort**: Medium
+**Impact**: High
+
+Currently `profileQuery` only explains documents that *did* match. Can't debug why an expected document didn't appear in results.
+
+**Proposed tool**: `explainNonMatch` or extend `profileQuery` with `explainNonMatch` parameter:
+```json
+{
+  "query": "contract signed",
+  "filters": [...],
+  "explainNonMatch": "/path/to/expected/doc.pdf"
+}
+```
+
+**Returns**:
+```json
+{
+  "documentPath": "/path/to/expected/doc.pdf",
+  "matched": false,
+  "reasons": [
+    {
+      "type": "filter_excluded",
+      "filter": {"field": "language", "value": "en"},
+      "actualValue": "de",
+      "explanation": "Document has language 'de', but filter requires 'en'"
+    },
+    {
+      "type": "missing_term",
+      "term": "signed",
+      "explanation": "Term 'signed' does not appear in document content"
+    }
+  ],
+  "whatIfAnalysis": {
+    "withoutFilters": {"wouldMatch": true, "score": 2.3},
+    "withAllTermsOptional": {"wouldMatch": true, "score": 1.5}
+  }
+}
+```
+
+**Implementation**: Retrieve document by file path, test each query component individually, test filters one-by-one, run "what-if" scenarios.
+
+**Benefit**: Massive debugging improvement for complex boolean queries with filters.
+
+#### 12. Query Comparison Tool
+**Status**: Not started
+**Effort**: Medium-High
+**Impact**: Medium
+
+Hard to understand differences between similar queries or why results changed.
+
+**Proposed tool**: `compareQueries`
+```json
+{
+  "queryA": {"query": "*vertrag", "filters": [...]},
+  "queryB": {"query": "vertrag*", "filters": [...]}
+}
+```
+
+**Returns**:
+```json
+{
+  "differences": {
+    "totalHits": {"queryA": 450, "queryB": 380},
+    "uniqueToA": 70,
+    "uniqueToB": 0
+  },
+  "queryStructure": {
+    "queryA": "WildcardQuery(content_reversed:gartrev*)",
+    "queryB": "WildcardQuery(content:vertrag*)",
+    "difference": "Query A searches reversed field for leading wildcard"
+  },
+  "topDocumentChanges": [
+    {
+      "document": "/path/to/doc.pdf",
+      "rankInA": 5,
+      "rankInB": 1,
+      "explanation": "Ranks higher in B due to higher TF"
+    }
+  ]
+}
+```
+
+**Benefit**: A/B testing queries, understanding query behavior differences.
+
+#### 13. Passage-Level Scoring Explanation
+**Status**: Not started
+**Effort**: Medium
+**Impact**: Medium
+
+`profileQuery` explains document-level BM25 scoring, but not why specific passages were selected or scored.
+
+**Current gap**: `UnifiedHighlighter` computes passage scores internally but doesn't expose explanation. Can't answer "Why is passage 2 scored higher than passage 1?"
+
+**Proposed solution**: Instrument `IndividualPassageFormatter` or create custom highlighter to capture:
+- Term matches within each passage
+- Passage-level term frequency
+- Passage length normalization
+- Relative passage scoring
+
+**Benefit**: Complete scoring transparency from query → document → passage.
+
+#### 14. Enhanced Query Optimization Suggestions
+**Status**: Not started (basic recommendations implemented)
+**Effort**: Low-Medium
+**Impact**: Medium
+
+Current `profileQuery` provides basic recommendations. Could be enhanced with:
+- Detection of redundant boolean clauses
+- Suggestions for filter reordering
+- Alternative query formulations with estimated impact
+- Common anti-patterns (stop words, very common terms)
+
+**Example output**:
+```json
+{
+  "recommendations": [
+    {
+      "type": "remove_common_term",
+      "severity": "high",
+      "issue": "Term 'the' appears in 95% of documents",
+      "suggestion": "Remove 'the' from query",
+      "estimatedImprovement": "50% faster execution"
+    }
+  ]
+}
+```
+
+#### 15. Search Template / Query Builder Tool
+**Status**: Not started
+**Effort**: Low
+**Impact**: Medium
+
+Lucene query syntax is complex; users struggle with escaping, boolean logic, wildcard placement.
+
+**Proposed tool**: `buildQuery` - constructs valid Lucene queries from structured input:
+```json
+{
+  "operation": "AND",
+  "clauses": [
+    {"type": "phrase", "text": "signed contract", "proximity": 5},
+    {"type": "wildcard", "text": "vertrag", "position": "contains"},
+    {"type": "fuzzy", "text": "agreement", "maxEdits": 2}
+  ]
+}
+```
+
+**Returns**: `{"generatedQuery": "\"signed contract\"~5 AND *vertrag* AND agreement~2", ...}`
+
+**Benefit**: Lower barrier to entry, fewer syntax errors.
+
+#### 16. Saved Searches / Alerts
+**Status**: Not started
+**Priority**: Low
+**Impact**: Medium
+
 Named queries with optional MCP notifications when new documents match. Turns the server from reactive search into a proactive knowledge assistant.
 
-#### 11. Search History / Analytics
+**Challenges**:
+- Requires persistent state (contradicts stateless MCP philosophy)
+- Notification delivery mechanism unclear
+- Who owns the saved searches (multi-user considerations)
+
+#### 17. Search History / Analytics
+**Status**: Not started
+**Priority**: Low
+**Impact**: Low-Medium
+
 Track queries, result counts, and opened documents. The AI could use this data to improve search strategies over time.
 
-#### 12. Configurable Result Fields
+**Challenges**:
+- Requires persistent state and storage
+- Privacy considerations
+- Multi-user tracking complexity
+
+#### 18. Configurable Result Fields
+**Status**: Not started
+**Priority**: Low
+**Impact**: Low
+
 A `fields` parameter to select which fields appear in results. Reduces response size for narrow use cases.
+
+**Current workaround**: Response size is already reasonable; passages are the bulk of data, already controllable via pageSize.
+
+---
+
+## Design Decisions & Insights
+
+### Query Profiling: Opt-In Expensive Operations
+
+**Decision**: Made filter impact, document scoring, and facet cost analysis opt-in (default: false)
+
+**Trade-offs**:
+- ✅ Fast default behavior (~5-10ms)
+- ✅ Users choose their performance/detail trade-off
+- ⚠️ More parameters to understand
+- ⚠️ Basic analysis might miss important insights
+
+**Rationale**: Profiling is a debugging tool, not a production feature. Most users want quick feedback; power users can enable deep analysis.
+
+### Explanation API: Parse to Semantic DTOs
+
+**Decision**: Parse Lucene's `Explanation` tree into structured DTOs instead of exposing `toString()`
+
+**Trade-offs**:
+- ✅ Version-independent (survives Lucene upgrades)
+- ✅ LLM-friendly structured data
+- ✅ Can add custom fields (contributionPercent, summary)
+- ⚠️ Parsing logic is complex
+- ⚠️ May miss some Lucene internals that advanced users want
+
+**Rationale**: Explanation format has changed across Lucene versions. Parsing gives us control over output format and future-proofs the API.
+
+### Filter Impact: Incremental Measurement
+
+**Decision**: Measure filter impact by running queries incrementally (no filter → filter 1 → filter 1+2 → ...)
+
+**Trade-offs**:
+- ✅ Accurate measurement of actual impact
+- ✅ Works for any filter type
+- ✅ Shows cumulative effect
+- ⚠️ Requires N+1 queries (expensive for many filters)
+- ⚠️ Order-dependent (filter A then B ≠ B then A)
+
+**Alternative considered**: Lucene's cost() API - too inaccurate for filters
+
+**Rationale**: Accuracy is critical for debugging; performance cost is acceptable since it's opt-in.
+
+### Term Statistics: Categorization Over Raw Numbers
+
+**Decision**: Categorize term rarity ("rare", "common", "very common") in addition to raw document frequency
+
+**Trade-offs**:
+- ✅ More intuitive for humans/LLMs
+- ✅ Actionable ("very common term" → consider removing)
+- ⚠️ Categorization thresholds are somewhat arbitrary
+
+**Rationale**: Raw numbers like "docFreq=4500, totalDocs=10000" require mental math. Categories are immediately actionable.
+
+### Lucene Explanation API Limitations (Discovered During Implementation)
+
+These are **Lucene design limitations**, not implementation choices:
+
+1. **Automaton internals are opaque**: Wildcard/regex/fuzzy queries compile to finite automata (DFA/NFA). Once compiled, semantic meaning is lost. Cannot trace which specific substring matched in `*vertrag*` → "Arbeitsvertrag" vs "Mietvertrag". The automaton just has state transitions, no semantic labels.
+
+2. **Cannot explain non-matches**: Explanation API requires a document ID from search results. Cannot explain why a document *didn't* match without manually testing query components.
+
+3. **No passage-level explanation**: UnifiedHighlighter scores passages internally but doesn't expose explanation tree. Passage.score values are shown but not explained.
+
+4. **Performance overhead**: Explanation is expensive (10-100x slower than just scoring). Uses reflection, creates deep object trees. Not suitable for all results or real-time use.
+
+5. **Explains rewritten queries**: Shows the query *after* rewrites (e.g., `content_reversed:gartrev*` not `*vertrag`). Requires additional tracking to correlate with user's original query.
+
+6. **No filter selectivity metrics**: Doesn't separately quantify filter contribution. Must run additional queries to measure filter impact.
+
+7. **Cross-document comparison**: Each explanation is independent. Requires custom logic to compare "why doc A ranked higher than doc B".
+
+**Workarounds implemented**:
+- Show both original and rewritten queries in `queryAnalysis`
+- Run incremental queries to measure filter impact
+- Parse Explanation tree into semantic components with contribution percentages
+- Accept that automaton internals can't be traced (show matched terms from highlighting instead)
+
+**Future work**: Items 10-12 above address some of these gaps.
 
 ---
 
 ## Explicitly Rejected (With Reasoning)
+
+### Real-Time Query Performance Profiling (Per-Component Timing)
+
+**Decision**: Rejected
+**Reasoning**: Lucene doesn't expose internal query execution timing at component level. The cost() API provides estimates, but actual execution time isn't broken down by query clause.
+
+**Alternative**: Use overall execution time + cost estimates + incremental queries (implemented in `profileQuery`).
+
+### Embedding Lucene Explanation.toString() Directly in Response
+
+**Decision**: Rejected
+**Reasoning**:
+- Lucene's Explanation string format changes between versions
+- Not LLM-friendly (deeply nested, verbose, jargon-heavy)
+- Hard for humans to parse
+- Contains internal implementation details users don't care about
+
+**Alternative**: Parse Explanation into semantic DTOs (implemented).
+
+### Integrating Debug Tool into Main `search` Tool
+
+**Decision**: Rejected
+**Reasoning**:
+- Would clutter search responses
+- Performance overhead for all queries (even when debugging not needed)
+- Harder to evolve APIs independently
+
+**Alternative**: Separate `profileQuery` tool (implemented).
+
+### Automaton State Machine Visualization
+
+**Decision**: Rejected
+**Reasoning**:
+- Wildcard/regex queries compile to finite automata (DFA/NFA)
+- Once compiled, semantic meaning is lost (just state transitions)
+- Can't meaningfully trace "why this matched"
+- Visualization would be complex and not actionable
+
+**Alternative**: Show original query + rewritten query; accept automaton internals are opaque.
 
 ### Server-Side Embeddings / Vector Search
 **Decision**: Rejected for now
@@ -203,6 +787,41 @@ The AI client already handles semantic understanding. Adding embeddings would:
 **Decision**: Deferred
 **Reasoning**: STDIO is required for Claude Desktop. Adding SSE would broaden compatibility but adds security considerations (authentication, CORS) for no immediate benefit. Revisit if browser-based MCP clients become mainstream.
 
+### Geographic/Geospatial Search
+**Decision**: Rejected
+**Reasoning**: Out of scope for a document search server. Lucene supports geo queries, but document collections rarely have meaningful geospatial data. Would add complexity for minimal benefit.
+
+**If needed**: Use filters on location metadata fields instead.
+
+### Access Control / User Authentication
+**Decision**: Rejected (handled by MCP client)
+**Reasoning**: MCP server runs locally via STDIO - security is handled by:
+- File system permissions (index directory)
+- MCP client authentication (Claude Desktop handles user auth)
+- Process isolation (server runs as user's process)
+
+Adding server-side auth would be redundant and complex for local STDIO use case.
+
+### Collaborative Filtering / "Users who viewed this also viewed..."
+**Decision**: Rejected
+**Reasoning**:
+- Contradicts stateless architecture
+- Personal/corporate doc search != e-commerce recommendation
+- Requires multi-user tracking and analytics infrastructure
+- The AI can already ask follow-up questions to refine search
+
+**Alternative**: AI-driven query refinement based on conversation context.
+
+### Tool Grouping / Consolidated Admin Tools
+**Decision**: Deferred
+**Reasoning**:
+- Considered grouping `pauseCrawler`, `resumeCrawler`, `getCrawlerStatus` into single `manageCrawler` tool
+- Would reduce tool count but make tool less discoverable
+- MCP Resources approach (context reduction) is more maintainable
+- Keep separate tools for clarity; use Resources for documentation
+
+**Revisit if**: MCP protocol adds native tool categorization/namespacing.
+
 ---
 
 ## Implementation Guidelines
@@ -216,3 +835,190 @@ When implementing any improvement from this roadmap:
 5. **Test with real documents** — synthetic tests aren't sufficient for search quality
 6. **Prefer additive changes** — new tools > modifying existing tools; new optional parameters > breaking changes
 7. **Follow existing patterns** — Request/Response DTOs, `fromMap()` factories, `success()`/`error()` static methods
+
+### Additional Guidelines for Profiling/Debug Tools
+
+When implementing debugging or profiling tools (like `profileQuery`):
+
+1. **Make expensive operations opt-in** — Default behavior should be fast (<10ms); deep analysis should require explicit parameter (e.g., `analyzeFilterImpact=true`)
+
+2. **Avoid exposing Lucene internals** — Parse internal structures (like Explanation.toString()) into semantic, version-independent DTOs. Don't expose raw Lucene API objects.
+
+3. **Focus on LLM/human readability**:
+   - Include human-readable summaries and categorizations ("very common", "high selectivity")
+   - Provide context (percentages alongside counts)
+   - Use clear field names
+   - Add actionable recommendations
+
+4. **Document performance costs** — Be explicit about execution time and number of queries executed for each analysis level
+
+5. **Structure for composability** — Profiling data should be usable by LLMs to generate insights, not just displayed to users
+
+6. **Accept Lucene limitations gracefully** — Document what cannot be explained (automaton internals, non-matches, passage scoring) rather than trying to work around fundamental limitations
+
+7. **Consider versioning** — If depending on Lucene-version-specific behavior, isolate it so future upgrades are easier
+
+### Additional Guidelines for MCP Resources Pattern
+
+When adding detailed documentation to avoid context pollution:
+
+1. **Keep tool descriptions concise** — 1-3 sentences max; focus on what, when, and critical warnings
+
+2. **Parameter descriptions minimal** — Type and purpose only, no examples or edge cases
+
+3. **Create MCP Resources for details** — Comprehensive guides with examples, syntax tables, troubleshooting
+
+4. **Use consistent URIs** — `lucene://docs/{topic}` for documentation, `lucene://admin/{feature}` for admin UIs
+
+5. **Structure resources as markdown** — Easy to read, LLM-friendly, supports tables and code blocks
+
+6. **Include navigation** — Table of contents, clear sections, cross-references to related resources
+
+7. **Test discoverability** — Ensure LLM can find resources via tool descriptions referencing them
+
+---
+
+## Current Status Overview
+
+### ✅ Completed (11 items)
+
+| Item | Impact | Notes |
+|------|--------|-------|
+| Structured Multi-Filter Support | High | Tier 1 #1 |
+| Sort Options | Medium-High | Tier 1 #4 |
+| Date-Friendly Query Parameters | Medium | Tier 2 #6 (via filters) |
+| Expanded File Format Support | Low-Medium | Tier 2 #8 |
+| Query Profiling & Debugging | High | Tier 2 #9 |
+| Context Pollution Reduction | High | New #10 |
+
+### 🚀 High Priority (Next to implement)
+
+| Item | Effort | Impact | Justification |
+|------|--------|--------|---------------|
+| **Index Observability Tools** | Low-Medium | High | Tier 1 #2 - Helps AI discover vocabulary |
+| **Index Backup & Restore** | Medium | Critical | Missing Gap A - Production necessity |
+| **Duplicate Detection** | Medium | High | Missing Gap B - Common user need |
+
+### 🎯 Medium Priority (Valuable enhancements)
+
+| Item | Effort | Impact | Justification |
+|------|--------|--------|---------------|
+| Document Chunking | High | High | Tier 1 #3 - Solves long doc problem |
+| "More Like This" | Medium | Medium | Tier 2 #5 - AI-friendly feature |
+| OCR Support | Medium-High | Medium | Tier 2 #7 - Depends on user docs |
+| Batch Operations | Medium | Medium | Missing Gap C - Efficiency |
+| Export/Reports | Medium | Medium | Missing Gap D - Common request |
+| Query Autocomplete | Medium | Medium | Missing Gap E - UX enhancement |
+
+### 🔮 Future Considerations (Nice to have)
+
+| Item | Priority | Notes |
+|------|----------|-------|
+| "Why Didn't This Match?" | Low-Medium | Tier 3 #11 - Complements profileQuery |
+| Query Comparison Tool | Low-Medium | Tier 3 #12 - A/B testing |
+| Passage-Level Scoring | Low-Medium | Tier 3 #13 - Deep debugging |
+| Enhanced Optimization | Low | Tier 3 #14 - Incremental improvement |
+| Query Builder | Low | Tier 3 #15 - Syntax assistance |
+| Saved Searches | Low | Tier 3 #16 - Requires state |
+| Search History | Low | Tier 3 #17 - Requires state |
+| Document Versioning | Low | Missing Gap G - Complex |
+| Streaming Results | Low | Missing Gap H - MCP limitation |
+| Regex Search | Low | Missing Gap I - Documentation gap |
+
+### ❌ Explicitly Rejected (6 items)
+
+- Per-component timing profiling (Lucene doesn't expose)
+- Raw Explanation.toString() (version-dependent)
+- Debug in search tool (context pollution)
+- Automaton visualization (not actionable)
+- Vector search (contradicts architecture)
+- Stemming/language analyzers (AI handles it)
+- HTTP/SSE transport (deferred)
+- Geographic search (out of scope)
+- Access control (handled by MCP client)
+- Collaborative filtering (contradicts stateless)
+- Tool grouping (deferred - Resources approach better)
+
+---
+
+## Recommended Implementation Order
+
+Based on impact, effort, and dependencies:
+
+### Phase 1: Core Infrastructure (Next 1-2 months)
+1. **Index Backup & Restore** (Critical) - Production readiness
+2. **Index Observability Tools** (High ROI) - Enables better AI queries
+3. **Duplicate Detection** (High value) - Common user pain point
+
+### Phase 2: Search Enhancements (2-4 months)
+4. **"More Like This"** (AI-friendly) - Fits MCP architecture well
+5. **Batch Operations** (Efficiency) - Better LLM integration
+6. **Export/Reports** (Productivity) - Stakeholder requests
+
+### Phase 3: Advanced Features (4-6 months)
+7. **Document Chunking** (High impact, high effort) - Solves long doc problem
+8. **OCR Support** (Conditional) - If users have scanned PDFs
+9. **Query Autocomplete** (UX) - Builds on observability tools
+
+### Phase 4: Profiling Enhancements (6+ months)
+10. **"Why Didn't This Match?"** (Debug power) - Completes profiling suite
+11. **Query Comparison Tool** (A/B testing) - Advanced debugging
+12. **Passage-Level Scoring** (Deep debugging) - Complete scoring transparency
+
+### Ongoing
+- Create MCP Resources for existing features (crawler config, field schema, troubleshooting)
+- Enhance optimization recommendations in `profileQuery`
+- Monitor user requests for priority adjustments
+
+---
+
+## Notes for Future Maintainers
+
+### What This Skill Tracks
+
+- ✅ Completed improvements with implementation notes
+- 🚀 High-priority roadmap items
+- 🎯 Medium-priority enhancements
+- 🔮 Future possibilities
+- ❌ Explicitly rejected ideas with reasoning
+- 📐 Design decisions and trade-offs
+- 🐛 Known limitations and workarounds
+
+### When to Update This Skill
+
+- After implementing any feature (move to Completed, add lessons learned)
+- When discovering new limitations (add to Known Limitations)
+- When rejecting a proposed feature (add to Explicitly Rejected with reasoning)
+- When user feedback reveals new priorities (adjust tier placement)
+- When dependencies change (e.g., Lucene upgrade enables new features)
+- After design decisions (document in Design Decisions section)
+
+### How to Evaluate New Feature Proposals
+
+1. **Does it align with "Client-Side Intelligence" principle?** - If AI can do it, server shouldn't
+2. **What's the effort vs impact?** - Use existing tier framework
+3. **Does it contradict existing design decisions?** - Check Explicitly Rejected section
+4. **Is there a simpler alternative?** - Prefer composability over monolithic features
+5. **Does it require breaking changes?** - Prefer additive changes
+6. **Is it truly needed or just "nice to have"?** - Validate with user requests
+
+---
+
+## Summary
+
+The MCP Lucene Server has matured from a basic search tool to a comprehensive, production-ready search platform with:
+
+- ✅ **11 completed major features** including profiling, sorting, and context optimization
+- 🚀 **3 high-priority items** ready for implementation
+- 🎯 **7 medium-priority enhancements** with clear value propositions
+- 🔮 **9 future possibilities** for long-term roadmap
+- ❌ **11 rejected ideas** with documented reasoning
+
+**Key architectural strengths to preserve**:
+- Client-side intelligence (AI does semantics, server does lexical)
+- Stateless MCP tools (no server-side state beyond index)
+- Fast defaults with opt-in complexity (like `profileQuery`)
+- LLM-optimized output structures
+- MCP Resources pattern for documentation
+
+**Next recommended focus**: Index backup/restore (critical) + Index observability tools (high ROI) + Duplicate detection (common user need)

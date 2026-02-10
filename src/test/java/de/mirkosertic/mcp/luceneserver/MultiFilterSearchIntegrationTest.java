@@ -114,7 +114,7 @@ class MultiFilterSearchIntegrationTest {
             assertThatThrownBy(() -> indexService.search(
                     "hello",
                     List.of(new SearchFilter("language", "foo", "en", null, null, null, null)),
-                    0, 10))
+                    0, 10, "_score", "desc"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Unknown filter operator");
         }
@@ -127,7 +127,7 @@ class MultiFilterSearchIntegrationTest {
             assertThatThrownBy(() -> indexService.search(
                     "hello",
                     List.of(new SearchFilter("content", "eq", "test", null, null, null, null)),
-                    0, 10))
+                    0, 10, "_score", "desc"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Cannot filter on analyzed field");
         }
@@ -140,7 +140,7 @@ class MultiFilterSearchIntegrationTest {
             assertThatThrownBy(() -> indexService.search(
                     "hello",
                     List.of(new SearchFilter("language", "range", null, null, "a", "z", null)),
-                    0, 10))
+                    0, 10, "_score", "desc"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Range filter is only supported on numeric");
         }
@@ -153,7 +153,7 @@ class MultiFilterSearchIntegrationTest {
             assertThatThrownBy(() -> indexService.search(
                     "hello",
                     List.of(new SearchFilter("language", "eq", null, null, null, null, null)),
-                    0, 10))
+                    0, 10, "_score", "desc"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("requires 'value'");
         }
@@ -166,7 +166,7 @@ class MultiFilterSearchIntegrationTest {
             assertThatThrownBy(() -> indexService.search(
                     "hello",
                     List.of(new SearchFilter("language", "in", null, null, null, null, null)),
-                    0, 10))
+                    0, 10, "_score", "desc"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("requires 'values'");
         }
@@ -179,7 +179,7 @@ class MultiFilterSearchIntegrationTest {
             assertThatThrownBy(() -> indexService.search(
                     "hello",
                     List.of(new SearchFilter("file_size", "range", null, null, null, null, null)),
-                    0, 10))
+                    0, 10, "_score", "desc"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("requires at least 'from' or 'to'");
         }
@@ -200,7 +200,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "eq", "en", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
             assertThat(result.documents().getFirst().language()).isEqualTo("en");
@@ -218,7 +218,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("file_extension", "eq", "txt", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
             assertThat(result.documents().getFirst().fileExtension()).isEqualTo("txt");
@@ -232,7 +232,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "eq", "fr", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(0);
             assertThat(result.documents()).isEmpty();
@@ -266,7 +266,7 @@ class MultiFilterSearchIntegrationTest {
                             new SearchFilter("language", "eq", "en", null, null, null, null),
                             new SearchFilter("file_extension", "eq", "txt", null, null, null, null)
                     ),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
             assertThat(result.documents().getFirst().language()).isEqualTo("en");
@@ -283,7 +283,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "in", null, List.of("en", "de"), null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(2);
         }
@@ -305,7 +305,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "not", "fr", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(2);
             assertThat(result.documents())
@@ -322,7 +322,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "not_in", null, List.of("de", "fr"), null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
             assertThat(result.documents().getFirst().language()).isEqualTo("en");
@@ -344,7 +344,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("modified_date", "range", null, null, "2020-01-01", "2030-12-31", null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
         }
@@ -358,7 +358,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("modified_date", "range", null, null, "2000-01-01", "2001-12-31", null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(0);
         }
@@ -375,7 +375,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("file_size", "range", null, null, "1000", null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
         }
@@ -396,7 +396,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "eq", "en", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
             assertThat(result.documents().getFirst().language()).isEqualTo("en");
@@ -411,7 +411,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     "",
                     List.of(new SearchFilter("language", "eq", "de", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
             assertThat(result.documents().getFirst().language()).isEqualTo("de");
@@ -423,7 +423,7 @@ class MultiFilterSearchIntegrationTest {
             indexDocumentWithMetadata("doc1.txt", "First document", "en", null);
             indexDocumentWithMetadata("doc2.txt", "Second document", "de", null);
 
-            final var result = indexService.search(null, List.of(), 0, 10);
+            final var result = indexService.search(null, List.of(), 0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(2);
         }
@@ -445,7 +445,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "eq", "en", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.activeFilters()).hasSize(1);
             final ActiveFilter af = result.activeFilters().getFirst();
@@ -463,7 +463,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "eq", "en", null, null, null, "2024-01-01T12:00:00Z")),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.activeFilters()).hasSize(1);
             assertThat(result.activeFilters().getFirst().addedAt()).isEqualTo("2024-01-01T12:00:00Z");
@@ -474,7 +474,7 @@ class MultiFilterSearchIntegrationTest {
         void shouldReturnEmptyActiveFilters() throws Exception {
             indexDocumentWithMetadata("doc.txt", "Test document content", "en", null);
 
-            final var result = indexService.search(null, List.of(), 0, 10);
+            final var result = indexService.search(null, List.of(), 0, 10, "_score", "desc");
 
             assertThat(result.activeFilters()).isEmpty();
         }
@@ -498,7 +498,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     null,
                     List.of(new SearchFilter("language", "eq", "en", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(2);
 
@@ -608,7 +608,7 @@ class MultiFilterSearchIntegrationTest {
                             new SearchFilter("language", "eq", "en", null, null, null, null),
                             new SearchFilter("file_size", "range", null, null, "0", null, null)
                     ),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(2);
             assertThat(result.documents())
@@ -625,7 +625,7 @@ class MultiFilterSearchIntegrationTest {
             final var result = indexService.search(
                     "contracts",
                     List.of(new SearchFilter("language", "eq", "en", null, null, null, null)),
-                    0, 10);
+                    0, 10, "_score", "desc");
 
             assertThat(result.totalHits()).isEqualTo(1);
             assertThat(result.documents().getFirst().language()).isEqualTo("en");
