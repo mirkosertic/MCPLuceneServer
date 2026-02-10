@@ -33,7 +33,7 @@
 		<mcp.sdk.version>0.17.2</mcp.sdk.version>
 		<lucene.version>10.3.2</lucene.version>
 		<tika.version>3.2.3</tika.version>
-		<logback.version>1.5.26</logback.version>
+		<logback.version>1.5.29</logback.version>
 		<slf4j.version>2.0.17</slf4j.version>
 		<snakeyaml.version>2.3</snakeyaml.version>
 		<jackson.version>2.21.0</jackson.version>
