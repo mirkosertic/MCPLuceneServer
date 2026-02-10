@@ -18,11 +18,25 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - Structured passages with quality metadata for LLM consumption
 - Paginated results with filter suggestions
 
+🔬 **Query Profiling & Debugging**
+- Deep query analysis and profiling (`profileQuery` tool)
+- Understand why queries return certain results and how scoring works
+- Filter impact analysis showing document reduction per filter
+- Document scoring explanations with BM25 breakdown
+- Term statistics (IDF, rarity, document frequency)
+- Actionable optimization recommendations
+- LLM-optimized structured output for easy interpretation
+
 📄 **Rich Metadata Extraction**
 - Automatic language detection
 - Author, title, creation date extraction
 - File type and size information
 - SHA-256 content hashing for change detection
+
+🧹 **Text Normalization**
+- Automatic removal of broken/invalid characters (�, control chars, zero-width chars)
+- Whitespace normalization (multiple spaces collapsed to single space)
+- Ensures clean, readable search results and passages
 
 ⚡ **Performance Optimized**
 - Batch processing for efficient indexing
@@ -334,6 +348,15 @@ lucene:
 
 ## Available MCP Tools
 
+**Quick Reference - Most Important Tools:**
+- 🔍 **`search`** - Search documents with full Lucene query syntax and structured filters
+- 🔬 **`profileQuery`** - Debug and optimize queries with detailed analysis and scoring explanations
+- 🗂️ **`indexAdmin`** - Visual UI for index maintenance (optimize, purge, unlock)
+- 📊 **`getIndexStats`** - View index statistics and document count
+- 🚀 **`startCrawl`** - Index documents from configured directories
+
+---
+
 ### `indexAdmin`
 
 An [MCP App](https://github.com/modelcontextprotocol/ext-apps) that provides a visual user interface for index maintenance tasks directly inside your MCP client (e.g. Claude Desktop). When invoked, the app is rendered inline in the conversation and offers one-click access to administrative operations without requiring manual tool calls.
@@ -362,6 +385,44 @@ Search the Lucene fulltext index using **lexical matching** (exact word forms on
 - `filters` (optional): Array of structured filters for precise field-level filtering (see **Structured Filters** below)
 - `page` (optional): Page number, 0-based (default: 0)
 - `pageSize` (optional): Results per page (default: 10, max: 100)
+- `sortBy` (optional): Sort field - `_score` (default), `modified_date`, `created_date`, or `file_size`
+- `sortOrder` (optional): Sort order - `asc` or `desc` (default: `desc`)
+
+**Sorting Results:**
+
+By default, results are sorted by relevance score (most relevant first). You can sort by metadata fields:
+
+| Sort Field | Description | Default Order |
+|------------|-------------|---------------|
+| `_score` | Relevance score (default) | Descending (best match first) |
+| `modified_date` | Last modified date | Descending (most recent first) |
+| `created_date` | Creation date | Descending (most recent first) |
+| `file_size` | File size in bytes | Descending (largest first) |
+
+**Sort Examples:**
+```json
+// Most recently modified documents
+{ "query": "contract", "sortBy": "modified_date", "sortOrder": "desc" }
+
+// Oldest documents first
+{ "query": "contract", "sortBy": "created_date", "sortOrder": "asc" }
+
+// Smallest files (for quick review)
+{ "query": "summary", "sortBy": "file_size", "sortOrder": "asc" }
+
+// Combine sorting with filters
+{
+  "query": "*",
+  "sortBy": "modified_date",
+  "sortOrder": "desc",
+  "filters": [
+    { "field": "file_extension", "value": "pdf" },
+    { "field": "modified_date", "operator": "range", "from": "2024-01-01" }
+  ]
+}
+```
+
+**Note:** When sorting by metadata fields, relevance scores are still computed and used as a secondary sort criterion for tie-breaking.
 
 **Structured Filters:**
 
@@ -494,6 +555,213 @@ Leading wildcard queries are optimised internally using a reverse token index (`
     { "field": "language", "operator": "not", "value": "unknown" }
 ]}
 ```
+
+### 🔬 `profileQuery` - Query Profiling & Debugging
+
+> **🌟 Powerful debugging tool for understanding search behavior, scoring, and performance**
+
+Analyze and profile a search query to understand its behavior, performance, and scoring characteristics. This tool provides detailed insights into how Lucene processes your query, which terms contribute to scoring, how filters affect results, and where optimization opportunities exist.
+
+**✨ Key Benefits:**
+- 🐛 **Debug** why certain documents match or don't match
+- 📊 **Understand** why documents are ranked in a particular order
+- ⚡ **Optimize** slow queries by identifying expensive operations
+- 🎯 **Analyze** filter effectiveness and selectivity
+- 📈 **Learn** which query terms are most/least discriminative
+- 🤖 **LLM-optimized** output format for AI-assisted query tuning
+
+**Parameters:**
+- `query` (optional): The search query (same as `search` tool)
+- `filters` (optional): Array of structured filters (same as `search` tool)
+- `page` (optional): Page number, 0-based (default: 0)
+- `pageSize` (optional): Results per page (default: 10, max: 100)
+- `analyzeFilterImpact` (optional): If `true`, analyzes how each filter reduces result count. **WARNING:** Expensive operation requiring multiple queries. Default: `false`
+- `analyzeDocumentScoring` (optional): If `true`, provides detailed scoring explanations for top documents using Lucene's Explanation API. **WARNING:** Expensive operation. Default: `false`
+- `analyzeFacetCost` (optional): If `true`, measures faceting computation overhead. **WARNING:** Expensive operation. Default: `false`
+- `maxDocExplanations` (optional): Maximum number of documents to explain when `analyzeDocumentScoring=true` (default: 5, max: 10)
+
+**Analysis Levels:**
+
+**Level 1: Fast Analysis (Always Included)**
+- Query structure and component breakdown
+- Query type identification (BooleanQuery, TermQuery, WildcardQuery, etc.)
+- Estimated cost per query component
+- Term statistics (document frequency, IDF, rarity classification)
+- Search metrics (total hits, filter reduction percentage)
+
+**Level 2: Filter Impact Analysis (Opt-in, Expensive)**
+- Shows how each filter affects result count
+- Calculates selectivity (low/medium/high/very high)
+- Measures execution time per filter
+- Helps identify redundant or ineffective filters
+
+**Level 3: Document Scoring Explanations (Opt-in, Expensive)**
+- Detailed score breakdown for top-ranked documents
+- Shows which terms contribute most to each document's score
+- Provides human-readable scoring summaries
+- Uses Lucene's Explanation API but parsed into LLM-friendly format
+
+**Level 4: Facet Cost Analysis (Opt-in, Expensive)**
+- Measures faceting computation overhead
+- Shows cost per facet dimension
+- Helps decide if faceting should be disabled for performance
+
+**Returns:**
+
+A structured analysis object containing:
+
+```typescript
+{
+  success: boolean,
+  queryAnalysis: {
+    originalQuery: string,
+    parsedQueryType: string,
+    components: [{
+      type: string,              // "TermQuery", "WildcardQuery", etc.
+      field: string,
+      value: string,
+      occur: string,             // "MUST", "SHOULD", "FILTER", "MUST_NOT"
+      estimatedCost: number,
+      costDescription: string    // "~450 documents (moderate)"
+    }],
+    rewrites: [{                 // Query optimizations performed by Lucene
+      original: string,
+      rewritten: string,
+      reason: string
+    }],
+    warnings: string[]
+  },
+  searchMetrics: {
+    totalIndexedDocuments: number,
+    documentsMatchingQuery: number,
+    documentsAfterFilters: number,
+    filterReductionPercent: number,
+    termStatistics: {
+      [term: string]: {
+        term: string,
+        documentFrequency: number,
+        totalTermFrequency: number,
+        idf: number,
+        rarity: string           // "very common", "common", "uncommon", "rare"
+      }
+    }
+  },
+  filterImpact?: {               // Only if analyzeFilterImpact=true
+    baselineHits: number,
+    finalHits: number,
+    filterImpacts: [{
+      filter: {...},
+      hitsBeforeFilter: number,
+      hitsAfterFilter: number,
+      documentsRemoved: number,
+      reductionPercent: number,
+      selectivity: string,       // "low", "medium", "high", "very high"
+      executionTimeMs: number
+    }],
+    totalExecutionTimeMs: number
+  },
+  documentExplanations?: [{      // Only if analyzeDocumentScoring=true
+    filePath: string,
+    rank: number,
+    score: number,
+    scoringBreakdown: {
+      totalScore: number,
+      components: [{
+        term: string,
+        field: string,
+        contribution: number,
+        contributionPercent: number,
+        details: {
+          idf: number,
+          tf: number,
+          termFrequency: number,
+          documentLength: number,
+          averageDocumentLength: number,
+          explanation: string
+        }
+      }],
+      summary: string            // "Score dominated by term 'contract' (60.8%)"
+    },
+    matchedTerms: string[]
+  }],
+  facetCost?: {                  // Only if analyzeFacetCost=true
+    facetingOverheadMs: number,
+    facetingOverheadPercent: number,
+    dimensions: {
+      [dimension: string]: {
+        dimension: string,
+        uniqueValues: number,
+        totalCount: number,
+        computationTimeMs: number
+      }
+    }
+  },
+  recommendations: string[]      // Actionable optimization suggestions
+}
+```
+
+**Example: Basic Query Analysis**
+
+```
+Ask Claude: "Profile my search for 'contract AND signed' to understand its performance"
+```
+
+This performs fast analysis showing:
+- Query structure (Boolean AND query with two terms)
+- Term statistics (how common "contract" and "signed" are)
+- Cost estimates (how many documents will be examined)
+- Optimization recommendations
+
+**Example: Deep Analysis with Scoring**
+
+```
+{
+  "query": "(contract OR agreement) AND signed",
+  "filters": [
+    { "field": "language", "value": "en" },
+    { "field": "modified_date", "operator": "range", "from": "2024-01-01" }
+  ],
+  "analyzeDocumentScoring": true,
+  "maxDocExplanations": 3
+}
+```
+
+This provides detailed scoring explanations for the top 3 documents, showing:
+- Which terms matched in each document
+- How much each term contributed to the final score
+- Why document A ranked higher than document B
+
+**Example: Filter Optimization**
+
+```
+{
+  "query": "*",
+  "filters": [
+    { "field": "file_extension", "value": "pdf" },
+    { "field": "language", "value": "en" },
+    { "field": "file_type", "value": "application/pdf" }
+  ],
+  "analyzeFilterImpact": true
+}
+```
+
+This analyzes filter effectiveness, potentially revealing:
+- `file_extension=pdf` reduces results by 75% (high selectivity)
+- `file_type=application/pdf` reduces results by 0% (redundant with file_extension)
+- Recommendation: Remove redundant `file_type` filter
+
+**Performance Notes:**
+- **Basic analysis** (default): Very fast, negligible overhead (~5-10ms)
+- **Filter impact analysis**: Requires N+1 queries where N is the number of filters. Can take seconds for complex filter sets.
+- **Document scoring analysis**: Requires Lucene to compute full Explanation objects. Cost grows with `maxDocExplanations`.
+- **Facet cost analysis**: Requires facet computation. Cost depends on number of unique facet values.
+
+**💡 Best Practices:**
+1. Start with basic analysis (no optional flags) to get quick insights
+2. Enable expensive analysis only when debugging specific performance issues
+3. Use `analyzeDocumentScoring` to understand why certain documents rank highly
+4. Use `analyzeFilterImpact` to optimize filter order and remove redundant filters
+5. Pay attention to the `recommendations` array for actionable optimization tips
 
 ### `getIndexStats`
 

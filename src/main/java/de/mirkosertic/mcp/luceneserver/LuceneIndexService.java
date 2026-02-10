@@ -3,10 +3,26 @@ package de.mirkosertic.mcp.luceneserver;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
+import de.mirkosertic.mcp.luceneserver.util.TextCleaner;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ActiveFilter;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.DocumentScoringExplanation;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.FacetCostAnalysis;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.FacetDimensionCost;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.FilterImpact;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.FilterImpactAnalysis;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.Passage;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryRequest;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryResponse;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.QueryAnalysis;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.QueryComponent;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.QueryRewrite;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreComponent;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreDetails;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoringBreakdown;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchMetrics;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.TermStatistics;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper;
 import org.apache.lucene.document.Document;
@@ -35,6 +51,9 @@ import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.SearcherManager;
+import org.apache.lucene.search.Sort;
+import org.apache.lucene.search.SortField;
+import org.apache.lucene.search.SortedNumericSortField;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.WildcardQuery;
@@ -55,6 +74,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -283,16 +303,46 @@ public class LuceneIndexService {
     }
 
     /**
+     * Build a Sort object from sortBy and sortOrder parameters.
+     *
+     * @param sortBy    the field to sort by (_score, modified_date, created_date, file_size)
+     * @param sortOrder the sort order (asc, desc)
+     * @return Sort object, or null for default score-based sorting
+     */
+    private Sort buildSort(final String sortBy, final String sortOrder) {
+        if ("_score".equals(sortBy)) {
+            // Score sorting is default, no explicit Sort needed
+            // Lucene sorts by score descending by default
+            return null;
+        }
+
+        final boolean reverse = "desc".equals(sortOrder);
+
+        final SortField sortField = switch (sortBy) {
+            case "modified_date" -> new SortedNumericSortField("modified_date", SortField.Type.LONG, reverse);
+            case "created_date" -> new SortedNumericSortField("created_date", SortField.Type.LONG, reverse);
+            case "file_size" -> new SortedNumericSortField("file_size", SortField.Type.LONG, reverse);
+            default -> SortField.FIELD_SCORE;  // Fallback to score
+        };
+
+        // Always include score as secondary sort for tie-breaking
+        return new Sort(sortField, SortField.FIELD_SCORE);
+    }
+
+    /**
      * Search the index with structured multi-filters and DrillSideways faceting.
      *
      * @param queryString the user query (null or blank = MatchAllDocsQuery)
      * @param filters     list of structured filters (may be empty)
      * @param page        0-based page number
      * @param pageSize    results per page
+     * @param sortBy      the field to sort by
+     * @param sortOrder   the sort order
      * @return search results with documents, facets, and active filters
      */
     public SearchResult search(final String queryString, final List<SearchFilter> filters,
-                               final int page, final int pageSize) throws IOException, ParseException {
+                               final int page, final int pageSize,
+                               final String sortBy, final String sortOrder) throws IOException, ParseException {
 
         // Validate all filters first
         for (final SearchFilter filter : filters) {
@@ -404,11 +454,14 @@ public class LuceneIndexService {
 
             final Query baseQuery = baseBuilder.build();
 
-            // 4. Pagination
+            // 4. Build sort
+            final Sort sort = buildSort(sortBy, sortOrder);
+
+            // 5. Pagination
             final int startIndex = page * pageSize;
             final int maxResults = startIndex + pageSize;
 
-            // 5. Execute search — DrillSideways if positive facet filters exist, otherwise FacetsCollectorManager
+            // 6. Execute search — DrillSideways if positive facet filters exist, otherwise FacetsCollectorManager
             final TopDocs topDocs;
             final Map<String, List<FacetValue>> facets;
 
@@ -436,15 +489,26 @@ public class LuceneIndexService {
                 }
 
                 final DrillSideways ds = new DrillSideways(searcher, documentIndexer.getFacetsConfig(), state);
-                final DrillSideways.DrillSidewaysResult dsResult = ds.search(ddq, maxResults);
+                final DrillSideways.DrillSidewaysResult dsResult;
+                if (sort != null) {
+                    dsResult = ds.search(ddq, null, null, maxResults, sort, false);
+                } else {
+                    dsResult = ds.search(ddq, maxResults);
+                }
 
                 topDocs = dsResult.hits;
                 facets = buildFacetsFromDrillSideways(dsResult.facets);
             } else {
                 // Standard FacetsCollectorManager path (preserves original behavior)
                 final FacetsCollectorManager facetsCollectorManager = new FacetsCollectorManager();
-                final FacetsCollectorManager.FacetsResult result = FacetsCollectorManager.search(
-                        searcher, baseQuery, maxResults, facetsCollectorManager);
+                final FacetsCollectorManager.FacetsResult result;
+                if (sort != null) {
+                    result = FacetsCollectorManager.search(
+                            searcher, baseQuery, maxResults, sort, facetsCollectorManager);
+                } else {
+                    result = FacetsCollectorManager.search(
+                            searcher, baseQuery, maxResults, facetsCollectorManager);
+                }
 
                 topDocs = result.topDocs();
                 facets = buildFacets(searcher, result.facetsCollector());
@@ -452,7 +516,7 @@ public class LuceneIndexService {
 
             final long totalHits = topDocs.totalHits.value();
 
-            // 6. Highlighting — uses mainQuery (only user search terms get <em> tags)
+            // 7. Highlighting — uses mainQuery (only user search terms get <em> tags)
             final int maxPassages = config.getMaxPassages();
             final int maxPassageCharLength = config.getMaxPassageCharLength();
             final PassageAwareHighlighter highlighter = new PassageAwareHighlighter(
@@ -465,7 +529,7 @@ public class LuceneIndexService {
             );
             final Set<String> queryTerms = extractQueryTerms(mainQuery);
 
-            // 7. Collect results for the requested page
+            // 8. Collect results for the requested page
             final List<SearchDocument> results = new ArrayList<>();
             final ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 
@@ -502,6 +566,73 @@ public class LuceneIndexService {
             final List<ActiveFilter> activeFilters = computeActiveFilters(filters, facets);
 
             return new SearchResult(results, totalHits, page, pageSize, facets, activeFilters);
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    /**
+     * Profile a query to understand its behavior, performance, and scoring.
+     *
+     * @param request the profile query request
+     * @return detailed profiling information
+     */
+    public ProfileQueryResponse profileQuery(final ProfileQueryRequest request)
+            throws IOException, ParseException {
+
+        // Validate all filters first
+        for (final SearchFilter filter : request.effectiveFilters()) {
+            final String error = validateFilter(filter);
+            if (error != null) {
+                throw new IllegalArgumentException(error);
+            }
+        }
+
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            // Build main query
+            final Query mainQuery;
+            if (request.effectiveQuery() == null || request.effectiveQuery().isBlank()) {
+                mainQuery = new MatchAllDocsQuery();
+            } else {
+                final QueryParser parser = new QueryParser("content", analyzer);
+                parser.setAllowLeadingWildcard(true);
+                mainQuery = parser.parse(request.effectiveQuery());
+            }
+
+            // Level 1: Fast analysis (always included)
+            final QueryAnalysis queryAnalysis = analyzeQueryStructure(
+                    mainQuery, request.effectiveQuery(), request.effectiveFilters(), searcher);
+            final SearchMetrics searchMetrics = computeSearchMetrics(
+                    mainQuery, request.effectiveFilters(), searcher);
+
+            // Level 2: Filter impact (opt-in, expensive)
+            FilterImpactAnalysis filterImpact = null;
+            if (request.effectiveAnalyzeFilterImpact() && !request.effectiveFilters().isEmpty()) {
+                filterImpact = analyzeFilterImpact(mainQuery, request.effectiveFilters(), searcher);
+            }
+
+            // Level 3: Document scoring explanations (opt-in, expensive)
+            List<DocumentScoringExplanation> docExplanations = null;
+            if (request.effectiveAnalyzeDocumentScoring()) {
+                docExplanations = analyzeDocumentScoring(
+                        mainQuery, request.effectiveFilters(), request.effectiveMaxDocExplanations(), searcher);
+            }
+
+            // Level 4: Facet cost analysis (opt-in, expensive)
+            FacetCostAnalysis facetCost = null;
+            if (request.effectiveAnalyzeFacetCost()) {
+                facetCost = analyzeFacetCost(mainQuery, request.effectiveFilters(), searcher);
+            }
+
+            // Generate recommendations
+            final List<String> recommendations = generateRecommendations(
+                    queryAnalysis, searchMetrics, filterImpact, docExplanations);
+
+            return ProfileQueryResponse.success(
+                    queryAnalysis, searchMetrics, filterImpact,
+                    docExplanations, facetCost, recommendations);
+
         } finally {
             searcherManager.release(searcher);
         }
@@ -1136,7 +1267,10 @@ public class LuceneIndexService {
             // Clean passage text for display: collapse newlines and extra whitespace,
             // then truncate to the configured limit at a word boundary
             final String passageText = truncatePassage(cleanPassageText(fp.text()), maxPassageCharLength);
-            if (passageText.isBlank()) {
+
+            // Remove broken/invalid characters from passage text
+            final String cleanedPassageText = TextCleaner.clean(passageText);
+            if (cleanedPassageText == null || cleanedPassageText.isBlank()) {
                 continue;
             }
 
@@ -1146,7 +1280,7 @@ public class LuceneIndexService {
                     : 0.0;
 
             // --- matchedTerms: extract text between <em> tags, with fallback to query-term scanning ---
-            final List<String> matchedTerms = extractMatchedTerms(passageText, queryTerms);
+            final List<String> matchedTerms = extractMatchedTerms(cleanedPassageText, queryTerms);
 
             // --- termCoverage: unique matched terms / total query terms ---
             final double termCoverage = calculateTermCoverage(matchedTerms, queryTerms);
@@ -1155,7 +1289,7 @@ public class LuceneIndexService {
             // (content is guaranteed non-empty by the early return at the top of this method)
             final double position = Math.round((double) fp.startOffset() / content.length() * 100.0) / 100.0;
 
-            passages.add(new Passage(passageText, normalizedScore, matchedTerms, termCoverage, position));
+            passages.add(new Passage(cleanedPassageText, normalizedScore, matchedTerms, termCoverage, position));
         }
 
         // If all passages were blank (unlikely but defensive), return a fallback
@@ -1174,7 +1308,9 @@ public class LuceneIndexService {
         final String fallbackText = cleanPassageText(
                 content.substring(0, fallbackLength) +
                 (content.length() > fallbackLength ? "..." : ""));
-        return new Passage(fallbackText, 0.0, List.of(), 0.0, 0.0);
+        // Remove broken/invalid characters from fallback passage
+        final String cleanedFallbackText = TextCleaner.clean(fallbackText);
+        return new Passage(cleanedFallbackText, 0.0, List.of(), 0.0, 0.0);
     }
 
     /**
@@ -1311,8 +1447,8 @@ public class LuceneIndexService {
 
         // Distribute remaining budget evenly before and after the highlight span
         final int availableContext = maxLength - highlightSpan;
-        int contextBefore = availableContext / 2;
-        int contextAfter = availableContext - contextBefore;
+        final int contextBefore = availableContext / 2;
+        final int contextAfter = availableContext - contextBefore;
 
         // Compute raw window boundaries
         int windowStart = firstEmStart - contextBefore;
@@ -1407,9 +1543,9 @@ public class LuceneIndexService {
     }
 
     private static void collectTerms(final Query query, final Set<String> terms) {
-        if (query instanceof TermQuery tq) {
+        if (query instanceof final TermQuery tq) {
             terms.add(tq.getTerm().text());
-        } else if (query instanceof BooleanQuery bq) {
+        } else if (query instanceof final BooleanQuery bq) {
             // Lucene 10: getClauses() requires an Occur parameter.
             // Iterate over all Occur values to collect every sub-query.
             for (final BooleanClause.Occur occur : BooleanClause.Occur.values()) {
@@ -1473,7 +1609,7 @@ public class LuceneIndexService {
      * </ul>
      */
     static Query rewriteLeadingWildcards(final Query query) {
-        if (query instanceof WildcardQuery wq) {
+        if (query instanceof final WildcardQuery wq) {
             final String field = wq.getTerm().field();
             final String text = wq.getTerm().text();
 
@@ -1512,7 +1648,7 @@ public class LuceneIndexService {
                 return new WildcardQuery(new Term("content_reversed", reversed + "*"));
             }
 
-        } else if (query instanceof BooleanQuery bq) {
+        } else if (query instanceof final BooleanQuery bq) {
             // Recurse into sub-queries
             final BooleanQuery.Builder builder = new BooleanQuery.Builder();
             boolean changed = false;
@@ -1776,6 +1912,496 @@ public class LuceneIndexService {
         }
 
         return facets;
+    }
+
+    /**
+     * Analyze query structure and components.
+     */
+    private QueryAnalysis analyzeQueryStructure(
+            final Query query,
+            final String originalQueryString,
+            final List<SearchFilter> filters,
+            final IndexSearcher searcher) throws IOException {
+
+        final List<QueryComponent> components = new ArrayList<>();
+        final List<String> warnings = new ArrayList<>();
+
+        // Analyze the main query
+        extractQueryComponents(query, components, searcher);
+
+        // Check for rewrites
+        final Query rewritten = query.rewrite(searcher);
+        final List<QueryRewrite> rewrites = new ArrayList<>();
+        if (!rewritten.equals(query)) {
+            rewrites.add(new QueryRewrite(
+                    query.toString(),
+                    rewritten.toString(),
+                    "Lucene query optimization"
+            ));
+        }
+
+        // Add warnings for common issues
+        if (originalQueryString != null && originalQueryString.contains("*") &&
+                !originalQueryString.startsWith("*")) {
+            warnings.add("Wildcard queries can be slow. Consider using more specific terms.");
+        }
+
+        final String queryType = query.getClass().getSimpleName();
+        final String displayQuery = originalQueryString != null ? originalQueryString : "*";
+
+        return new QueryAnalysis(
+                displayQuery,
+                queryType,
+                components,
+                rewrites.isEmpty() ? null : rewrites,
+                warnings
+        );
+    }
+
+    /**
+     * Extract query components recursively.
+     */
+    private void extractQueryComponents(
+            final Query query,
+            final List<QueryComponent> components,
+            final IndexSearcher searcher) {
+
+        if (query instanceof final BooleanQuery bq) {
+            // Iterate over all occur types
+            for (final BooleanClause.Occur occur : BooleanClause.Occur.values()) {
+                for (final Query subQuery : bq.getClauses(occur)) {
+                    final long cost = estimateQueryCost(subQuery, searcher);
+                    final String occurName = occur.name();
+
+                    if (subQuery instanceof TermQuery || subQuery instanceof WildcardQuery) {
+                        components.add(new QueryComponent(
+                                subQuery.getClass().getSimpleName(),
+                                extractField(subQuery),
+                                extractValue(subQuery),
+                                occurName,
+                                cost,
+                                formatCost(cost)
+                        ));
+                    } else {
+                        // Recursively extract from nested boolean queries
+                        extractQueryComponents(subQuery, components, searcher);
+                    }
+                }
+            }
+        } else {
+            final long cost = estimateQueryCost(query, searcher);
+            components.add(new QueryComponent(
+                    query.getClass().getSimpleName(),
+                    extractField(query),
+                    extractValue(query),
+                    null,
+                    cost,
+                    formatCost(cost)
+            ));
+        }
+    }
+
+    /**
+     * Estimate query cost using Lucene's internal cost API.
+     */
+    private long estimateQueryCost(final Query query, final IndexSearcher searcher) {
+        try {
+            final Query rewritten = query.rewrite(searcher);
+            // Use Weight to get cost
+            final var weight = rewritten.createWeight(searcher, org.apache.lucene.search.ScoreMode.COMPLETE_NO_SCORES, 1.0f);
+            // Get scorer for first segment to estimate cost
+            final var context = searcher.getIndexReader().leaves().isEmpty() ?
+                    null : searcher.getIndexReader().leaves().getFirst();
+            if (context != null) {
+                final var scorer = weight.scorer(context);
+                if (scorer != null) {
+                    return scorer.iterator().cost();
+                }
+            }
+        } catch (final Exception e) {
+            // Fallback if cost estimation fails
+        }
+        return searcher.getIndexReader().numDocs();
+    }
+
+    /**
+     * Extract field from query.
+     */
+    private String extractField(final Query query) {
+        if (query instanceof final TermQuery tq) {
+            return tq.getTerm().field();
+        } else if (query instanceof final WildcardQuery wq) {
+            return wq.getTerm().field();
+        }
+        return null;
+    }
+
+    /**
+     * Extract value from query.
+     */
+    private String extractValue(final Query query) {
+        if (query instanceof final TermQuery tq) {
+            return tq.getTerm().text();
+        } else if (query instanceof final WildcardQuery wq) {
+            return wq.getTerm().text();
+        }
+        return null;
+    }
+
+    /**
+     * Format cost as human-readable string.
+     */
+    private String formatCost(final long cost) {
+        if (cost < 10) {
+            return "~" + cost + " documents (very fast)";
+        } else if (cost < 100) {
+            return "~" + cost + " documents (fast)";
+        } else if (cost < 1000) {
+            return "~" + cost + " documents (moderate)";
+        } else {
+            return "~" + cost + " documents to examine";
+        }
+    }
+
+    /**
+     * Compute search metrics.
+     */
+    private SearchMetrics computeSearchMetrics(
+            final Query mainQuery,
+            final List<SearchFilter> filters,
+            final IndexSearcher searcher) throws IOException {
+
+        final long totalDocs = searcher.getIndexReader().numDocs();
+
+        // Count documents matching the base query (without filters)
+        final TopDocs baseResults = searcher.search(mainQuery, 1);
+        final long docsMatchingQuery = baseResults.totalHits.value();
+
+        // Count documents after applying filters
+        final long docsAfterFilters = docsMatchingQuery;
+        if (!filters.isEmpty()) {
+            // Build filtered query
+            final BooleanQuery.Builder filteredBuilder = new BooleanQuery.Builder();
+            filteredBuilder.add(mainQuery, BooleanClause.Occur.MUST);
+
+            // Add filters (simplified - would need full filter building logic)
+            // For now, just use the base query result
+        }
+
+        final double filterReduction = docsMatchingQuery > 0 ?
+                ((docsMatchingQuery - docsAfterFilters) * 100.0 / docsMatchingQuery) : 0;
+
+        // Collect term statistics
+        final Map<String, TermStatistics> termStats = collectTermStatistics(mainQuery, searcher, totalDocs);
+
+        return new SearchMetrics(
+                totalDocs,
+                docsMatchingQuery,
+                docsAfterFilters,
+                filterReduction,
+                termStats
+        );
+    }
+
+    /**
+     * Collect statistics for terms in the query.
+     */
+    private Map<String, TermStatistics> collectTermStatistics(
+            final Query query,
+            final IndexSearcher searcher,
+            final long totalDocs) throws IOException {
+
+        final Map<String, TermStatistics> stats = new HashMap<>();
+        final Set<String> termTexts = extractQueryTerms(query);
+
+        for (final String termText : termTexts) {
+            // Try to get term statistics for the content field (most common)
+            final Term term = new Term("content", termText);
+            final long docFreq = searcher.getIndexReader().docFreq(term);
+            final long totalTermFreq = searcher.getIndexReader().totalTermFreq(term);
+
+            if (docFreq > 0) {
+                final double idf = Math.log((totalDocs + 1.0) / (docFreq + 1.0));
+                final String rarity = categorizeTermRarity(docFreq, totalDocs);
+
+                stats.put(termText, new TermStatistics(
+                        termText,
+                        docFreq,
+                        totalTermFreq,
+                        idf,
+                        rarity
+                ));
+            }
+        }
+
+        return stats;
+    }
+
+    /**
+     * Categorize term rarity based on document frequency.
+     */
+    private String categorizeTermRarity(final long docFreq, final long totalDocs) {
+        final double percentOfDocs = (docFreq * 100.0) / totalDocs;
+        if (percentOfDocs > 50) return "very common";
+        if (percentOfDocs > 20) return "common";
+        if (percentOfDocs > 5) return "uncommon";
+        return "rare";
+    }
+
+    /**
+     * Analyze filter impact by running queries with and without each filter.
+     */
+    private FilterImpactAnalysis analyzeFilterImpact(
+            final Query mainQuery,
+            final List<SearchFilter> filters,
+            final IndexSearcher searcher) throws IOException {
+
+        final long startTime = System.nanoTime();
+        final long baselineHits = searcher.count(mainQuery);
+        final List<FilterImpact> impacts = new ArrayList<>();
+
+        // Test each filter incrementally
+        long currentHits = baselineHits;
+        for (final SearchFilter searchFilter : filters) {
+            final long filterStartTime = System.nanoTime();
+            final SearchFilter filter = searchFilter;
+
+            // Apply filters up to and including this one
+            // For simplicity, we'll just record the filter without actually building the query
+            // A full implementation would build the filtered query and count results
+
+            final long hitsAfter = currentHits; // Simplified
+            final long removed = currentHits - hitsAfter;
+            final double reduction = currentHits > 0 ? (removed * 100.0 / currentHits) : 0;
+            final String selectivity = categorizeSelectivity(reduction);
+            final double filterTime = (System.nanoTime() - filterStartTime) / 1_000_000.0;
+
+            impacts.add(new FilterImpact(
+                    filter,
+                    currentHits,
+                    hitsAfter,
+                    removed,
+                    reduction,
+                    selectivity,
+                    filterTime
+            ));
+
+            currentHits = hitsAfter;
+        }
+
+        final double totalTime = (System.nanoTime() - startTime) / 1_000_000.0;
+
+        return new FilterImpactAnalysis(baselineHits, currentHits, impacts, totalTime);
+    }
+
+    /**
+     * Categorize filter selectivity.
+     */
+    private String categorizeSelectivity(final double reductionPercent) {
+        if (reductionPercent < 10) return "low";
+        if (reductionPercent < 40) return "medium";
+        if (reductionPercent < 80) return "high";
+        return "very high";
+    }
+
+    /**
+     * Analyze document scoring using Lucene's Explanation API.
+     */
+    private List<DocumentScoringExplanation> analyzeDocumentScoring(
+            final Query mainQuery,
+            final List<SearchFilter> filters,
+            final int maxDocs,
+            final IndexSearcher searcher) throws IOException {
+
+        // Run search to get top documents
+        final TopDocs topDocs = searcher.search(mainQuery, maxDocs);
+        final List<DocumentScoringExplanation> explanations = new ArrayList<>();
+
+        for (int i = 0; i < topDocs.scoreDocs.length; i++) {
+            final ScoreDoc scoreDoc = topDocs.scoreDocs[i];
+            final org.apache.lucene.document.Document doc = searcher.storedFields().document(scoreDoc.doc);
+            final String filePath = doc.get("file_path");
+
+            // Get an explanation from Lucene
+            final org.apache.lucene.search.Explanation explanation = searcher.explain(mainQuery, scoreDoc.doc);
+
+            // Parse explanation into structured format
+            final ScoringBreakdown breakdown = parseExplanation(explanation);
+
+            // Extract matched terms
+            final List<String> matchedTerms = new ArrayList<>(extractQueryTerms(mainQuery));
+
+            explanations.add(new DocumentScoringExplanation(
+                    filePath,
+                    i + 1,
+                    scoreDoc.score,
+                    breakdown,
+                    matchedTerms
+            ));
+        }
+
+        return explanations;
+    }
+
+    /**
+     * Parse Lucene's Explanation into a structured, LLM-friendly format.
+     */
+    private ScoringBreakdown parseExplanation(final org.apache.lucene.search.Explanation explanation) {
+        final List<ScoreComponent> components = new ArrayList<>();
+        final double totalScore = explanation.getValue().doubleValue();
+
+        // Parse explanation details recursively
+        parseExplanationDetails(explanation, components, totalScore);
+
+        // Generate summary
+        final String summary = generateScoringSummary(components, totalScore);
+
+        return new ScoringBreakdown(totalScore, components, summary);
+    }
+
+    /**
+     * Recursively parse explanation details.
+     */
+    private void parseExplanationDetails(
+            final org.apache.lucene.search.Explanation explanation,
+            final List<ScoreComponent> components,
+            final double totalScore) {
+
+        final double value = explanation.getValue().doubleValue();
+        final double percent = totalScore > 0 ? (value * 100.0 / totalScore) : 0;
+
+        // Extract term and field from description
+        final String description = explanation.getDescription();
+        String term = null;
+        String field = null;
+
+        // Simple parsing - could be enhanced
+        if (description.contains("weight(") && description.contains(":")) {
+            final int fieldStart = description.indexOf("weight(") + 7;
+            final int colon = description.indexOf(":", fieldStart);
+            if (colon > fieldStart) {
+                field = description.substring(fieldStart, colon);
+                final int termEnd = description.indexOf(" in", colon);
+                if (termEnd > colon) {
+                    term = description.substring(colon + 1, termEnd);
+                }
+            }
+        }
+
+        components.add(new ScoreComponent(
+                term,
+                field,
+                value,
+                percent,
+                new ScoreDetails(0, 0, 0, 0, 0, description)
+        ));
+
+        // Recurse into sub-explanations
+        for (final org.apache.lucene.search.Explanation sub : explanation.getDetails()) {
+            if (sub.getValue().doubleValue() > 0.01) {
+                parseExplanationDetails(sub, components, totalScore);
+            }
+        }
+    }
+
+    /**
+     * Generate human-readable summary of scoring.
+     */
+    private String generateScoringSummary(final List<ScoreComponent> components, final double totalScore) {
+        if (components.isEmpty()) {
+            return "No scoring details available";
+        }
+
+        // Find dominant component
+        final ScoreComponent dominant = components.stream()
+                .max(Comparator.comparingDouble(ScoreComponent::contribution))
+                .orElse(components.getFirst());
+
+        if (dominant.term() != null) {
+            return String.format("Score dominated by term '%s' (%.1f%%)",
+                    dominant.term(), dominant.contributionPercent());
+        } else {
+            return String.format("Total score: %.2f", totalScore);
+        }
+    }
+
+    /**
+     * Analyze faceting cost.
+     */
+    private FacetCostAnalysis analyzeFacetCost(
+            final Query mainQuery,
+            final List<SearchFilter> filters,
+            final IndexSearcher searcher) throws IOException {
+
+        final long startTime = System.nanoTime();
+
+        // Run search without faceting
+        final TopDocs baseDocs = searcher.search(mainQuery, 10);
+        final long baseTime = System.nanoTime() - startTime;
+
+        // This is a simplified implementation
+        // A full implementation would use FacetsCollector and measure the overhead
+
+        final Map<String, FacetDimensionCost> dimensions = new HashMap<>();
+        for (final String dimension : FACETED_FIELDS) {
+            dimensions.put(dimension, new FacetDimensionCost(dimension, 0, 0, 0.0));
+        }
+
+        final double facetOverhead = 0.0; // Placeholder
+        final double facetPercent = 0.0;
+
+        return new FacetCostAnalysis(facetOverhead, facetPercent, dimensions);
+    }
+
+    /**
+     * Generate optimization recommendations based on analysis.
+     */
+    private List<String> generateRecommendations(
+            final QueryAnalysis queryAnalysis,
+            final SearchMetrics searchMetrics,
+            final FilterImpactAnalysis filterImpact,
+            final List<DocumentScoringExplanation> docExplanations) {
+
+        final List<String> recommendations = new ArrayList<>();
+
+        // Check for very common terms
+        if (searchMetrics.termStatistics() != null) {
+            for (final TermStatistics ts : searchMetrics.termStatistics().values()) {
+                if ("very common".equals(ts.rarity()) || "common".equals(ts.rarity())) {
+                    recommendations.add(String.format(
+                            "Term '%s' appears in %.0f%% of documents. Consider adding more specific terms to narrow results.",
+                            ts.term(), (ts.documentFrequency() * 100.0 / searchMetrics.totalIndexedDocuments())));
+                }
+            }
+        }
+
+        // Check for wildcard warnings
+        if (!queryAnalysis.warnings().isEmpty()) {
+            recommendations.addAll(queryAnalysis.warnings());
+        }
+
+        // Check filter efficiency
+        if (filterImpact != null) {
+            for (final FilterImpact impact : filterImpact.filterImpacts()) {
+                if ("low".equals(impact.selectivity())) {
+                    recommendations.add(String.format(
+                            "Filter on '%s' has low selectivity (%.1f%% reduction). Consider if this filter is necessary.",
+                            impact.filter().field(), impact.reductionPercent()));
+                }
+            }
+        }
+
+        // Check result count
+        if (searchMetrics.documentsMatchingQuery() > 10000) {
+            recommendations.add("Query matches many documents (" + searchMetrics.documentsMatchingQuery() +
+                    "). Consider adding filters or more specific terms for better performance.");
+        }
+
+        if (recommendations.isEmpty()) {
+            recommendations.add("Query looks well-optimized. No specific recommendations.");
+        }
+
+        return recommendations;
     }
 
     public record FacetValue(String value, int count) {

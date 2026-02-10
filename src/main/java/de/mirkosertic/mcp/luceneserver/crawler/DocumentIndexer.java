@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
+import de.mirkosertic.mcp.luceneserver.util.TextCleaner;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
@@ -33,8 +34,9 @@ public class DocumentIndexer {
     /**
      * Schema version for the index.
      * MUST be incremented whenever the index schema changes (fields added/removed/modified, analyzers changed, etc.).
+     * Version 2: Added text cleaning to remove broken/invalid characters during indexing.
      */
-    public static final int SCHEMA_VERSION = 1;
+    public static final int SCHEMA_VERSION = 2;
 
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;
@@ -64,18 +66,21 @@ public class DocumentIndexer {
         // Positions and offsets are required by UnifiedHighlighter to locate matched
         // terms within the stored value without re-analysing the text at query time.
         if (extracted.content() != null && !extracted.content().isEmpty()) {
+            // Clean content to remove broken/invalid characters
+            final String cleanedContent = TextCleaner.clean(extracted.content());
+
             final FieldType contentFieldType = new FieldType(TextField.TYPE_STORED);
             contentFieldType.setStoreTermVectors(true);
             contentFieldType.setStoreTermVectorPositions(true);
             contentFieldType.setStoreTermVectorOffsets(true);
-            doc.add(new Field("content", extracted.content(), contentFieldType));
+            doc.add(new Field("content", cleanedContent, contentFieldType));
 
             // content_reversed (analyzed with ReverseUnicodeNormalizingAnalyzer, not stored)
             // Stores reversed tokens so that leading wildcard queries (*vertrag) can be
             // rewritten as efficient trailing wildcard queries on this field (gartrev*).
             // The PerFieldAnalyzerWrapper in LuceneIndexService routes this field to the
             // ReverseUnicodeNormalizingAnalyzer automatically.
-            doc.add(new TextField("content_reversed", extracted.content(), Field.Store.NO));
+            doc.add(new TextField("content_reversed", cleanedContent, Field.Store.NO));
         }
 
         // file_extension (not analyzed, stored, faceted)

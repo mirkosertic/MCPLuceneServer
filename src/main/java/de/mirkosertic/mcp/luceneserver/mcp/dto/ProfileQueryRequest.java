@@ -6,12 +6,11 @@ import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
- * Request DTO for the search tool.
+ * Request DTO for the profileQuery tool.
  */
-public record SearchRequest(
+public record ProfileQueryRequest(
         @Nullable
         @Description("Search query (Lucene syntax) or null for match-all")
         String query,
@@ -29,18 +28,26 @@ public record SearchRequest(
         Integer pageSize,
 
         @Nullable
-        @Description("Sort field: _score, modified_date, created_date, or file_size (default: _score)")
-        String sortBy,
+        @Description("Enable filter impact analysis (expensive, requires N+1 queries)")
+        Boolean analyzeFilterImpact,
 
         @Nullable
-        @Description("Sort order: asc or desc (default: desc)")
-        String sortOrder
+        @Description("Enable document scoring explanations (expensive)")
+        Boolean analyzeDocumentScoring,
+
+        @Nullable
+        @Description("Enable facet cost analysis (expensive)")
+        Boolean analyzeFacetCost,
+
+        @Nullable
+        @Description("Max documents to explain when analyzeDocumentScoring=true (default: 5, max: 10)")
+        Integer maxDocExplanations
 ) {
     /**
-     * Create a SearchRequest from a Map of arguments.
+     * Create a ProfileQueryRequest from a Map of arguments.
      */
     @SuppressWarnings("unchecked")
-    public static SearchRequest fromMap(final Map<String, Object> args) {
+    public static ProfileQueryRequest fromMap(final Map<String, Object> args) {
         final List<SearchFilter> filters;
         if (args.get("filters") instanceof final List<?> rawFilters) {
             filters = new ArrayList<>(rawFilters.size());
@@ -53,13 +60,15 @@ public record SearchRequest(
             filters = null;
         }
 
-        return new SearchRequest(
+        return new ProfileQueryRequest(
                 (String) args.get("query"),
                 filters,
                 args.get("page") != null ? ((Number) args.get("page")).intValue() : null,
                 args.get("pageSize") != null ? ((Number) args.get("pageSize")).intValue() : null,
-                (String) args.get("sortBy"),
-                (String) args.get("sortOrder")
+                (Boolean) args.get("analyzeFilterImpact"),
+                (Boolean) args.get("analyzeDocumentScoring"),
+                (Boolean) args.get("analyzeFacetCost"),
+                args.get("maxDocExplanations") != null ? ((Number) args.get("maxDocExplanations")).intValue() : null
         );
     }
 
@@ -95,56 +104,30 @@ public record SearchRequest(
     }
 
     /**
-     * Get the effective sort field with default.
+     * Should analyze filter impact.
      */
-    public String effectiveSortBy() {
-        return sortBy != null && !sortBy.isBlank() ? sortBy : "_score";
+    public boolean effectiveAnalyzeFilterImpact() {
+        return analyzeFilterImpact != null && analyzeFilterImpact;
     }
 
     /**
-     * Get the effective sort order with default.
-     * Default: desc for all fields (higher scores first for relevance, most recent/largest for metadata).
+     * Should analyze document scoring.
      */
-    public String effectiveSortOrder() {
-        if (sortOrder != null && !sortOrder.isBlank()) {
-            return sortOrder;
-        }
-        return "desc";  // desc for all fields by default
+    public boolean effectiveAnalyzeDocumentScoring() {
+        return analyzeDocumentScoring != null && analyzeDocumentScoring;
     }
 
     /**
-     * Validate the sortBy parameter.
-     * @return Error message if invalid, null if valid
+     * Should analyze facet cost.
      */
-    public static @Nullable String validateSortBy(final @Nullable String sortBy) {
-        if (sortBy == null || sortBy.isBlank()) {
-            return null;  // Valid, will use default
-        }
-
-        final Set<String> validFields = Set.of(
-                "_score", "modified_date", "created_date", "file_size"
-        );
-
-        if (!validFields.contains(sortBy)) {
-            return "Invalid sortBy field: " + sortBy + ". Valid fields: " + validFields;
-        }
-
-        return null;  // Valid
+    public boolean effectiveAnalyzeFacetCost() {
+        return analyzeFacetCost != null && analyzeFacetCost;
     }
 
     /**
-     * Validate the sortOrder parameter.
-     * @return Error message if invalid, null if valid
+     * Get the effective max document explanations with default and constraint.
      */
-    public static @Nullable String validateSortOrder(final @Nullable String sortOrder) {
-        if (sortOrder == null || sortOrder.isBlank()) {
-            return null;  // Valid, will use default
-        }
-
-        if (!"asc".equals(sortOrder) && !"desc".equals(sortOrder)) {
-            return "Invalid sortOrder: " + sortOrder + ". Valid values: asc, desc";
-        }
-
-        return null;  // Valid
+    public int effectiveMaxDocExplanations() {
+        return (maxDocExplanations != null && maxDocExplanations > 0) ? Math.min(maxDocExplanations, 10) : 5;
     }
 }
