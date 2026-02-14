@@ -12,7 +12,7 @@ The fundamental architecture decision is that **semantic understanding lives in 
 
 This means:
 - The AI generates synonym expansions via OR queries — no synonym files needed
-- The AI handles multilingual query formulation — no per-language analyzers needed
+- The AI handles multilingual query formulation — per-language stemmed shadow fields complement this (see candidate E)
 - The AI iterates on results (search, read, refine) — no "smart" ranking needed
 - The server stays simple, fast, dependency-light, and debuggable
 
@@ -345,7 +345,82 @@ No way to export search results, profiling data, or statistics for external use.
 - Export for external analysis (Excel, BI tools)
 - Archive search results
 
-#### E. Query Autocomplete/Suggestions
+#### E. Multi-Language Snowball Stemming (Per-Language Shadow Fields)
+**Status**: Not implemented — **baseline P/R test suite ready** (`SearchPrecisionRecallRegressionTest`)
+**Priority**: Medium-High
+**Impact**: High (especially for German)
+
+**Baseline measurement**: The precision/recall regression test suite (`SearchPrecisionRecallRegressionTest.java`) establishes the pre-stemming baseline: **P=0.972, R=0.972, F1=0.944** across 72 P/R queries (85 total with scoring + edge cases). Known recall gaps:
+- `Mueller` → `Müller` (ICU folds ü→u, not ue→ü — R=0.0)
+- `Vertrag*` with capital V (QueryParser doesn't lowercase wildcard terms — R=0.0)
+- All morphological queries (Vertrages→Vertrag, houses→house, ran→run, etc.) achieve R=1.0 for the **exact inflected form** but will gain cross-form recall with stemming (e.g., "Vertrag" finding "Verträge")
+
+Currently no stemming at all. The analyzer chain (`StandardTokenizer → LowerCaseFilter → ICUFoldingFilter`) normalizes Unicode but does not reduce morphological variants. Searching "Vertrag" misses "Verträge", "Vertrags", "Verträgen" — estimated **15–30% recall loss for German**, ~10–15% for English.
+
+**Approach: Per-language stemmed shadow fields** (follows the `content_reversed` pattern):
+
+```
+content              → unstemmed (stored, term vectors, highlighting — unchanged)
+content_stemmed_de   → German Snowball (NOT stored, no term vectors, search only)
+content_stemmed_en   → English Snowball (NOT stored, no term vectors, search only)
+```
+
+At index time, based on Tika's `detectedLanguage`, index into the appropriate stemmed field alongside the existing `content` field. At query time, combine with **weighted OR queries**:
+
+```java
+BooleanQuery.Builder combined = new BooleanQuery.Builder();
+combined.add(new BoostQuery(contentQuery, 2.0f), BooleanClause.Occur.SHOULD);
+combined.add(new BoostQuery(stemmedQueryDe, deBoost), BooleanClause.Occur.SHOULD);
+combined.add(new BoostQuery(stemmedQueryEn, enBoost), BooleanClause.Occur.SHOULD);
+combined.setMinimumNumberShouldMatch(1);
+```
+
+**Scoring behavior**: Exact matches always rank highest (hit both unstemmed + stemmed clauses). Morphological-only matches surface but rank below exact matches. This preserves precision in ranking while improving recall.
+
+**Dynamic boost weights from index language distribution**: Instead of hardcoding stemmed field boosts, derive them from the actual language distribution in the `language` facet field. If 80% of documents are German and 15% are English, the German stemmed field gets a higher boost — reflecting the prior probability that the user's query targets that language.
+
+Scaling options (in order of preference):
+- **Soft scaling**: `boost = BASE + SCALE * (langCount / totalDocs)` (e.g., `0.3 + 0.7 * proportion`) — ensures minority languages always get at least `BASE` boost, majority language gets up to `BASE + SCALE`
+- **Threshold-based**: include stemmed field only if language has > N% presence (e.g., 5%), with a fixed boost — simpler but loses proportional signal
+- **Log-scaled**: `boost = log(1 + langCount) / log(1 + totalDocs)` — dampens majority language dominance
+
+**Override**: If the AI client passes an explicit `language` parameter in the search request, use that directly — boost only the specified language's stemmed field at full weight, skip distribution-based weighting. Falls back to distribution-based when no language hint is provided.
+
+**Caching**: Language distribution should be cached (not recomputed per search). Refresh on NRT searcher refresh or index commit. The `language` field is already a `SortedSetDocValuesFacetField`, so facet counts are cheap to compute.
+
+**Edge cases**:
+- Documents with undetected language (null/empty): not indexed into any stemmed field, still found via unstemmed `content`
+- Single-language corpus: only one stemmed field gets meaningful boost; others effectively become no-ops
+- New language added later: automatically picked up on next cache refresh, no configuration needed
+
+**Highlighting**: Stays on the unstemmed `content` field — completely unaffected. Documents found only via stemmed field get the `withMaxNoHighlightPassages(1)` fallback passage (no `<em>` tags, but content still shown). Acceptable because the AI client doesn't need `<em>` tags to understand relevance.
+
+**Why this fits the architecture**:
+- Same pattern as `content_reversed` — a shadow field optimized for a specific search strategy
+- Filter pipeline completely unaffected (filters operate on the outer BooleanQuery)
+- Leading wildcard rewriting still applies only to the `content` branch
+- Additive change — doesn't modify existing search behavior, only expands recall
+- Language detection already exists (Tika's `OptimaizeLangDetector`)
+
+**Snowball over-stemming risk** (low): Algorithmic stemmers can conflate unrelated terms (e.g., "Universität"/"Universum" → "univers"). In practice this is rare, and BM25 IDF penalizes incidental single-term matches. The weighted OR approach further mitigates this — over-stemmed matches score lower than exact matches.
+
+**Wrong-language stemmer**: Applying German stemmer to English text mostly produces silent no-ops (English suffixes don't match German rules), not false conflations. Safe to always query all stemmed fields.
+
+**Implementation steps**:
+1. Create `SnowballAnalyzer` wrapper(s): `StandardTokenizer → LowerCaseFilter → ICUFoldingFilter → SnowballFilter("German"|"English")`
+2. Register in `PerFieldAnalyzerWrapper`: `content_stemmed_de` → German, `content_stemmed_en` → English
+3. In `DocumentIndexer`: add stemmed field based on `detectedLanguage`
+4. In `LuceneIndexService.search()`: build weighted OR query combining `content` + stemmed fields
+5. Highlight only on `content` (no change)
+6. Bump `SCHEMA_VERSION`
+7. Update P/R regression thresholds in `SearchPrecisionRecallRegressionTest` — raise `minRecall` for morphological queries that now achieve cross-form recall
+8. Update README.md
+
+**Key files**: `DocumentIndexer.java`, `LuceneIndexService.java`, new analyzer class(es), `PerFieldAnalyzerWrapper` setup
+
+**Supersedes**: The previously rejected "Server-Side Stemming" — the multi-field approach avoids the original objections (precision loss from stemming the content field, highlighting breakage, analyzer complexity).
+
+#### F. Query Autocomplete/Suggestions
 **Status**: Not implemented
 **Priority**: Medium
 **Impact**: Medium
@@ -366,7 +441,7 @@ Builds on #2 (Index Observability). Help users discover terms as they type.
 
 **Key files**: New tool, uses Lucene's `TermsEnum.seekCeil()`
 
-#### F. Index Statistics Over Time
+#### H. Index Statistics Over Time
 **Status**: Not implemented
 **Priority**: Low-Medium
 **Impact**: Medium
@@ -385,7 +460,7 @@ Currently `getIndexStats` is point-in-time. No historical tracking.
 
 ### Tier 3: Future Considerations
 
-#### G. Document Versioning & History
+#### I. Document Versioning & History
 **Status**: Not implemented
 **Priority**: Low
 **Impact**: Low-Medium
@@ -407,7 +482,7 @@ No support for tracking document versions or history.
 - Complex query requirements for version comparison
 - May conflict with incremental crawler (updates vs versions)
 
-#### H. Streaming/Incremental Results
+#### J. Streaming/Incremental Results
 **Status**: Not implemented
 **Priority**: Low
 **Impact**: Low
@@ -418,7 +493,7 @@ Currently all results returned at once. Large result sets could benefit from str
 
 **Alternative**: Use pagination effectively (already implemented).
 
-#### I. Regex Search Support
+#### K. Regex Search Support
 **Status**: Not explicitly supported/documented
 **Priority**: Low
 **Impact**: Low
@@ -429,7 +504,7 @@ Lucene supports regex queries but not mentioned in documentation.
 - Document in query syntax guide if supported
 - Or explicitly reject if too expensive/dangerous
 
-#### J. Custom Field Extractors
+#### L. Custom Field Extractors
 **Status**: Not implemented
 **Priority**: Low
 **Impact**: Low
@@ -779,9 +854,11 @@ The AI client already handles semantic understanding. Adding embeddings would:
 
 **Revisit conditions**: Consider if (a) the corpus grows beyond ~10,000 documents, (b) users report frequent "can't find it" scenarios despite AI expansion, or (c) Lucene's KNN API matures to the point where adding vectors is trivially simple.
 
-### Server-Side Stemming / Language-Specific Analyzers
-**Decision**: Rejected
-**Reasoning**: The AI compensates with wildcard queries (`contract*` covers contracts, contracting, contracted). Language-specific stemmers add complexity, require per-field language detection, and can hurt precision (aggressive stemming conflates unrelated terms). The AI's wildcard + OR approach is more controllable.
+### Server-Side Stemming / Language-Specific Analyzers (Single-Field Approach)
+**Decision**: Rejected (single-field stemming only — multi-field approach is now a candidate, see Tier 2 item E)
+**Reasoning**: Stemming the `content` field directly was rejected because it causes highlighting offset issues (partial-word highlights), requires asymmetric index/search analyzers, and conflates exact and stemmed matches in scoring. The AI's wildcard + OR approach partially compensates but misses many German morphological variants (e.g., `vertrag*` does not match "Verträge" → "vertrage" after ICU folding).
+
+**Revised approach**: Per-language stemmed shadow fields (`content_stemmed_de`, `content_stemmed_en`) — NOT stored, no term vectors, search only — combined with weighted OR queries at query time. Highlighting stays on the unstemmed `content` field. This follows the existing `content_reversed` pattern and avoids all original objections. See improvement candidate E for full details.
 
 ### HTTP/SSE Transport
 **Decision**: Deferred
@@ -903,12 +980,13 @@ When adding detailed documentation to avoid context pollution:
 
 | Item | Effort | Impact | Justification |
 |------|--------|--------|---------------|
+| **Multi-Language Stemming** | Medium | High | Missing Gap E - 15-30% recall gain for German |
 | Document Chunking | High | High | Tier 1 #3 - Solves long doc problem |
 | "More Like This" | Medium | Medium | Tier 2 #5 - AI-friendly feature |
 | OCR Support | Medium-High | Medium | Tier 2 #7 - Depends on user docs |
 | Batch Operations | Medium | Medium | Missing Gap C - Efficiency |
 | Export/Reports | Medium | Medium | Missing Gap D - Common request |
-| Query Autocomplete | Medium | Medium | Missing Gap E - UX enhancement |
+| Query Autocomplete | Medium | Medium | Missing Gap F - UX enhancement |
 
 ### 🔮 Future Considerations (Nice to have)
 
@@ -921,9 +999,9 @@ When adding detailed documentation to avoid context pollution:
 | Query Builder | Low | Tier 3 #15 - Syntax assistance |
 | Saved Searches | Low | Tier 3 #16 - Requires state |
 | Search History | Low | Tier 3 #17 - Requires state |
-| Document Versioning | Low | Missing Gap G - Complex |
-| Streaming Results | Low | Missing Gap H - MCP limitation |
-| Regex Search | Low | Missing Gap I - Documentation gap |
+| Document Versioning | Low | Missing Gap I - Complex |
+| Streaming Results | Low | Missing Gap J - MCP limitation |
+| Regex Search | Low | Missing Gap K - Documentation gap |
 
 ### ❌ Explicitly Rejected (6 items)
 
@@ -932,7 +1010,7 @@ When adding detailed documentation to avoid context pollution:
 - Debug in search tool (context pollution)
 - Automaton visualization (not actionable)
 - Vector search (contradicts architecture)
-- Stemming/language analyzers (AI handles it)
+- Single-field stemming (replaced by multi-field approach — see candidate E)
 - HTTP/SSE transport (deferred)
 - Geographic search (out of scope)
 - Access control (handled by MCP client)
