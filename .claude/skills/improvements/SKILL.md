@@ -346,14 +346,15 @@ No way to export search results, profiling data, or statistics for external use.
 - Archive search results
 
 #### E. Multi-Language Snowball Stemming (Per-Language Shadow Fields)
-**Status**: Not implemented — **baseline P/R test suite ready** (`SearchPrecisionRecallRegressionTest`)
+**Status**: ✅ **DONE** — implemented in SCHEMA_VERSION 3
 **Priority**: Medium-High
 **Impact**: High (especially for German)
 
 **Baseline measurement**: The precision/recall regression test suite (`SearchPrecisionRecallRegressionTest.java`) establishes the pre-stemming baseline: **P=0.972, R=0.972, F1=0.944** across 72 P/R queries (85 total with scoring + edge cases). Known recall gaps:
 - `Mueller` → `Müller` (ICU folds ü→u, not ue→ü — R=0.0)
-- `Vertrag*` with capital V (QueryParser doesn't lowercase wildcard terms — R=0.0)
 - All morphological queries (Vertrages→Vertrag, houses→house, ran→run, etc.) achieve R=1.0 for the **exact inflected form** but will gain cross-form recall with stemming (e.g., "Vertrag" finding "Verträge")
+
+Note: `Vertrag*` with capital V was a known limitation (R=0.0) but is now fixed — `rewriteLeadingWildcards()` lowercases wildcard/prefix terms on analyzed fields.
 
 Currently no stemming at all. The analyzer chain (`StandardTokenizer → LowerCaseFilter → ICUFoldingFilter`) normalizes Unicode but does not reduce morphological variants. Searching "Vertrag" misses "Verträge", "Vertrags", "Verträgen" — estimated **15–30% recall loss for German**, ~10–15% for English.
 
@@ -419,6 +420,380 @@ Scaling options (in order of preference):
 **Key files**: `DocumentIndexer.java`, `LuceneIndexService.java`, new analyzer class(es), `PerFieldAnalyzerWrapper` setup
 
 **Supersedes**: The previously rejected "Server-Side Stemming" — the multi-field approach avoids the original objections (precision loss from stemming the content field, highlighting breakage, analyzer complexity).
+
+#### E2. Irregular Verb Stemming (Extends Snowball Stemming)
+**Status**: Not implemented — design analysis complete, two viable approaches identified
+**Priority**: Medium
+**Impact**: Medium (estimated 3-8% recall gain for verb-heavy queries, 1-3% overall)
+**Depends on**: Candidate E (Snowball stemming — done)
+
+**Problem**: Snowball is an algorithmic suffix-stripper. It handles regular morphology well but fails on irregular forms that involve vowel changes (Ablaut), suppletion, or prefix patterns:
+
+*English gaps:*
+- `ran` → "ran" vs `run`/`running` → "run" (vowel change)
+- `went` → "went" vs `go`/`going` → "go" (suppletion)
+- `saw` → "saw" vs `see`/`seen` → "see" (vowel change)
+- `wrote` → "wrote" vs `write`/`written` → "write"
+- `analysis` → "analysi" vs `analyses` → "analys" (confirmed in P/R tests — different stems)
+
+*German gaps (more severe due to Ablaut + ge- prefix):*
+- `ging` → "ging" vs `gehen`/`gegangen` → different stems
+- `fuhr` → "fuhr" vs `fahren`/`gefahren` → different stems
+- `sprach` → "sprach" vs `sprechen`/`gesprochen` → different stems
+- `war` → "war" vs `sein`/`gewesen` → completely unrelated forms (suppletion)
+- `lief` → "lief" vs `laufen`/`gelaufen` → different stems
+
+**Current P/R state**: P=0.975, R=1.000, F1=0.975 on the 45-doc test corpus. R=1.000 because the test corpus is small and queries are carefully chosen. In a real corpus, verb-based searches like "who ran the project" or "was entschieden wurde" would hit these gaps.
+
+---
+
+**Approach A: Hunspell Dictionary Stemming**
+
+Use Lucene's built-in `HunspellStemFilter` with `.dic`/`.aff` dictionary files. Dictionary-based stemming correctly maps irregular forms to their lemma because it uses lookup tables rather than suffix rules.
+
+*Implementation*: Additional shadow fields `content_hunspell_de` / `content_hunspell_en` alongside the existing Snowball fields, or replace Snowball entirely. Same weighted OR query pattern.
+
+*Analyzer chain*: `StandardTokenizer → LowerCaseFilter → ICUFoldingFilter → HunspellStemFilter(dictionary)`
+
+*Pros:*
+- Handles all irregulars via dictionary lookup — no manual maintenance of verb lists
+- Well-maintained dictionaries exist (LibreOffice/SCOWL communities)
+- Lucene-native — `HunspellStemFilter` is in `lucene-analysis-common` (already a dependency)
+- Covers not just irregular verbs but also irregular noun plurals, adjective inflections, etc.
+- Would also improve Snowball's edge cases (e.g., `analysis`/`analyses`)
+
+*Cons:*
+- **License problem for German**: The de_DE Hunspell dictionary ([igerman98](https://www.j3e.de/ispell/igerman98/)) is **GPL-2.0 OR GPL-3.0**. Per the [ASF 3rd Party License Policy](https://www.apache.org/legal/resolved.html), GPL is **Category X — prohibited** for bundling in Apache 2.0 projects. This applies to both code and data files.
+- English dictionary (SCOWL) is **MIT + BSD** — Apache Category A, fully compatible.
+- Slower than Snowball (dictionary lookups vs rule application)
+- Dictionary files add ~5-10 MB per language
+- Can produce multiple stems per token (ambiguity: "saw" → "see" AND "saw")
+- Dictionary updates need tracking
+
+*License workaround options:*
+1. **User-provided dictionaries**: Ship without dictionaries, load from config path (`hunspell-dictionaries-path` in application.yaml). User downloads and places dictionaries themselves. GPL applies to the dictionary files, not to code that reads them.
+2. **English only**: Bundle only the MIT/BSD English dictionary; German stays Snowball-only.
+3. **Wait for re-licensing**: Monitor igerman98 — if it ever moves to LGPL or more permissive license.
+
+*If user-provided dictionaries approach:*
+```yaml
+# application.yaml
+hunspell:
+  enabled: false  # opt-in
+  dictionaries-path: ~/.mcplucene/dictionaries/
+  # User places de_DE.dic, de_DE.aff, en_US.dic, en_US.aff there
+```
+
+---
+
+**Approach B: StemmerOverrideFilter (Explicit Mapping)**
+
+Lucene's `StemmerOverrideFilter` runs before Snowball and provides a hard override map. Only irregular forms need entries; regular forms fall through to Snowball unchanged.
+
+*Implementation*: Insert `StemmerOverrideFilter` into the existing `StemmedUnicodeNormalizingAnalyzer` chain, before `SnowballFilter`:
+
+```
+StandardTokenizer → LowerCaseFilter → ICUFoldingFilter → StemmerOverrideFilter(map) → SnowballFilter
+```
+
+*Override map examples:*
+```java
+// English (~200 irregular verbs, ~5-6 forms each ≈ ~1000 entries)
+"ran" → "run", "went" → "go", "gone" → "go",
+"saw" → "see", "seen" → "see",
+"wrote" → "write", "written" → "write",
+"paid" → "pay", "analyses" → "analysis", ...
+
+// German (~170 strong/mixed verbs, ~5-6 forms each ≈ ~1000 entries)
+"ging" → "gehen", "gegangen" → "gehen",
+"fuhr" → "fahren", "gefahren" → "fahren",
+"sprach" → "sprechen", "gesprochen" → "sprechen",
+"war" → "sein", "gewesen" → "sein",
+"lief" → "laufen", "gelaufen" → "laufen", ...
+```
+
+*Pros:*
+- **No license issues** — override maps are our own code, Apache 2.0
+- Precise — no false conflations beyond what we explicitly define
+- Composable — sits in front of existing Snowball chain, no new fields needed
+- Tiny overhead (HashMap lookup per token)
+- No new dependencies
+- Easy to test — each override is a deterministic mapping
+
+*Cons:*
+- Manual maintenance of override maps (~2000 entries total for DE+EN)
+- Incomplete coverage — only catches forms we enumerate
+- Doesn't scale to new languages without per-language work
+- The "long tail" of irregulars is large: English ~200 verbs × ~5 forms, German ~170 verbs × ~6 forms
+- Doesn't cover irregular noun plurals or adjective forms (only verbs, unless we add those too)
+- Override map targets must match Snowball's output stem for regular words (e.g., "went" → "go", but Snowball stems "go" to "go", "goes" to "goe" — we'd need "went" → "go" AND update "goes" → "go" to normalize Snowball's irregular output)
+
+*Key consideration*: The override target must be the Snowball stem of the base form, not the dictionary lemma. E.g., if Snowball stems "house" → "hous", then override "houses" → "hous" (not "house"). Since `StemmerOverrideFilter` runs BEFORE `SnowballFilter`, overridden tokens skip Snowball entirely — so the target must be the final desired stem. This means the override map is Snowball-version-dependent.
+
+---
+
+**Approach C: OpenNLP Lemmatizer (Lucene-integrated, Apache 2.0)**
+
+Lucene provides [`OpenNLPLemmatizerFilter`](https://lucene.apache.org/core/10_2_2/analysis/opennlp/org/apache/lucene/analysis/opennlp/class-use/OpenNLPLemmatizerFilter.html) in the `lucene-analysis-opennlp` module. This is true lemmatization — mapping surface forms to dictionary headwords — not algorithmic suffix stripping. Handles all irregular forms via trained models or dictionary lookup.
+
+*Implementation*: Additional shadow fields `content_lemma_de` / `content_lemma_en`, or replace Snowball fields entirely. The OpenNLP pipeline requires multiple components:
+
+```
+OpenNLPTokenizer(sentenceModel, tokenizerModel)
+  → OpenNLPPOSFilter(posModel)
+  → LowerCaseFilter
+  → ICUFoldingFilter
+  → OpenNLPLemmatizerFilter(dictionary and/or lemmatizerModel)
+```
+
+**Critical difference from Snowball**: The OpenNLP pipeline replaces Lucene's `StandardTokenizer` with `OpenNLPTokenizer` (which does sentence detection + tokenization) and adds a POS tagging step before lemmatization. This means it cannot simply be inserted into the existing analyzer chain — it requires a separate, complete analyzer.
+
+*Two modes available:*
+1. **Dictionary-only**: `DictionaryLemmatizer` — HashMap lookup from `word[tab]postag[tab]lemma` file. Fast (O(1) per token), but requires POS tags and a comprehensive dictionary file.
+2. **MaxEnt model**: `LemmatizerME` — statistical model (Maximum Entropy). Handles unseen words. Can be combined with dictionary (dictionary tried first, model for OOV fallback).
+
+*Available models (all Apache 2.0):*
+
+| Model | Source | Size | Notes |
+|-------|--------|------|-------|
+| EN lemmatizer | [OpenNLP models](https://opennlp.apache.org/models.html) | ~1-5 MB (est.) | `opennlp-en-ud-ewt-lemmas-1.3-2.5.4.bin` |
+| EN POS tagger | OpenNLP models | ~5-15 MB (est.) | `opennlp-en-ud-ewt-pos-1.3-2.5.4.bin` |
+| EN sentence detector | OpenNLP models | ~1 MB (est.) | `opennlp-en-ud-ewt-sentence-1.3-2.5.4.bin` |
+| EN tokenizer | OpenNLP models | ~1 MB (est.) | `opennlp-en-ud-ewt-tokens-1.3-2.5.4.bin` |
+| DE lemmatizer (small) | [DE-Lemma](https://github.com/mawiesne/DE-Lemma) | 861 KB | UD-GSD based, Apache 2.0 |
+| DE lemmatizer (large) | DE-Lemma | 14 MB | UD-HDT based, Apache 2.0 |
+| DE lemmatizer (huge) | DE-Lemma | 131 MB | Wikipedia-trained (36.1M sentences), Apache 2.0 |
+| DE POS tagger | OpenNLP models | ~5-15 MB (est.) | `opennlp-de-ud-gsd-pos-1.3-2.5.4.bin` |
+| DE sentence detector | OpenNLP models | ~1 MB (est.) | `opennlp-de-ud-gsd-sentence-1.3-2.5.4.bin` |
+| DE tokenizer | OpenNLP models | ~1 MB (est.) | `opennlp-de-ud-gsd-tokens-1.3-2.5.4.bin` |
+
+*Memory and performance analysis:*
+
+**Startup impact:**
+- Each language requires 4 models loaded into memory: sentence detector, tokenizer, POS tagger, lemmatizer
+- Estimated heap per language: ~20-50 MB for small/medium models, ~150+ MB for DE Wikipedia model
+- Models are loaded once at startup and shared across threads (MaxentModel is thread-safe)
+- Current server startup: ~2 seconds. Model loading could add 1-3 seconds per language
+- **Total memory impact**: ~40-100 MB additional heap for both languages with medium-sized models. This is significant for a server that currently runs lean (~50-100 MB heap)
+
+**Index-time impact (critical path):**
+- POS tagging is the bottleneck: MaxEnt model inference per token, not just a lookup
+- Estimated throughput: ~10,000-50,000 tokens/second (vs ~500,000+ for Snowball)
+- For a 10-page PDF (~5,000 tokens): Snowball ~10ms, OpenNLP ~100-500ms
+- **Full reindex** of 10,000 documents: could add 15-60 minutes to crawl time
+- POS tagging accuracy affects lemmatization: wrong POS tag → wrong lemma
+
+**Query-time impact:**
+- Query strings are short (typically 1-5 tokens) — OpenNLP pipeline overhead is negligible per query
+- But the analyzer must be invoked for each stemmed field query (same as current Snowball approach)
+- Estimated: ~1-5ms additional per query (acceptable)
+
+**Index size impact:**
+- Lemmatized tokens are typically shorter than or equal to surface forms (same as stemming)
+- No significant additional index size vs Snowball shadow fields
+
+*Pros:*
+- **All Apache 2.0** — library, Lucene integration, EN models, DE models (DE-Lemma)
+- True lemmatization: handles ALL irregulars (verbs, nouns, adjectives) correctly
+- Handles unseen words via MaxEnt model (not limited to dictionary entries)
+- German models trained on 36.1M sentences (Wikipedia) — extensive vocabulary coverage
+- Lucene-native `TokenFilter` — same integration pattern as Snowball
+- Dictionary + model hybrid: fast lookup for known words, statistical fallback for unknown
+
+*Cons:*
+- **Heavy pipeline**: requires sentence detector + tokenizer + POS tagger + lemmatizer (4 models per language vs 0 for Snowball)
+- **Memory overhead**: ~40-100 MB additional heap for both languages (doubles current footprint)
+- **Index-time performance**: 10-50x slower than Snowball per token due to POS tagging
+- **Startup time**: +1-3 seconds for model loading
+- **New dependency**: `lucene-analysis-opennlp` module + model files bundled or downloaded
+- **Model files**: must be bundled in JAR or downloaded on first run (~20-60 MB total for medium models)
+- **POS accuracy dependency**: lemmatization quality depends on POS tagging accuracy. Wrong POS → wrong lemma (e.g., "saw" tagged as NN → "saw", tagged as VBD → "see")
+- **Complexity**: separate complete analyzer (can't just add a filter to existing chain), language detection must route to correct analyzer
+- Contradicts "fast, simple server" principle more than other approaches
+
+---
+
+**Comparison**
+
+| Aspect | Hunspell | StemmerOverrideFilter | OpenNLP Lemmatizer |
+|--------|----------|----------------------|--------------------|
+| Irregular verb coverage | Complete (dictionary) | ~90% of common verbs (manual) | Complete (trained model) |
+| Irregular noun/adj coverage | Yes | Only if manually added | Yes |
+| German license | **GPL — blocked** | Apache 2.0 (our code) | **Apache 2.0** |
+| English license | MIT/BSD — OK | Apache 2.0 (our code) | **Apache 2.0** |
+| Maintenance burden | Dictionary updates (community) | Manual map curation | Model updates (community) |
+| Performance (index time) | Medium (dict lookup) | Minimal (HashMap) | **Slow (10-50x vs Snowball)** |
+| Performance (query time) | Fast | Fastest | Fast (short queries) |
+| Memory overhead | ~5-10 MB/lang (dict files) | None | **~20-50 MB/lang (models)** |
+| Startup impact | Minimal | None | **+1-3 seconds** |
+| New dependencies | Dictionary files only | None | `lucene-analysis-opennlp` + 4 models/lang |
+| False conflations | Possible (ambiguous words) | Only what we define | POS-dependent (mostly correct) |
+| Complexity | Low (single filter) | Low (single filter) | **High (full NLP pipeline)** |
+| Effort | Medium | Medium | High |
+
+**Recommendation**: Start with **Approach B (StemmerOverrideFilter)** for both languages — no license issues, no dependencies, minimal performance impact, precise control. Cover the ~50 most common irregular verbs per language first (~90% of practical recall gap). The AI client handles the remaining long tail through query expansion.
+
+**If broader coverage is needed later**: **Approach C (OpenNLP)** is the strongest fully-Apache-2.0 option for complete irregular form handling. The memory and performance costs are significant but may be acceptable if the server handles large corpora where irregular verb recall matters. Consider making it opt-in via configuration (`lemmatizer.enabled: true`, `lemmatizer.engine: opennlp`) with model files loaded on demand.
+
+**English-only Hunspell (Approach A)** remains viable for English specifically (MIT/BSD license), with user-provided dictionaries for German as a power-user option.
+
+**Client-side complementary approach**: Regardless of server-side choice, the AI client can always expand irregular forms via OR queries ("ran OR run OR running"). This is already the approach for synonyms and works well for the irregular verbs that server-side stemming doesn't cover.
+
+---
+
+#### OpenNLP as a Platform Investment: NLP-vs-LLM Boundary Analysis
+
+If the OpenNLP pipeline is committed to (Approach C), it becomes a **platform investment** — not just "better stemming" but a foundation for multiple features. The key insight: paying the startup/memory cost once unlocks capabilities beyond lemmatization.
+
+**The Principle: "NLP enriches the index, LLM enriches the query"**
+
+NLP processing at index time adds **structure to unstructured data** — this structure lives permanently in the index and benefits every future query. LLM processing at query time adds **intelligence from context** — understanding user intent, expanding queries semantically, iterating on results. These are complementary, not competing.
+
+The boundary criterion: **If a capability produces deterministic, cacheable, document-level structure, it belongs in the NLP layer. If it requires contextual reasoning, user intent, or cross-document synthesis, it belongs in the LLM layer.**
+
+---
+
+**Feature 1: Named Entity Recognition (NER) — The Killer Feature**
+
+NER extracts structured entities from document text: person names, organizations, locations, dates, monetary amounts, etc.
+
+*What it enables:*
+- New facet fields: `entity_person`, `entity_organization`, `entity_location` — automatically populated from document content
+- Search like `filters: [{field: "entity_person", operator: "eq", value: "Schmidt"}]` — finds all documents mentioning Schmidt, even if "Schmidt" appears only in running text (not metadata)
+- The AI client could ask: "Find all documents mentioning both Schmidt and Munich" → two entity filters
+- Cross-document entity linking: discover that "Dr. Schmidt", "M. Schmidt", and "Schmidt GmbH" appear across the corpus
+
+*Why NLP, not LLM:*
+- NER is a **deterministic classification** task on individual documents — no cross-document reasoning needed
+- Running at index time means entities are pre-extracted once, searchable instantly via facets
+- LLM-based entity extraction at query time would require reading every document for every query (infeasible)
+- OpenNLP NER models: ~5-15 MB per entity type, ~10,000 tokens/second throughput
+
+*Available models (Apache 2.0):*
+- EN: `en-ner-person`, `en-ner-organization`, `en-ner-location`, `en-ner-date`, `en-ner-money`, `en-ner-time`
+- DE: Community-trained models available, or trainable on custom corpora
+
+*Impact assessment:*
+- **Value**: Very high — transforms the server from "text search" to "knowledge search"
+- **Effort**: Medium (OpenNLP pipeline already present for lemmatization)
+- **Memory**: ~5-15 MB per entity model (~30-90 MB for 6 EN types)
+- **Index time**: Additional ~50-200ms per document for NER pass
+- **Schema**: New `SortedSetDocValuesFacetField` per entity type, SCHEMA_VERSION bump
+
+*Implementation sketch:*
+```java
+// At index time, after content extraction:
+NameFinderME personFinder = new NameFinderME(personModel);
+String[] tokens = SimpleTokenizer.INSTANCE.tokenize(content);
+Span[] personSpans = personFinder.find(tokens);
+for (Span span : personSpans) {
+    String entity = String.join(" ", Arrays.copyOfRange(tokens, span.getStart(), span.getEnd()));
+    doc.add(new SortedSetDocValuesFacetField("entity_person", entity));
+    doc.add(new StringField("entity_person", entity, Store.YES));
+}
+```
+
+---
+
+**Feature 2: Sentence Detection for Document Chunking**
+
+OpenNLP's `SentenceDetectorME` identifies sentence boundaries — a critical primitive for document chunking (Tier 1 candidate #3).
+
+*Why it matters:*
+- Current chunking would split at arbitrary character boundaries → sentences cut mid-word
+- Sentence-aware chunking produces semantically coherent passages
+- Better chunks → better search passages → more useful results for the AI client
+
+*Why NLP, not LLM:*
+- Sentence detection is a well-solved NLP problem (>99% accuracy for EN/DE)
+- Deterministic, fast, runs once at index time
+- LLM-based sentence splitting would be absurdly expensive for every document
+- The model is already loaded for the lemmatization pipeline (zero marginal cost)
+
+*Synergy with existing chunking candidate:*
+- Chunking at sentence boundaries with overlap → each chunk is 5-10 sentences
+- Paragraphs detected via whitespace + sentence boundaries
+- Chunk metadata includes sentence count, position in document
+
+*Impact assessment:*
+- **Value**: High (prerequisite for quality chunking)
+- **Effort**: Near-zero if OpenNLP pipeline exists (sentence model already loaded)
+- **Memory**: 0 additional (already loaded for lemmatizer tokenizer)
+- **Index time**: Included in tokenizer pass
+
+---
+
+**Feature 3: POS-Based Field Indexing**
+
+With POS tags available, index only specific parts of speech into specialized fields.
+
+*Examples:*
+- `content_nouns` — only nouns, for concept-level search
+- `content_verbs` — only verbs, for action-level search
+
+*Assessment: Marginal value*
+- The AI client can already focus searches via query formulation
+- BM25 naturally weights content-bearing terms (nouns) higher than function words
+- Additional fields increase index size without clear user benefit
+- The search interface has no natural way to express "search only nouns"
+
+*Verdict:* Not recommended. The complexity-to-benefit ratio is too low. If specific use cases emerge (e.g., domain-specific terminology extraction), reconsider.
+
+---
+
+**Feature 4: Noun Phrase Extraction**
+
+Extract multi-word noun phrases (e.g., "Arbeitsvertrag", "supply chain management") as atomic units.
+
+*Potential value:*
+- Index "supply chain management" as a single term → exact phrase matching without proximity operators
+- Extract compound nouns that are written as separate words in English but would be single words in German
+
+*Assessment: Moderate value, but overlaps with LLM capabilities*
+- The AI client already handles phrase queries ("supply chain management")
+- OpenNLP chunker models have moderate accuracy for complex phrases
+- German compound nouns are already single tokens (no extraction needed)
+- English multi-word terms benefit, but the AI can formulate phrase queries
+
+*Verdict:* Interesting but not high-priority. Could add value for automated keyword extraction / tag generation at index time.
+
+---
+
+**NLP-vs-LLM Boundary Summary**
+
+| Capability | Server-Side (NLP) | Client-Side (LLM) | Winner |
+|-----------|-------------------|-------------------|--------|
+| **Lemmatization** | Index-time, deterministic, all docs once | Per-query OR expansion ("ran OR run") | **NLP** — scales better |
+| **NER** | Index-time extraction → facets | Read each doc, extract on demand | **NLP** — pre-extraction essential |
+| **Sentence detection** | Index-time chunking boundaries | Not applicable | **NLP** — no alternative |
+| **POS-based fields** | Separate noun/verb indexes | Query formulation targets concepts naturally | **LLM** — existing behavior sufficient |
+| **Noun phrase extraction** | Index compound terms as units | Phrase queries, proximity operators | **Draw** — LLM already handles well |
+| **Synonym expansion** | Static synonym files (brittle) | Context-aware OR queries | **LLM** — superior quality |
+| **Query refinement** | Server can't understand intent | Iterative search-read-refine cycle | **LLM** — requires reasoning |
+| **Cross-document synthesis** | Can't do at all | "Find documents about topic X and summarize" | **LLM** — inherently cross-doc |
+| **Language detection** | Tika/OpenNLP at index time | Could guess from query text | **NLP** — per-document, deterministic |
+| **Relevance ranking** | BM25 + boost weights | AI reads results, re-ranks by understanding | **Both** — BM25 for initial, LLM for refinement |
+
+**Key takeaway**: NLP and LLM are complementary layers, not alternatives. NLP adds permanent structure to the index that every query benefits from. The LLM adds per-query intelligence that no static analysis can match. The highest-value NLP features are those that **create new searchable dimensions** (NER → entity facets) rather than those that **duplicate LLM capabilities** (synonym expansion, query refinement).
+
+---
+
+**OpenNLP Platform Decision Framework**
+
+If committing to OpenNLP, the cost-benefit changes:
+
+| Scenario | Lemmatization only | Lemma + NER | Lemma + NER + Chunking |
+|----------|-------------------|-------------|------------------------|
+| Models loaded | 8 (4/lang) | 14-20 | 14-20 (same) |
+| Memory overhead | ~40-100 MB | ~70-190 MB | ~70-190 MB |
+| Startup time | +1-3 sec | +2-5 sec | +2-5 sec |
+| Index-time overhead | 10-50x per token | +50-200ms/doc | Negligible additional |
+| New searchable dimensions | 0 (recall improvement) | 3-6 entity facets | Better passages |
+| Value multiplier | 1x | **3-5x** | **5-7x** |
+
+The marginal cost of adding NER and sentence-aware chunking **on top of** an existing OpenNLP pipeline is low relative to the marginal value. This is why OpenNLP should be evaluated as a platform, not just a lemmatizer.
+
+**Recommendation**: If Approach C (OpenNLP Lemmatizer) is ever pursued, plan for NER and sentence-aware chunking from the start. Design the pipeline, model loading, and configuration to support all three from day one, even if NER and chunking are initially disabled. The incremental cost of "ready for NER" is near zero; retrofitting later is much harder.
 
 #### F. Query Autocomplete/Suggestions
 **Status**: Not implemented
@@ -765,6 +1140,25 @@ A `fields` parameter to select which fields appear in results. Reduces response 
 
 **Rationale**: Raw numbers like "docFreq=4500, totalDocs=10000" require mental math. Categories are immediately actionable.
 
+### NLP-vs-LLM Boundary: Where Server Processing Adds Value
+
+**Decision**: NLP enriches the index (structure from unstructured data), LLM enriches the query (intelligence from context). Features are evaluated against this boundary.
+
+**Boundary criterion**: If a capability produces deterministic, cacheable, document-level structure → NLP layer. If it requires contextual reasoning, user intent, or cross-document synthesis → LLM layer.
+
+**High-value NLP features** (create new searchable dimensions):
+- NER → entity facets (person, organization, location)
+- Sentence detection → quality document chunking
+- Lemmatization → irregular form recall
+
+**LLM-superior features** (require reasoning):
+- Synonym expansion (context-aware)
+- Query refinement (iterative, intent-driven)
+- Cross-document synthesis
+- POS-based field indexing (BM25 already handles naturally)
+
+**Rationale**: The highest-value server-side NLP features are those that create new searchable dimensions (like NER creating entity facets) — dimensions that don't exist without NLP processing. Features that merely duplicate what the LLM already does well (synonym expansion, query refinement) should stay client-side. See Candidate E2 for full analysis.
+
 ### Lucene Explanation API Limitations (Discovered During Implementation)
 
 These are **Lucene design limitations**, not implementation choices:
@@ -957,12 +1351,13 @@ When adding detailed documentation to avoid context pollution:
 
 ## Current Status Overview
 
-### ✅ Completed (11 items)
+### ✅ Completed (12 items)
 
 | Item | Impact | Notes |
 |------|--------|-------|
 | Structured Multi-Filter Support | High | Tier 1 #1 |
 | Sort Options | Medium-High | Tier 1 #4 |
+| Multi-Language Snowball Stemming | High | Tier 2 #E — SCHEMA_VERSION 3, DE+EN shadow fields |
 | Date-Friendly Query Parameters | Medium | Tier 2 #6 (via filters) |
 | Expanded File Format Support | Low-Medium | Tier 2 #8 |
 | Query Profiling & Debugging | High | Tier 2 #9 |
@@ -980,7 +1375,7 @@ When adding detailed documentation to avoid context pollution:
 
 | Item | Effort | Impact | Justification |
 |------|--------|--------|---------------|
-| **Multi-Language Stemming** | Medium | High | Missing Gap E - 15-30% recall gain for German |
+| **Irregular Verb Stemming** | Medium | Medium | E2 - StemmerOverrideFilter or Hunspell, extends Snowball |
 | Document Chunking | High | High | Tier 1 #3 - Solves long doc problem |
 | "More Like This" | Medium | Medium | Tier 2 #5 - AI-friendly feature |
 | OCR Support | Medium-High | Medium | Tier 2 #7 - Depends on user docs |

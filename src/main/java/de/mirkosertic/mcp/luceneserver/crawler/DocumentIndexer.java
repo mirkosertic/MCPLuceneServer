@@ -35,8 +35,9 @@ public class DocumentIndexer {
      * Schema version for the index.
      * MUST be incremented whenever the index schema changes (fields added/removed/modified, analyzers changed, etc.).
      * Version 2: Added text cleaning to remove broken/invalid characters during indexing.
+     * Version 3: Added content_stemmed_de and content_stemmed_en fields for Snowball stemming.
      */
-    public static final int SCHEMA_VERSION = 2;
+    public static final int SCHEMA_VERSION = 3;
 
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;
@@ -81,6 +82,16 @@ public class DocumentIndexer {
             // The PerFieldAnalyzerWrapper in LuceneIndexService routes this field to the
             // ReverseUnicodeNormalizingAnalyzer automatically.
             doc.add(new TextField("content_reversed", cleanedContent, Field.Store.NO));
+
+            // Stemmed shadow fields (analyzed with StemmedUnicodeNormalizingAnalyzer, not stored)
+            // Only added when the document's detected language matches a supported stemmer.
+            // The PerFieldAnalyzerWrapper in LuceneIndexService routes each field to the
+            // appropriate language-specific StemmedUnicodeNormalizingAnalyzer automatically.
+            if ("de".equals(extracted.detectedLanguage())) {
+                doc.add(new TextField("content_stemmed_de", cleanedContent, Field.Store.NO));
+            } else if ("en".equals(extracted.detectedLanguage())) {
+                doc.add(new TextField("content_stemmed_en", cleanedContent, Field.Store.NO));
+            }
         }
 
         // file_extension (not analyzed, stored, faceted)

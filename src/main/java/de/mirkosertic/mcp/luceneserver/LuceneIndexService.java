@@ -47,6 +47,8 @@ import org.apache.lucene.index.Term;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.BoostQuery;
+import org.apache.lucene.search.PrefixQuery;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
@@ -68,6 +70,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.BreakIterator;
 import java.time.Instant;
+import java.util.Locale;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -110,11 +113,24 @@ public class LuceneIndexService {
 
     /** Fields that are analyzed TextField — cannot be filtered with exact term match. */
     static final Set<String> ANALYZED_FIELDS = Set.of(
-            "content", "content_reversed", "keywords", "file_name", "title", "author", "creator", "subject");
+            "content", "content_reversed", "content_stemmed_de", "content_stemmed_en",
+            "keywords", "file_name", "title", "author", "creator", "subject");
+
+    /** Mapping from language code to the corresponding stemmed shadow field. */
+    static final Map<String, String> STEMMED_FIELD_BY_LANGUAGE = Map.of(
+            "de", "content_stemmed_de",
+            "en", "content_stemmed_en");
 
     /** Fields that are StringField (exact match, not analyzed). */
     static final Set<String> STRING_FIELDS = Set.of(
             "file_path", "file_extension", "file_type", "language", "content_hash");
+
+    /**
+     * Fields whose analyzers apply a LowerCaseFilter, so wildcard/prefix term text must be
+     * lowercased before querying to match the indexed tokens.
+     */
+    static final Set<String> LOWERCASE_WILDCARD_FIELDS = Set.of(
+            "content", "content_reversed", "content_stemmed_de", "content_stemmed_en");
 
     /**
      * States for long-running admin operations.
@@ -139,6 +155,10 @@ public class LuceneIndexService {
     private final DocumentIndexer documentIndexer;
     private boolean schemaUpgradeRequired = false;
 
+    // Language distribution cache for stemmed query boosting
+    private volatile Map<String, Long> cachedLanguageDistribution = Map.of();
+    private volatile long cachedTotalDocs = 0;
+
     // Lock object for admin operation state transitions
     private final Object adminStateLock = new Object();
 
@@ -162,7 +182,9 @@ public class LuceneIndexService {
         this.config = config;
         final Analyzer defaultAnalyzer = new UnicodeNormalizingAnalyzer();
         this.analyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
-                "content_reversed", new ReverseUnicodeNormalizingAnalyzer()
+                "content_reversed", new ReverseUnicodeNormalizingAnalyzer(),
+                "content_stemmed_de", new StemmedUnicodeNormalizingAnalyzer("German"),
+                "content_stemmed_en", new StemmedUnicodeNormalizingAnalyzer("English")
         ));
         this.indexPath = config.getIndexPath();
         this.nrtRefreshIntervalMs = config.getNrtRefreshIntervalMs();
@@ -244,6 +266,9 @@ public class LuceneIndexService {
         refreshScheduler.scheduleAtFixedRate(this::maybeRefreshSearcher,
                 nrtRefreshIntervalMs, nrtRefreshIntervalMs, TimeUnit.MILLISECONDS);
 
+        // Initialize language distribution cache for stemmed query boosting
+        refreshLanguageDistribution();
+
         logger.info("Lucene index initialized at: {} with NRT refresh interval {}ms",
                 path.toAbsolutePath(), nrtRefreshIntervalMs);
     }
@@ -251,6 +276,7 @@ public class LuceneIndexService {
     private void maybeRefreshSearcher() {
         try {
             searcherManager.maybeRefresh();
+            refreshLanguageDistribution();
         } catch (final IOException e) {
             logger.warn("Failed to refresh SearcherManager", e);
         }
@@ -354,15 +380,22 @@ public class LuceneIndexService {
 
         final IndexSearcher searcher = searcherManager.acquire();
         try {
-            // 1. Build main query
+            // 1. Build main query (with stemming) and highlight query (unstemmed)
             final Query mainQuery;
+            final Query highlightQuery;
             if (queryString == null || queryString.isBlank()) {
                 mainQuery = new MatchAllDocsQuery();
+                highlightQuery = mainQuery;
             } else {
                 final QueryParser parser = new QueryParser("content", analyzer);
                 parser.setAllowLeadingWildcard(true);
                 final Query parsed = parser.parse(queryString);
-                mainQuery = rewriteLeadingWildcards(parsed);
+                final Query contentQuery = rewriteLeadingWildcards(parsed);
+                highlightQuery = contentQuery;
+
+                // Build stemmed query: content (boosted) + stemmed fields
+                final String languageHint = extractLanguageHint(filters);
+                mainQuery = buildStemmedQuery(contentQuery, queryString, languageHint);
             }
 
             // 2. Classify filters
@@ -516,7 +549,9 @@ public class LuceneIndexService {
 
             final long totalHits = topDocs.totalHits.value();
 
-            // 7. Highlighting — uses mainQuery (only user search terms get <em> tags)
+            // 7. Highlighting — uses highlightQuery (unstemmed content only) so <em> tags
+            //    wrap the correct surface forms; docs found only via stemmed fields get
+            //    fallback passages via withMaxNoHighlightPassages(1)
             final int maxPassages = config.getMaxPassages();
             final int maxPassageCharLength = config.getMaxPassageCharLength();
             final PassageAwareHighlighter highlighter = new PassageAwareHighlighter(
@@ -527,7 +562,7 @@ public class LuceneIndexService {
                             .withBreakIterator(BreakIterator::getSentenceInstance)
                             .withMaxNoHighlightPassages(1)
             );
-            final Set<String> queryTerms = extractQueryTerms(mainQuery);
+            final Set<String> queryTerms = extractQueryTerms(highlightQuery);
 
             // 8. Collect results for the requested page
             final List<SearchDocument> results = new ArrayList<>();
@@ -536,10 +571,10 @@ public class LuceneIndexService {
             for (int i = startIndex; i < scoreDocs.length && i < maxResults; i++) {
                 final Document doc = searcher.storedFields().document(scoreDocs[i].doc);
 
-                logger.debug("Query for highlighting: {}", mainQuery);
+                logger.debug("Query for highlighting: {}", highlightQuery);
                 final String content = doc.get("content");
                 final List<Passage> passages = createPassages(
-                        content, mainQuery, highlighter, maxPassages, maxPassageCharLength, queryTerms, scoreDocs[i]);
+                        content, highlightQuery, highlighter, maxPassages, maxPassageCharLength, queryTerms, scoreDocs[i]);
 
                 final SearchDocument searchDoc = SearchDocument.builder()
                         .score(scoreDocs[i].score)
@@ -590,19 +625,22 @@ public class LuceneIndexService {
 
         final IndexSearcher searcher = searcherManager.acquire();
         try {
-            // Build main query
+            // Build main query (with stemming and leading wildcard rewriting)
             final Query mainQuery;
             if (request.effectiveQuery() == null || request.effectiveQuery().isBlank()) {
                 mainQuery = new MatchAllDocsQuery();
             } else {
                 final QueryParser parser = new QueryParser("content", analyzer);
                 parser.setAllowLeadingWildcard(true);
-                mainQuery = parser.parse(request.effectiveQuery());
+                final Query parsed = parser.parse(request.effectiveQuery());
+                final Query contentQuery = rewriteLeadingWildcards(parsed);
+                final String languageHint = extractLanguageHint(request.effectiveFilters());
+                mainQuery = buildStemmedQuery(contentQuery, request.effectiveQuery(), languageHint);
             }
 
             // Level 1: Fast analysis (always included)
             final QueryAnalysis queryAnalysis = analyzeQueryStructure(
-                    mainQuery, request.effectiveQuery(), request.effectiveFilters(), searcher);
+                    mainQuery, request.effectiveQuery(), searcher);
             final SearchMetrics searchMetrics = computeSearchMetrics(
                     mainQuery, request.effectiveFilters(), searcher);
 
@@ -1595,11 +1633,151 @@ public class LuceneIndexService {
         }
     }
 
+    // ==================== Stemmed Query Support ====================
+
     /**
-     * Rewrite leading wildcard queries to use the {@code content_reversed} field
-     * for efficient execution.
+     * Refresh the cached language distribution from the index facets.
+     * Called on NRT refresh and once at end of init().
+     */
+    private void refreshLanguageDistribution() {
+        try {
+            final IndexSearcher searcher = searcherManager.acquire();
+            try {
+                final long total = searcher.getIndexReader().numDocs();
+                if (total == 0) {
+                    cachedLanguageDistribution = Map.of();
+                    cachedTotalDocs = 0;
+                    return;
+                }
+
+                final Map<String, Long> distribution = new HashMap<>();
+                final FacetsCollectorManager fcm = new FacetsCollectorManager();
+                final FacetsCollectorManager.FacetsResult result =
+                        FacetsCollectorManager.search(searcher, new MatchAllDocsQuery(), 1, fcm);
+
+                try {
+                    final SortedSetDocValuesReaderState state = new DefaultSortedSetDocValuesReaderState(
+                            searcher.getIndexReader(), documentIndexer.getFacetsConfig());
+                    final Facets facets = new SortedSetDocValuesFacetCounts(state, result.facetsCollector());
+                    final FacetResult langResult = facets.getTopChildren(100, "language");
+                    if (langResult != null) {
+                        for (final LabelAndValue lv : langResult.labelValues) {
+                            distribution.put(lv.label, (long) lv.value.intValue());
+                        }
+                    }
+                } catch (final IllegalArgumentException e) {
+                    // No language facet in index yet
+                    logger.debug("Language facet not available for distribution cache");
+                }
+
+                cachedLanguageDistribution = distribution;
+                cachedTotalDocs = total;
+            } finally {
+                searcherManager.release(searcher);
+            }
+        } catch (final IOException e) {
+            logger.debug("Failed to refresh language distribution cache", e);
+        }
+    }
+
+    /**
+     * Compute the boost for a stemmed field based on how many documents in the index
+     * have that language. Soft scaling: {@code 0.3 + 0.7 * (langCount / totalDocs)}.
+     * Returns a minimum of 0.3 even if no documents have that language.
+     */
+    private double computeStemmedBoost(final String languageCode) {
+        final long total = cachedTotalDocs;
+        if (total == 0) {
+            return 0.3;
+        }
+        final long langCount = cachedLanguageDistribution.getOrDefault(languageCode, 0L);
+        return 0.3 + 0.7 * ((double) langCount / total);
+    }
+
+    /**
+     * Re-parse a query string targeting a specific field. The PerFieldAnalyzerWrapper
+     * ensures the correct analyzer is used for the target field.
+     */
+    private Query parseQueryForField(final String queryString, final String targetField) throws ParseException {
+        final QueryParser parser = new QueryParser(targetField, analyzer);
+        parser.setAllowLeadingWildcard(true);
+        return parser.parse(queryString);
+    }
+
+    /**
+     * Build a combined query that includes the unstemmed content query (boosted highest)
+     * plus stemmed variants for each supported language.
      *
-     * <p>Rewriting rules (only for queries on the {@code content} field):</p>
+     * <p>If a {@code languageHint} is provided (e.g. from a language filter), only that
+     * language's stemmed field is included at boost 1.0. Otherwise, all supported stemmed
+     * fields are included with dynamic boosts from the language distribution cache.</p>
+     *
+     * @param contentQuery   the unstemmed content query (already rewritten for leading wildcards)
+     * @param rawQueryString the original query string to re-parse for stemmed fields
+     * @param languageHint   optional language code hint (e.g. "de"), or null
+     * @return combined BooleanQuery with minimumNumberShouldMatch(1)
+     */
+    private Query buildStemmedQuery(final Query contentQuery, final String rawQueryString,
+                                    final String languageHint) throws ParseException {
+        final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+
+        // Unstemmed content query always boosted highest
+        builder.add(new BoostQuery(contentQuery, 2.0f), BooleanClause.Occur.SHOULD);
+
+        if (languageHint != null && STEMMED_FIELD_BY_LANGUAGE.containsKey(languageHint)) {
+            // Single language hint — only include that stemmed field
+            final String stemmedField = STEMMED_FIELD_BY_LANGUAGE.get(languageHint);
+            // Apply rewriteLeadingWildcards() to normalize wildcard/prefix term case on analyzed fields
+            final Query stemmedQuery = rewriteLeadingWildcards(parseQueryForField(rawQueryString, stemmedField));
+            builder.add(new BoostQuery(stemmedQuery, 1.0f), BooleanClause.Occur.SHOULD);
+        } else {
+            // No hint — include all stemmed fields with distribution-based boost
+            for (final Map.Entry<String, String> entry : STEMMED_FIELD_BY_LANGUAGE.entrySet()) {
+                final String langCode = entry.getKey();
+                final String stemmedField = entry.getValue();
+                // Apply rewriteLeadingWildcards() to normalize wildcard/prefix term case on analyzed fields
+                final Query stemmedQuery = rewriteLeadingWildcards(parseQueryForField(rawQueryString, stemmedField));
+                final float boost = (float) computeStemmedBoost(langCode);
+                builder.add(new BoostQuery(stemmedQuery, boost), BooleanClause.Occur.SHOULD);
+            }
+        }
+
+        builder.setMinimumNumberShouldMatch(1);
+        return builder.build();
+    }
+
+    /**
+     * Extract a language hint from filters: if there is exactly one {@code language eq "xx"}
+     * filter, return its value. Otherwise return null.
+     */
+    static String extractLanguageHint(final List<SearchFilter> filters) {
+        String hint = null;
+        for (final SearchFilter f : filters) {
+            if ("language".equals(f.field()) && "eq".equals(f.effectiveOperator()) && f.value() != null) {
+                if (hint != null) {
+                    return null; // Multiple language filters — no single hint
+                }
+                hint = f.value();
+            }
+        }
+        return hint;
+    }
+
+    /**
+     * Normalize and rewrite wildcard/prefix queries for efficient execution.
+     *
+     * <p>This method performs two normalizations:</p>
+     * <ol>
+     *   <li><b>Lowercasing</b>: Lucene's {@code QueryParser} does NOT apply the analyzer to
+     *       wildcard or prefix terms, so a query like {@code Vertrag*} is created with the
+     *       uppercase text {@code Vertrag*}. Because the index stores lowercased tokens, this
+     *       would produce zero results. For fields whose analyzers apply a {@code LowerCaseFilter}
+     *       (see {@link #LOWERCASE_WILDCARD_FIELDS}), the term text is lowercased here.</li>
+     *   <li><b>Leading-wildcard rewriting</b>: Leading wildcards on the {@code content} field
+     *       are rewritten to use the {@code content_reversed} field for efficient execution.</li>
+     * </ol>
+     *
+     * <p>Rewriting rules for leading wildcards (only for queries on the {@code content} field):</p>
      * <ul>
      *   <li>{@code *vertrag} &rarr; {@code WildcardQuery("content_reversed", "gartrev*")}</li>
      *   <li>{@code *vertrag*} &rarr; {@code BooleanQuery(OR): content:*vertrag* OR content_reversed:gartrev*}</li>
@@ -1613,21 +1791,33 @@ public class LuceneIndexService {
             final String field = wq.getTerm().field();
             final String text = wq.getTerm().text();
 
-            // Only rewrite queries on the "content" field
+            // Lowercase wildcard term text on analyzed fields (analyzers apply LowerCaseFilter,
+            // but QueryParser does NOT apply the analyzer to wildcard terms).
+            final String normalizedText = LOWERCASE_WILDCARD_FIELDS.contains(field)
+                    ? text.toLowerCase(Locale.ROOT) : text;
+
+            // Only rewrite leading wildcards on the "content" field
             if (!"content".equals(field)) {
+                // For non-content fields, just return lowercased version if needed
+                if (!normalizedText.equals(text)) {
+                    return new WildcardQuery(new Term(field, normalizedText));
+                }
                 return query;
             }
 
-            final boolean startsWithWildcard = text.startsWith("*") || text.startsWith("?");
-            final boolean endsWithWildcard = text.endsWith("*") || text.endsWith("?");
+            final boolean startsWithWildcard = normalizedText.startsWith("*") || normalizedText.startsWith("?");
+            final boolean endsWithWildcard = normalizedText.endsWith("*") || normalizedText.endsWith("?");
 
             if (!startsWithWildcard) {
                 // Trailing wildcard only (e.g. vertrag*) -- already efficient
+                if (!normalizedText.equals(text)) {
+                    return new WildcardQuery(new Term(field, normalizedText));
+                }
                 return query;
             }
 
             // Strip the leading wildcard character
-            final String core = text.substring(1);
+            final String core = normalizedText.substring(1);
 
             if (endsWithWildcard) {
                 // Infix wildcard: *vertrag*
@@ -1635,9 +1825,11 @@ public class LuceneIndexService {
                 final String coreWithoutTrailing = core.substring(0, core.length() - 1);
                 final String reversed = new StringBuilder(coreWithoutTrailing).reverse().toString();
 
-                // OR: original query on content OR reversed trailing wildcard on content_reversed
+                // OR: original (lowercased) query on content OR reversed trailing wildcard on content_reversed
+                final WildcardQuery normalizedWq = normalizedText.equals(text)
+                        ? wq : new WildcardQuery(new Term(field, normalizedText));
                 final BooleanQuery.Builder builder = new BooleanQuery.Builder();
-                builder.add(wq, BooleanClause.Occur.SHOULD);
+                builder.add(normalizedWq, BooleanClause.Occur.SHOULD);
                 builder.add(new WildcardQuery(new Term("content_reversed", reversed + "*")),
                         BooleanClause.Occur.SHOULD);
                 return builder.build();
@@ -1647,6 +1839,19 @@ public class LuceneIndexService {
                 final String reversed = new StringBuilder(core).reverse().toString();
                 return new WildcardQuery(new Term("content_reversed", reversed + "*"));
             }
+
+        } else if (query instanceof final PrefixQuery pq) {
+            // QueryParser sometimes produces PrefixQuery (for "term*") instead of WildcardQuery.
+            // Apply the same lowercasing normalization for analyzed fields.
+            final String field = pq.getPrefix().field();
+            final String text = pq.getPrefix().text();
+            if (LOWERCASE_WILDCARD_FIELDS.contains(field)) {
+                final String lower = text.toLowerCase(Locale.ROOT);
+                if (!lower.equals(text)) {
+                    return new PrefixQuery(new Term(field, lower));
+                }
+            }
+            return query;
 
         } else if (query instanceof final BooleanQuery bq) {
             // Recurse into sub-queries
@@ -1920,7 +2125,6 @@ public class LuceneIndexService {
     private QueryAnalysis analyzeQueryStructure(
             final Query query,
             final String originalQueryString,
-            final List<SearchFilter> filters,
             final IndexSearcher searcher) throws IOException {
 
         final List<QueryComponent> components = new ArrayList<>();
@@ -2078,14 +2282,15 @@ public class LuceneIndexService {
         final long docsMatchingQuery = baseResults.totalHits.value();
 
         // Count documents after applying filters
-        final long docsAfterFilters = docsMatchingQuery;
+        long docsAfterFilters = docsMatchingQuery;
         if (!filters.isEmpty()) {
-            // Build filtered query
             final BooleanQuery.Builder filteredBuilder = new BooleanQuery.Builder();
             filteredBuilder.add(mainQuery, BooleanClause.Occur.MUST);
-
-            // Add filters (simplified - would need full filter building logic)
-            // For now, just use the base query result
+            for (final SearchFilter f : filters) {
+                addFilterClause(filteredBuilder, f);
+            }
+            final TopDocs filteredResults = searcher.search(filteredBuilder.build(), 1);
+            docsAfterFilters = filteredResults.totalHits.value();
         }
 
         final double filterReduction = docsMatchingQuery > 0 ?
@@ -2160,17 +2365,18 @@ public class LuceneIndexService {
         final long baselineHits = searcher.count(mainQuery);
         final List<FilterImpact> impacts = new ArrayList<>();
 
-        // Test each filter incrementally
+        // Test each filter incrementally — apply filters cumulatively and measure hit reduction
         long currentHits = baselineHits;
-        for (final SearchFilter searchFilter : filters) {
+        final BooleanQuery.Builder cumulativeBuilder = new BooleanQuery.Builder();
+        cumulativeBuilder.add(mainQuery, BooleanClause.Occur.MUST);
+
+        for (final SearchFilter filter : filters) {
             final long filterStartTime = System.nanoTime();
-            final SearchFilter filter = searchFilter;
 
-            // Apply filters up to and including this one
-            // For simplicity, we'll just record the filter without actually building the query
-            // A full implementation would build the filtered query and count results
+            // Add this filter to the cumulative query
+            addFilterClause(cumulativeBuilder, filter);
 
-            final long hitsAfter = currentHits; // Simplified
+            final long hitsAfter = searcher.count(cumulativeBuilder.build());
             final long removed = currentHits - hitsAfter;
             final double reduction = currentHits > 0 ? (removed * 100.0 / currentHits) : 0;
             final String selectivity = categorizeSelectivity(reduction);
@@ -2195,6 +2401,69 @@ public class LuceneIndexService {
     }
 
     /**
+     * Add a single filter as a clause to the given BooleanQuery builder.
+     */
+    private void addFilterClause(final BooleanQuery.Builder builder, final SearchFilter f) {
+        final String op = f.effectiveOperator();
+        final String field = f.field();
+
+        switch (op) {
+            case "not" -> {
+                if (f.value() != null) {
+                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)) {
+                        builder.add(new TermQuery(new Term(field, f.value())), BooleanClause.Occur.MUST_NOT);
+                    } else if (LONG_POINT_FIELDS.contains(field)) {
+                        builder.add(LongPoint.newExactQuery(field, parseLongFilterValue(field, f.value())), BooleanClause.Occur.MUST_NOT);
+                    }
+                }
+            }
+            case "not_in" -> {
+                if (f.values() != null) {
+                    for (final String v : f.values()) {
+                        if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)) {
+                            builder.add(new TermQuery(new Term(field, v)), BooleanClause.Occur.MUST_NOT);
+                        } else if (LONG_POINT_FIELDS.contains(field)) {
+                            builder.add(LongPoint.newExactQuery(field, parseLongFilterValue(field, v)), BooleanClause.Occur.MUST_NOT);
+                        }
+                    }
+                }
+            }
+            case "range" -> {
+                final long fromVal = f.from() != null ? parseLongFilterValue(field, f.from()) : Long.MIN_VALUE;
+                final long toVal = f.to() != null ? parseLongFilterValue(field, f.to()) : Long.MAX_VALUE;
+                builder.add(LongPoint.newRangeQuery(field, fromVal, toVal), BooleanClause.Occur.FILTER);
+            }
+            case "eq" -> {
+                if (f.value() != null) {
+                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)) {
+                        builder.add(new TermQuery(new Term(field, f.value())), BooleanClause.Occur.FILTER);
+                    } else if (LONG_POINT_FIELDS.contains(field)) {
+                        builder.add(LongPoint.newExactQuery(field, parseLongFilterValue(field, f.value())), BooleanClause.Occur.FILTER);
+                    }
+                }
+            }
+            case "in" -> {
+                if (f.values() != null) {
+                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)) {
+                        final BooleanQuery.Builder orBuilder = new BooleanQuery.Builder();
+                        for (final String v : f.values()) {
+                            orBuilder.add(new TermQuery(new Term(field, v)), BooleanClause.Occur.SHOULD);
+                        }
+                        builder.add(orBuilder.build(), BooleanClause.Occur.FILTER);
+                    } else if (LONG_POINT_FIELDS.contains(field)) {
+                        final long[] vals = new long[f.values().size()];
+                        for (int i = 0; i < f.values().size(); i++) {
+                            vals[i] = parseLongFilterValue(field, f.values().get(i));
+                        }
+                        builder.add(LongPoint.newSetQuery(field, vals), BooleanClause.Occur.FILTER);
+                    }
+                }
+            }
+            default -> { /* unknown op — skip */ }
+        }
+    }
+
+    /**
      * Categorize filter selectivity.
      */
     private String categorizeSelectivity(final double reductionPercent) {
@@ -2213,8 +2482,21 @@ public class LuceneIndexService {
             final int maxDocs,
             final IndexSearcher searcher) throws IOException {
 
+        // Build filtered query to match what search() actually returns
+        final Query effectiveQuery;
+        if (!filters.isEmpty()) {
+            final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+            builder.add(mainQuery, BooleanClause.Occur.MUST);
+            for (final SearchFilter f : filters) {
+                addFilterClause(builder, f);
+            }
+            effectiveQuery = builder.build();
+        } else {
+            effectiveQuery = mainQuery;
+        }
+
         // Run search to get top documents
-        final TopDocs topDocs = searcher.search(mainQuery, maxDocs);
+        final TopDocs topDocs = searcher.search(effectiveQuery, maxDocs);
         final List<DocumentScoringExplanation> explanations = new ArrayList<>();
 
         for (int i = 0; i < topDocs.scoreDocs.length; i++) {
@@ -2326,31 +2608,75 @@ public class LuceneIndexService {
     }
 
     /**
-     * Analyze faceting cost.
+     * Analyze faceting cost by comparing search with and without facet collection,
+     * then measuring per-dimension facet computation time.
      */
     private FacetCostAnalysis analyzeFacetCost(
             final Query mainQuery,
             final List<SearchFilter> filters,
             final IndexSearcher searcher) throws IOException {
 
-        final long startTime = System.nanoTime();
-
-        // Run search without faceting
-        final TopDocs baseDocs = searcher.search(mainQuery, 10);
-        final long baseTime = System.nanoTime() - startTime;
-
-        // This is a simplified implementation
-        // A full implementation would use FacetsCollector and measure the overhead
-
-        final Map<String, FacetDimensionCost> dimensions = new HashMap<>();
-        for (final String dimension : FACETED_FIELDS) {
-            dimensions.put(dimension, new FacetDimensionCost(dimension, 0, 0, 0.0));
+        // Build filtered query to match what search() actually executes
+        final Query effectiveQuery;
+        if (!filters.isEmpty()) {
+            final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+            builder.add(mainQuery, BooleanClause.Occur.MUST);
+            for (final SearchFilter f : filters) {
+                addFilterClause(builder, f);
+            }
+            effectiveQuery = builder.build();
+        } else {
+            effectiveQuery = mainQuery;
         }
 
-        final double facetOverhead = 0.0; // Placeholder
-        final double facetPercent = 0.0;
+        // 1. Baseline: search without faceting
+        final long baseStart = System.nanoTime();
+        searcher.search(effectiveQuery, 10);
+        final double baseTimeMs = (System.nanoTime() - baseStart) / 1_000_000.0;
 
-        return new FacetCostAnalysis(facetOverhead, facetPercent, dimensions);
+        // 2. Search with facet collection
+        final long facetStart = System.nanoTime();
+        final FacetsCollectorManager facetsCollectorManager = new FacetsCollectorManager();
+        final FacetsCollectorManager.FacetsResult result = FacetsCollectorManager.search(
+                searcher, effectiveQuery, 10, facetsCollectorManager);
+        final double facetSearchTimeMs = (System.nanoTime() - facetStart) / 1_000_000.0;
+
+        final double overheadMs = Math.max(0, facetSearchTimeMs - baseTimeMs);
+
+        // 3. Per-dimension cost: measure time to compute facet counts for each dimension
+        final Map<String, FacetDimensionCost> dimensions = new HashMap<>();
+        try {
+            final SortedSetDocValuesReaderState state = new DefaultSortedSetDocValuesReaderState(
+                    searcher.getIndexReader(), documentIndexer.getFacetsConfig());
+            final Facets facets = new SortedSetDocValuesFacetCounts(state, result.facetsCollector());
+
+            for (final String dimension : FACETED_FIELDS) {
+                final long dimStart = System.nanoTime();
+                try {
+                    final FacetResult fr = facets.getTopChildren(100, dimension);
+                    final double dimTimeMs = (System.nanoTime() - dimStart) / 1_000_000.0;
+                    if (fr != null) {
+                        dimensions.put(dimension, new FacetDimensionCost(
+                                dimension, fr.childCount, (int) fr.value, dimTimeMs));
+                    } else {
+                        dimensions.put(dimension, new FacetDimensionCost(dimension, 0, 0, dimTimeMs));
+                    }
+                } catch (final IllegalArgumentException e) {
+                    // Dimension not present in index
+                    final double dimTimeMs = (System.nanoTime() - dimStart) / 1_000_000.0;
+                    dimensions.put(dimension, new FacetDimensionCost(dimension, 0, 0, dimTimeMs));
+                }
+            }
+        } catch (final IllegalStateException e) {
+            // No facet data in index at all
+            for (final String dimension : FACETED_FIELDS) {
+                dimensions.put(dimension, new FacetDimensionCost(dimension, 0, 0, 0.0));
+            }
+        }
+
+        final double overheadPercent = baseTimeMs > 0 ? (overheadMs * 100.0 / baseTimeMs) : 0;
+
+        return new FacetCostAnalysis(overheadMs, overheadPercent, dimensions);
     }
 
     /**
@@ -2395,6 +2721,21 @@ public class LuceneIndexService {
         if (searchMetrics.documentsMatchingQuery() > 10000) {
             recommendations.add("Query matches many documents (" + searchMetrics.documentsMatchingQuery() +
                     "). Consider adding filters or more specific terms for better performance.");
+        }
+
+        // Check document scoring patterns
+        if (docExplanations != null && docExplanations.size() >= 2) {
+            final double topScore = docExplanations.getFirst().score();
+            final double lastScore = docExplanations.getLast().score();
+            if (topScore > 0 && lastScore > 0) {
+                final double scoreSpread = (topScore - lastScore) / topScore;
+                if (scoreSpread < 0.1) {
+                    recommendations.add(String.format(
+                            "Top %d results have very similar scores (%.2f to %.2f). " +
+                            "Consider adding more specific terms or filters to better differentiate results.",
+                            docExplanations.size(), topScore, lastScore));
+                }
+            }
         }
 
         if (recommendations.isEmpty()) {

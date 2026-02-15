@@ -35,8 +35,12 @@ import static org.mockito.Mockito.when;
  * Precision/Recall regression test suite for the MCP Lucene Server.
  *
  * <p>Indexes a corpus of 45 documents (German, English, Cross-language) and executes
- * 85 queries across 12 categories. Measures precision, recall and F1 per query,
+ * 91 queries across 13 categories. Measures precision, recall and F1 per query,
  * then prints an aggregate report table in {@code @AfterAll}.</p>
+ *
+ * <p>Category 12 ("Stemming cross-form recall") was added to explicitly validate that
+ * multi-language Snowball stemming correctly conflates morphological variants across
+ * German and English documents.</p>
  */
 @DisplayName("Search Precision/Recall Regression Tests")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -238,54 +242,64 @@ class SearchPrecisionRecallRegressionTest {
     );
 
     // =========================================================================
-    // Test queries — P/R categories (categories 1–9, 11)
+    // Test queries — P/R categories (categories 1–9, 11–12)
     // =========================================================================
 
     private static List<TestQuery> precisionRecallQueries() {
         final List<TestQuery> queries = new ArrayList<>();
 
         // ── Category 1: German noun morphology (8 queries) ───────────────────
-        // Each inflected form is its own token (no stemming yet) — all achieve R=1.0
+        // With stemming: all inflected forms of the same lemma conflate via German Snowball.
+        // Vertrag/Vertrages/Verträge → "vertrag"; Haus/Häuser/Hauses → "haus"; Zahlung/Zahlungen → "zahlung".
+        // Compound words (Arbeitsvertrag→"arbeitsvertrag") do NOT conflate with the simple stem.
+        // CL_02 (language="en") has "Vertrag" → English stemmer leaves it as "vertrag" → still matches.
         queries.add(new TestQuery("Q_DE_NOUN_01", "German noun morphology",
-                "Vertrag", Set.of("DE_01", "DE_04", "CL_02"), Set.of("DE_25"), 1.0, 1.0));
+                "Vertrag", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "CL_02"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_NOUN_02", "German noun morphology",
-                "Vertrages", Set.of("DE_02"), Set.of("DE_25"), 1.0, 1.0));
+                "Vertrages", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "CL_02"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_NOUN_03", "German noun morphology",
-                "Verträge", Set.of("DE_03"), Set.of("DE_25"), 1.0, 1.0));
+                "Verträge", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "CL_02"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_NOUN_04", "German noun morphology",
-                "Haus", Set.of("DE_08"), Set.of("DE_25"), 1.0, 1.0));
+                "Haus", Set.of("DE_08", "DE_09", "DE_10"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_NOUN_05", "German noun morphology",
-                "Häuser", Set.of("DE_09"), Set.of("DE_25"), 1.0, 1.0));
+                "Häuser", Set.of("DE_08", "DE_09", "DE_10"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_NOUN_06", "German noun morphology",
-                "Hauses", Set.of("DE_10"), Set.of("DE_25"), 1.0, 1.0));
+                "Hauses", Set.of("DE_08", "DE_09", "DE_10"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_NOUN_07", "German noun morphology",
-                "Zahlung", Set.of("DE_20"), Set.of("DE_25"), 1.0, 1.0));
+                "Zahlung", Set.of("DE_20", "DE_21"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_NOUN_08", "German noun morphology",
-                "Zahlungen", Set.of("DE_21"), Set.of("DE_25"), 1.0, 1.0));
+                "Zahlungen", Set.of("DE_20", "DE_21"), Set.of("DE_25"), 1.0, 1.0));
 
         // ── Category 2: German verb morphology (6 queries) ───────────────────
-        // Each conjugated form is its own token — all achieve R=1.0
+        // With stemming: German Snowball does NOT unify all verb forms uniformly.
+        // suchen→"such", gesucht→"gesucht", suchte→"sucht" are distinct stems.
+        // However, arbeiten→"arbeit" and Arbeit→"arbeit" share the same stem, so they cross-match.
+        // gearbeitet→"gearbeit" (different stem, does NOT conflate with "arbeit").
         queries.add(new TestQuery("Q_DE_VERB_01", "German verb morphology",
                 "suchen", Set.of("DE_11"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_VERB_02", "German verb morphology",
                 "gesucht", Set.of("DE_12"), Set.of("DE_25"), 1.0, 1.0));
+        // suchte→"sucht" via German Snowball; DE_11 also has "sucht" ("Die Firma sucht qualifizierte Bewerber")
         queries.add(new TestQuery("Q_DE_VERB_03", "German verb morphology",
-                "suchte", Set.of("DE_13"), Set.of("DE_25"), 1.0, 1.0));
+                "suchte", Set.of("DE_11", "DE_13"), Set.of("DE_25"), 1.0, 1.0));
+        // arbeiten→"arbeit" and Arbeit→"arbeit": DE_17 (Arbeit) and DE_18 (arbeiten) share the same stem
         queries.add(new TestQuery("Q_DE_VERB_04", "German verb morphology",
-                "arbeiten", Set.of("DE_18"), Set.of("DE_25"), 1.0, 1.0));
+                "arbeiten", Set.of("DE_17", "DE_18"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_VERB_05", "German verb morphology",
                 "gearbeitet", Set.of("DE_19"), Set.of("DE_25"), 1.0, 1.0));
+        // Arbeit→"arbeit" matches DE_18 (arbeiten→"arbeit") via stemming
         queries.add(new TestQuery("Q_DE_VERB_06", "German verb morphology",
-                "Arbeit", Set.of("DE_17"), Set.of("DE_25"), 1.0, 1.0));
+                "Arbeit", Set.of("DE_17", "DE_18"), Set.of("DE_25"), 1.0, 1.0));
 
         // ── Category 3: German compound words (8 queries) ────────────────────
         queries.add(new TestQuery("Q_DE_COMP_01", "German compound words",
                 "Arbeitsvertrag", Set.of("DE_05"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_DE_COMP_02", "German compound words",
                 "Kaufvertrag", Set.of("DE_06", "CL_02"), Set.of("DE_25"), 1.0, 1.0));
-        // *vertrag: leading wildcard matches all docs ending in "vertrag" (incl. standalone)
+        // *vertrag: leading wildcard on content_stemmed_de matches tokens ending in "vertrag".
+        // Vertrages→"vertrag" (DE_02) and Verträge→"vertrag" (DE_03) also match via stemmed field.
         queries.add(new TestQuery("Q_DE_COMP_03", "German compound words",
-                "*vertrag", Set.of("DE_01", "DE_04", "DE_05", "DE_06", "DE_07", "CL_02"),
+                "*vertrag", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "DE_05", "DE_06", "DE_07", "CL_02"),
                 Set.of("DE_25"), 1.0, 1.0));
         // *vertrag*: infix matches all docs containing "vertrag" anywhere in a token
         queries.add(new TestQuery("Q_DE_COMP_04", "German compound words",
@@ -323,52 +337,77 @@ class SearchPrecisionRecallRegressionTest {
                 "Steuererklarung", Set.of("DE_24"), Set.of("DE_25"), 1.0, 1.0));
 
         // ── Category 5: English regular inflections (8 queries) ──────────────
-        // No stemming: each inflection is its own token, but exact forms achieve R=1.0
+        // With stemming: English Snowball conflates contract/contracts/contracted/contracting → "contract",
+        // payment/payments → "payment", house/houses/housing → "hous".
+        // CL_01 (language="de") has "Contract" and "Payment" in content_stemmed_de; German stemmer
+        // leaves these unchanged as "contract"/"payment", so they still match via stemmed DE field.
         queries.add(new TestQuery("Q_EN_REG_01", "English regular inflections",
-                "contract", Set.of("EN_01", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
+                "contract", Set.of("EN_01", "EN_02", "EN_03", "EN_04", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_EN_REG_02", "English regular inflections",
-                "contracts", Set.of("EN_02"), Set.of("EN_18"), 1.0, 1.0));
+                "contracts", Set.of("EN_01", "EN_02", "EN_03", "EN_04", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
+        // CL_01 (language="de"): "Contract" is kept as "contract" by German Snowball (foreign word).
+        // However "contracted"→"contract" via English Snowball does NOT match content_stemmed_de
+        // because German Snowball does not strip the English "-ed" suffix from "contracted".
+        // So CL_01 is only reachable via "contract" or "contracts" (which appear literally in its content).
         queries.add(new TestQuery("Q_EN_REG_03", "English regular inflections",
-                "contracted", Set.of("EN_03"), Set.of("EN_18"), 1.0, 1.0));
+                "contracted", Set.of("EN_01", "EN_02", "EN_03", "EN_04"), Set.of("EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_EN_REG_04", "English regular inflections",
-                "contracting", Set.of("EN_04"), Set.of("EN_18"), 1.0, 1.0));
+                "contracting", Set.of("EN_01", "EN_02", "EN_03", "EN_04"), Set.of("EN_18"), 1.0, 1.0));
+        // payment/payments both stem to "payment"; CL_01 has "Payment" → German stem "payment"
         queries.add(new TestQuery("Q_EN_REG_05", "English regular inflections",
-                "payment", Set.of("EN_10", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
+                "payment", Set.of("EN_10", "EN_11", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_EN_REG_06", "English regular inflections",
-                "payments", Set.of("EN_11"), Set.of("EN_18"), 1.0, 1.0));
+                "payments", Set.of("EN_10", "EN_11", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
+        // house/houses/housing all stem to "hous"
         queries.add(new TestQuery("Q_EN_REG_07", "English regular inflections",
-                "house", Set.of("EN_14"), Set.of("EN_18"), 1.0, 1.0));
+                "house", Set.of("EN_14", "EN_15", "EN_16"), Set.of("EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_EN_REG_08", "English regular inflections",
-                "houses", Set.of("EN_15"), Set.of("EN_18"), 1.0, 1.0));
+                "houses", Set.of("EN_14", "EN_15", "EN_16"), Set.of("EN_18"), 1.0, 1.0));
 
         // ── Category 6: English irregular inflections (6 queries) ────────────
-        // No stemming: each form is its own token — R=1.0 for exact match
+        // With stemming: run/running → "run" (conflate); ran → "ran" (irregular, NOT unified).
+        // pay → "pay", paid → "paid" (NOT unified with payment/payments).
+        // analysis/analyses → "analysi" (conflate).
+        // run/running share the "run" stem, so each query finds both EN_05 and EN_06.
         queries.add(new TestQuery("Q_EN_IRR_01", "English irregular inflections",
-                "run", Set.of("EN_05"), Set.of("EN_18"), 1.0, 1.0));
+                "run", Set.of("EN_05", "EN_06"), Set.of("EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_EN_IRR_02", "English irregular inflections",
-                "running", Set.of("EN_06"), Set.of("EN_18"), 1.0, 1.0));
+                "running", Set.of("EN_05", "EN_06"), Set.of("EN_18"), 1.0, 1.0));
+        // ran → "ran": irregular past tense, NOT unified with run/running
         queries.add(new TestQuery("Q_EN_IRR_03", "English irregular inflections",
                 "ran", Set.of("EN_07"), Set.of("EN_18"), 1.0, 1.0));
+        // pay → "pay": NOT unified with paid or payment
         queries.add(new TestQuery("Q_EN_IRR_04", "English irregular inflections",
                 "pay", Set.of("EN_12"), Set.of("EN_18"), 1.0, 1.0));
+        // paid → "paid": NOT unified with pay or payment
         queries.add(new TestQuery("Q_EN_IRR_05", "English irregular inflections",
                 "paid", Set.of("EN_13"), Set.of("EN_18"), 1.0, 1.0));
+        // analysis/analyses: English Snowball does NOT conflate these irregular plural forms
+        // to a shared stem. "analysis" only matches EN_08 (has "analysis"); EN_09 (has "analyses")
+        // is not retrieved because "analyses" and "analysis" stem to different forms.
         queries.add(new TestQuery("Q_EN_IRR_06", "English irregular inflections",
                 "analysis", Set.of("EN_08"), Set.of("EN_18"), 1.0, 1.0));
 
         // ── Category 7: Cross-language (6 queries) ───────────────────────────
+        // With stemming: "contract" now finds all EN contract-form docs via content_stemmed_en.
+        // "Vertrag" now finds all DE Vertrag-form docs via content_stemmed_de.
+        // "payment" now finds EN_10 and EN_11 via content_stemmed_en.
+        // Compound words (Kaufvertrag, Mietvertrag) still do not conflate with simple stems.
         queries.add(new TestQuery("Q_CROSS_01", "Cross-language",
-                "contract", Set.of("EN_01", "CL_01"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
+                "contract", Set.of("EN_01", "EN_02", "EN_03", "EN_04", "CL_01"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_CROSS_02", "Cross-language",
-                "Vertrag", Set.of("DE_01", "DE_04", "CL_02"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
+                "Vertrag", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "CL_02"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
+        // Compound words: Kaufvertrag→"kaufvertrag" (DE) and "kaufvertrag" (EN), only exact matches
         queries.add(new TestQuery("Q_CROSS_03", "Cross-language",
                 "Kaufvertrag", Set.of("DE_06", "CL_02"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_CROSS_04", "Cross-language",
                 "Mietvertrag", Set.of("DE_07", "CL_02"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
+        // payment/payments → "payment"; CL_01 (language="de") has "Payment" in content_stemmed_de
         queries.add(new TestQuery("Q_CROSS_05", "Cross-language",
-                "payment", Set.of("EN_10", "CL_01"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
+                "payment", Set.of("EN_10", "EN_11", "CL_01"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
+        // "Review"→"review" via English Snowball; EN_02 has "reviewed"→"review" via content_stemmed_en
         queries.add(new TestQuery("Q_CROSS_06", "Cross-language",
-                "Review", Set.of("CL_01"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
+                "Review", Set.of("CL_01", "EN_02"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
 
         // ── Category 8: Precision guards (7 queries) ─────────────────────────
         // These test irrelevant exclusion. Empty expectedRelevant ⇒ P=0 by convention when docs are returned.
@@ -378,8 +417,10 @@ class SearchPrecisionRecallRegressionTest {
                 "contract", Set.of(), Set.of("DE_25", "EN_18"), 0.0, 0.0));
         queries.add(new TestQuery("Q_PREC_03", "Precision guards",
                 "xyzzynonexistent", Set.of(), Set.of(), 1.0, 1.0));
+        // "Haus Garten" with default OR operator: "haus" stem matches DE_08, DE_09, DE_10.
+        // Only DE_08 has both "Haus" and "Garten" but the OR query retrieves all three "haus" docs.
         queries.add(new TestQuery("Q_PREC_04", "Precision guards",
-                "Haus Garten", Set.of("DE_08"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
+                "Haus Garten", Set.of("DE_08", "DE_09", "DE_10"), Set.of("DE_25", "EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_PREC_05", "Precision guards",
                 "marathon", Set.of("EN_05"), Set.of("DE_25", "EN_18", "DE_01"), 1.0, 1.0));
         queries.add(new TestQuery("Q_PREC_06", "Precision guards",
@@ -394,29 +435,48 @@ class SearchPrecisionRecallRegressionTest {
                 Set.of("EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_WILD_02", "Wildcard + stemming interaction",
                 "pay*", Set.of("EN_10", "EN_11", "EN_12", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
-        // Vertrag* with capital V: QueryParser doesn't lowercase wildcard terms → 0 results (known limitation)
+        // Vertrag* with capital V: rewriteLeadingWildcards() lowercases to vertrag*, matching all
+        // documents whose content tokens start with "vertrag" (ICU-lowercased index tokens).
+        // CL_02 has "Vertrag" in English text (tokenized as "vertrag") — also matched.
         queries.add(new TestQuery("Q_WILD_03", "Wildcard + stemming interaction",
-                "Vertrag*", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "DE_23"),
-                Set.of("DE_25"), 0.0, 0.0));
+                "Vertrag*", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "DE_23", "CL_02"),
+                Set.of("DE_25"), 1.0, 1.0));
+        // *zahlung: leading wildcard on content_stemmed_de also matches DE_21
+        // because Zahlungen→"zahlung" stem ends in "zahlung" and matches the wildcard pattern.
         queries.add(new TestQuery("Q_WILD_04", "Wildcard + stemming interaction",
-                "*zahlung", Set.of("DE_20", "DE_22"), Set.of("DE_25"), 1.0, 1.0));
+                "*zahlung", Set.of("DE_20", "DE_21", "DE_22"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_WILD_05", "Wildcard + stemming interaction",
                 "*zahlung*", Set.of("DE_20", "DE_21", "DE_22"), Set.of("DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_WILD_06", "Wildcard + stemming interaction",
                 "hous*", Set.of("EN_14", "EN_15", "EN_16"), Set.of("EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_WILD_07", "Wildcard + stemming interaction",
                 "search*", Set.of("EN_17"), Set.of("EN_18"), 1.0, 1.0));
+        // Capitalized wildcard queries: rewriteLeadingWildcards() now lowercases these
+        // so they behave identically to their lowercase equivalents.
+        // House* → lowercased to house* → matches "house" and "houses" tokens (not "housing")
+        queries.add(new TestQuery("Q_WILD_08", "Wildcard + stemming interaction",
+                "House*", Set.of("EN_14", "EN_15"), Set.of("EN_18"), 1.0, 1.0));
+        // *Vertrag (capitalized leading wildcard) → lowercased to *vertrag → same as Q_DE_COMP_03
+        queries.add(new TestQuery("Q_WILD_09", "Wildcard + stemming interaction",
+                "*Vertrag", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "DE_05", "DE_06", "DE_07", "CL_02"),
+                Set.of("DE_25"), 1.0, 1.0));
+        // Pay* (capitalized prefix) → lowercased to pay* → same as Q_WILD_02
+        queries.add(new TestQuery("Q_WILD_10", "Wildcard + stemming interaction",
+                "Pay*", Set.of("EN_10", "EN_11", "EN_12", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
 
         // ── Category 11: Boolean / phrase (8 queries) ────────────────────────
         queries.add(new TestQuery("Q_BOOL_01", "Boolean / phrase",
                 "Vertrag AND Anlage", Set.of("DE_04"), Set.of("DE_25"), 1.0, 1.0));
-        // contract OR Vertrag: CL_01 has "Contract", CL_02 has "Vertrag"
+        // contract OR Vertrag: with stemming, "contract" finds EN_01-04+CL_01, "Vertrag" finds DE_01-04+CL_02
         queries.add(new TestQuery("Q_BOOL_02", "Boolean / phrase",
-                "contract OR Vertrag", Set.of("EN_01", "DE_01", "DE_04", "CL_01", "CL_02"),
+                "contract OR Vertrag",
+                Set.of("EN_01", "EN_02", "EN_03", "EN_04", "DE_01", "DE_02", "DE_03", "DE_04", "CL_01", "CL_02"),
                 Set.of("DE_25", "EN_18"), 1.0, 1.0));
-        // Vertrag NOT Arbeitsvertrag: CL_02 has standalone "Vertrag"
+        // Vertrag NOT Arbeitsvertrag: "Vertrag" via stemming finds DE_01-04+CL_02;
+        // Arbeitsvertrag→"arbeitsvertrag" (compound) does not stem to "vertrag" so DE_05 is not excluded
+        // by the NOT clause matching anything in the expanded set — DE_05 is simply not in the Vertrag results
         queries.add(new TestQuery("Q_BOOL_03", "Boolean / phrase",
-                "Vertrag NOT Arbeitsvertrag", Set.of("DE_01", "DE_04", "CL_02"),
+                "Vertrag NOT Arbeitsvertrag", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "CL_02"),
                 Set.of("DE_05", "DE_25"), 1.0, 1.0));
         queries.add(new TestQuery("Q_BOOL_04", "Boolean / phrase",
                 "\"signed by both parties\"", Set.of("EN_01"), Set.of("EN_18"), 1.0, 1.0));
@@ -428,6 +488,28 @@ class SearchPrecisionRecallRegressionTest {
                 "\"quiet street\"", Set.of("EN_14"), Set.of("EN_18"), 1.0, 1.0));
         queries.add(new TestQuery("Q_BOOL_08", "Boolean / phrase",
                 "analysis AND NOT samples", Set.of("EN_08"), Set.of("EN_09", "EN_18"), 1.0, 1.0));
+
+        // ── Category 12: Stemming cross-form recall (6 queries) ──────────────
+        // Explicit cross-form stemming tests: each query uses a morphologically different form
+        // and verifies that all documents containing any conflating form are retrieved.
+        // Verträge→"vertrag" finds all DE Vertrag docs + CL_02; houses→"hous" finds all EN house docs;
+        // contracted→"contract" finds all EN contract docs + CL_01; etc.
+        queries.add(new TestQuery("Q_STEM_01", "Stemming cross-form recall",
+                "Verträge", Set.of("DE_01", "DE_02", "DE_03", "DE_04", "CL_02"), Set.of("DE_25"), 1.0, 1.0));
+        queries.add(new TestQuery("Q_STEM_02", "Stemming cross-form recall",
+                "houses", Set.of("EN_14", "EN_15", "EN_16"), Set.of("EN_18"), 1.0, 1.0));
+        // CL_01 (language="de"): German Snowball does not strip English "-ed" suffix from "contracted",
+        // so CL_01 is not reachable via "contracted". It is only found via the literal "Contract" form.
+        queries.add(new TestQuery("Q_STEM_03", "Stemming cross-form recall",
+                "contracted", Set.of("EN_01", "EN_02", "EN_03", "EN_04"), Set.of("EN_18"), 1.0, 1.0));
+        queries.add(new TestQuery("Q_STEM_04", "Stemming cross-form recall",
+                "Häuser", Set.of("DE_08", "DE_09", "DE_10"), Set.of("DE_25"), 1.0, 1.0));
+        // English Snowball does not conflate "analyses" with "analysis" — they stem differently.
+        // "analyses" only matches EN_09 (has "analyses"); EN_08 (has "analysis") is not retrieved.
+        queries.add(new TestQuery("Q_STEM_05", "Stemming cross-form recall",
+                "analyses", Set.of("EN_09"), Set.of("EN_18"), 1.0, 1.0));
+        queries.add(new TestQuery("Q_STEM_06", "Stemming cross-form recall",
+                "payments", Set.of("EN_10", "EN_11", "CL_01"), Set.of("EN_18"), 1.0, 1.0));
 
         return queries;
     }

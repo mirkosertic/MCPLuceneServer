@@ -480,9 +480,10 @@ The index uses a custom `UnicodeNormalizingAnalyzer` built on Lucene's `ICUFoldi
 - ✅ Diacritic folding -- accented characters are mapped to their ASCII base forms (e.g., "ä" → "a", "ö" → "o", "ü" → "u", "ñ" → "n")
 - ✅ Ligature expansion -- PDF ligatures are expanded correctly (e.g., the "fi" ligature → "fi", the "fl" ligature → "fl")
 - ✅ Efficient leading wildcard queries -- a `content_reversed` field stores reversed tokens, so `*vertrag` is internally rewritten as a trailing wildcard on the reversed field (`gartrev*`), avoiding costly full-index scans
+- ✅ Case-insensitive wildcard queries -- wildcard and prefix terms (e.g. `Vertrag*`, `House*`) are automatically lowercased to match the lowercased index tokens, so capitalization does not affect wildcard results
 - ❌ No automatic synonym expansion at the index level
 - ❌ No phonetic matching (e.g., "Smith" won't match "Smyth")
-- ❌ No stemming (e.g., "running" won't match "run")
+- ✅ Automatic Snowball stemming for German and English -- morphological variants are found automatically (e.g., "Vertrag" matches "Verträge"/"Vertrages", "contract" matches "contracts"/"contracting"). Exact matches rank highest. Irregular forms (e.g., "ran" ≠ "run") are not unified.
 
 The AI assistant compensates for the remaining limitations by expanding your queries intelligently.
 
@@ -528,6 +529,15 @@ German compound words (e.g., "Arbeitsvertrag", "Vertragsbedingungen") can be sea
 - `*vertrag*` -- finds words containing "vertrag" anywhere (combines both)
 
 Leading wildcard queries are optimised internally using a reverse token index (`content_reversed` field), so they execute as fast as trailing wildcards.
+
+**Automatic Stemming:**
+
+The search engine applies Snowball stemming for German and English automatically. When you search for a word, it also finds morphological variants:
+- **German:** "Vertrag" finds "Verträge", "Vertrages"; "Haus" finds "Häuser", "Hauses"; "Zahlung" finds "Zahlungen"
+- **English:** "contract" finds "contracts", "contracted", "contracting"; "house" finds "houses", "housing"; "payment" finds "payments"
+- **Exact matches always rank highest** (boost 2.0) over stemmed matches
+- **Limitations:** Irregular forms are not unified (e.g., "ran" ≠ "run", "paid" ≠ "pay"). Use OR queries for these.
+- **Language-based:** Stemmed fields are only present for documents with detected language "de" or "en". Documents with other or unknown languages are still searchable via the unstemmed `content` field.
 
 **Returns:**
 - Paginated document results, each containing a `passages` array with highlighted text and quality metadata
@@ -1132,6 +1142,8 @@ When documents are indexed by the crawler, the following fields are automaticall
 ### Content Fields
 - **`content`**: Full text content of the document (analyzed, searchable)
 - **`content_reversed`**: Reversed tokens of the content (analyzed with `ReverseUnicodeNormalizingAnalyzer`, not stored). Used internally for efficient leading wildcard queries -- not directly searchable by users.
+- **`content_stemmed_de`**: Stemmed tokens using German Snowball stemmer (analyzed with `StemmedUnicodeNormalizingAnalyzer`, not stored). Only present for documents with detected language "de". Used internally for stemming-based search -- not directly searchable by users.
+- **`content_stemmed_en`**: Stemmed tokens using English Snowball stemmer (analyzed with `StemmedUnicodeNormalizingAnalyzer`, not stored). Only present for documents with detected language "en". Used internally for stemming-based search -- not directly searchable by users.
 - **`passages`**: Array of highlighted passages returned in search results (see [Search Response Format](#search-response-format) below)
 
 ### File Information
