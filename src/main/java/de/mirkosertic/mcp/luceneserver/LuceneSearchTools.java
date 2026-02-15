@@ -37,7 +37,9 @@ public class LuceneSearchTools {
     private static final Logger logger = LoggerFactory.getLogger(LuceneSearchTools.class);
 
     private static final String SEARCH_DESCRIPTION =
-            "Search documents using Lucene query syntax with LEXICAL matching (no automatic stemming/synonyms). " +
+            "Search documents using Lucene query syntax with automatic Snowball stemming for German and English. " +
+            "Stemming finds morphological variants (e.g. 'Vertrag' matches 'Verträge'/'Vertrages', 'contract' matches 'contracts'/'contracting'). " +
+            "Exact matches always rank highest. " +
             "Supports: wildcards (*, ?), boolean operators (AND/OR/NOT), phrase queries, fuzzy search, field-specific queries. " +
             "Use 'filters' array for metadata filtering (file type, date range, language, etc.). " +
             "Results can be sorted by relevance score (default), modified_date, created_date, or file_size. " +
@@ -127,7 +129,7 @@ public class LuceneSearchTools {
 
             ## Overview
 
-            The search tool uses **lexical matching** - it finds exact word forms without automatic stemming or synonym expansion.
+            The search tool uses **lexical matching with automatic stemming** for German and English. Stemming finds morphological variants (e.g. "Vertrag" also matches "Verträge"/"Vertrages"). Exact matches always rank highest. No automatic synonym expansion.
 
             ## Basic Syntax
 
@@ -238,15 +240,14 @@ public class LuceneSearchTools {
 
             ### 2. Inflections & Word Forms
 
-            ❌ No automatic stemming:
+            ✅ Automatic stemming handles most inflections for German and English:
             ```
-            run
+            contract
             ```
-            Won't match "running", "ran"
+            Matches "contracts", "contracted", "contracting" automatically.
 
-            ✅ Use wildcards or OR:
+            ⚠️ Irregular forms may not be unified (e.g. "ran" ≠ "run"). Use OR for irregulars:
             ```
-            run*
             (run OR running OR ran)
             ```
 
@@ -292,13 +293,14 @@ public class LuceneSearchTools {
             ## Unicode Normalization
 
             The analyzer applies ICU folding:
-            - ✅ Diacritics folded: `Müller` matches `Mueller`, `café` matches `cafe`
+            - ✅ Diacritics folded: `Müller` matches `Muller`, `café` matches `cafe`
             - ✅ Full-width characters normalized
             - ✅ Ligatures expanded: PDF "fi" ligature → "fi"
 
             ## What's NOT Supported
 
-            - ❌ Automatic stemming (run ≠ running)
+            - ❌ Stemming for languages other than German and English
+            - ❌ Irregular verb unification (ran ≠ run — use OR queries)
             - ❌ Automatic synonyms (contract ≠ agreement)
             - ❌ Phonetic matching (Smith ≠ Smyth)
             - ❌ Semantic search (use explicit OR queries)
