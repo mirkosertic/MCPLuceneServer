@@ -12,11 +12,16 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
@@ -47,6 +52,16 @@ public class DocumentCrawlerService implements FileChangeListener {
     private final BlockingQueue<Document> batchQueue = new LinkedBlockingQueue<>();
     private final AtomicBoolean crawling = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
+
+    // Debounce support for file watcher events
+    private final ConcurrentLinkedQueue<WatchEvent> pendingWatchEvents = new ConcurrentLinkedQueue<>();
+    private final ScheduledExecutorService watchCommitScheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                final Thread t = new Thread(r, "watch-debounce");
+                t.setDaemon(true);
+                return t;
+            });
+    private final AtomicBoolean flushScheduled = new AtomicBoolean(false);
 
     private volatile Future<?> batchProcessorFuture;
     private volatile long originalNrtRefreshInterval;
@@ -165,9 +180,16 @@ public class DocumentCrawlerService implements FileChangeListener {
             // Start batch processor
             batchProcessorFuture = crawlExecutor.submit(this::processBatches);
 
-            // Count total files first to determine if we need bulk optimization
-            final long totalFiles = countTotalFiles();
-            logger.info("Found approximately {} files to process (crawlMode={})", totalFiles, crawlMode);
+            // Determine total files for bulk indexing decision without a separate filesystem walk.
+            // For incremental crawls, the reconciliation result already knows the exact count.
+            // For full reindex, always enable bulk mode — no concurrent searches are expected.
+            final long totalFiles;
+            if (reconciliationResult != null && filesToProcess != null) {
+                totalFiles = filesToProcess.size();
+            } else {
+                totalFiles = config.getBulkIndexThreshold();
+            }
+            logger.info("Estimated {} files to process (crawlMode={})", totalFiles, crawlMode);
 
             // Adjust NRT refresh interval if bulk indexing
             if (totalFiles >= config.getBulkIndexThreshold()) {
@@ -273,33 +295,6 @@ public class DocumentCrawlerService implements FileChangeListener {
         } catch (final IOException e) {
             logger.error("Failed to persist crawl state", e);
         }
-    }
-
-    private long countTotalFiles() {
-        long count = 0;
-        final FilePatternMatcher matcher = new FilePatternMatcher(
-                config.getIncludePatterns(),
-                config.getExcludePatterns()
-        );
-
-        for (final String directory : config.getDirectories()) {
-            final Path dirPath = Paths.get(directory);
-            if (!Files.exists(dirPath) || !Files.isDirectory(dirPath)) {
-                continue;
-            }
-
-            try (final Stream<Path> paths = Files.walk(dirPath)) {
-                count += paths
-                        .filter(Files::isRegularFile)
-                        .filter(matcher::shouldInclude)
-                        .filter(this::shouldProcessFile)
-                        .count();
-            } catch (final IOException e) {
-                logger.warn("Error counting files in directory: {}", directory, e);
-            }
-        }
-
-        return count;
     }
 
     private void crawlDirectory(final String directory) {
@@ -471,33 +466,83 @@ public class DocumentCrawlerService implements FileChangeListener {
         );
 
         if (matcher.shouldInclude(file)) {
-            try {
-                final ExtractedDocument extracted = contentExtractor.extract(file);
-                final Document document = documentIndexer.createDocument(file, extracted);
-                documentIndexer.indexDocument(indexService.getIndexWriter(), document);
-                indexService.commit();
-                logger.info("Indexed new file: {}", file);
-            } catch (final Exception e) {
-                logger.error("Error indexing new file: {}", file, e);
-            }
+            pendingWatchEvents.add(new WatchEvent(file, WatchEventType.CREATE_OR_MODIFY));
+            scheduleFlush();
         }
     }
 
     @Override
     public void onFileModified(final Path file) {
         logger.debug("File modified: {}", file);
-        onFileCreated(file); // Reindex modified files
+        final FilePatternMatcher matcher = new FilePatternMatcher(
+                config.getIncludePatterns(),
+                config.getExcludePatterns()
+        );
+
+        if (matcher.shouldInclude(file)) {
+            pendingWatchEvents.add(new WatchEvent(file, WatchEventType.CREATE_OR_MODIFY));
+            scheduleFlush();
+        }
     }
 
     @Override
     public void onFileDeleted(final Path file) {
         logger.debug("File deleted: {}", file);
+        pendingWatchEvents.add(new WatchEvent(file, WatchEventType.DELETE));
+        scheduleFlush();
+    }
+
+    private void scheduleFlush() {
+        if (flushScheduled.compareAndSet(false, true)) {
+            watchCommitScheduler.schedule(this::flushWatchEvents,
+                    config.getWatchDebounceMs(), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    void flushWatchEvents() {
         try {
-            documentIndexer.deleteDocument(indexService.getIndexWriter(), file.toString());
+            // Drain and deduplicate: last event per path wins
+            final Map<String, WatchEvent> deduplicated = new LinkedHashMap<>();
+            WatchEvent event;
+            while ((event = pendingWatchEvents.poll()) != null) {
+                deduplicated.put(event.file().toString(), event);
+            }
+
+            if (deduplicated.isEmpty()) {
+                return;
+            }
+
+            logger.debug("Flushing {} deduplicated watch events", deduplicated.size());
+
+            for (final WatchEvent evt : deduplicated.values()) {
+                if (evt.type() == WatchEventType.DELETE) {
+                    try {
+                        documentIndexer.deleteDocument(indexService.getIndexWriter(), evt.file().toString());
+                        logger.info("Deleted file from index: {}", evt.file());
+                    } catch (final IOException e) {
+                        logger.error("Error deleting file from index: {}", evt.file(), e);
+                    }
+                } else {
+                    try {
+                        final ExtractedDocument extracted = contentExtractor.extract(evt.file());
+                        final Document document = documentIndexer.createDocument(evt.file(), extracted);
+                        documentIndexer.indexDocument(indexService.getIndexWriter(), document);
+                        logger.info("Indexed file: {}", evt.file());
+                    } catch (final Exception e) {
+                        logger.error("Error indexing file: {}", evt.file(), e);
+                    }
+                }
+            }
+
             indexService.commit();
-            logger.info("Deleted file from index: {}", file);
-        } catch (final Exception e) {
-            logger.error("Error deleting file from index: {}", file, e);
+        } catch (final IOException e) {
+            logger.error("Error committing watch events", e);
+        } finally {
+            flushScheduled.set(false);
+            // If new events arrived during flush, schedule another flush
+            if (!pendingWatchEvents.isEmpty()) {
+                scheduleFlush();
+            }
         }
     }
 
@@ -559,6 +604,17 @@ public class DocumentCrawlerService implements FileChangeListener {
             logger.error("Error stopping watchers", e);
         }
 
+        // Shut down watch debounce scheduler and flush remaining events
+        watchCommitScheduler.shutdown();
+        try {
+            if (!watchCommitScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                watchCommitScheduler.shutdownNow();
+            }
+        } catch (final InterruptedException e) {
+            watchCommitScheduler.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
         // Wait for batch processor to finish
         if (batchProcessorFuture != null) {
             try {
@@ -568,6 +624,10 @@ public class DocumentCrawlerService implements FileChangeListener {
             }
         }
     }
+
+    record WatchEvent(Path file, WatchEventType type) {}
+
+    enum WatchEventType { CREATE_OR_MODIFY, DELETE }
 
     public enum CrawlerState {
         IDLE,

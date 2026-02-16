@@ -1,6 +1,5 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
-import de.mirkosertic.mcp.luceneserver.util.TextCleaner;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
@@ -68,30 +67,30 @@ public class DocumentIndexer {
         // Positions and offsets are required by UnifiedHighlighter to locate matched
         // terms within the stored value without re-analysing the text at query time.
         if (extracted.content() != null && !extracted.content().isEmpty()) {
-            // Clean content to remove broken/invalid characters
-            final String cleanedContent = TextCleaner.clean(extracted.content());
+            // Content is already cleaned by FileContentExtractor.normalizeContent()
+            final String content = extracted.content();
 
             final FieldType contentFieldType = new FieldType(TextField.TYPE_STORED);
             contentFieldType.setStoreTermVectors(true);
             contentFieldType.setStoreTermVectorPositions(true);
             contentFieldType.setStoreTermVectorOffsets(true);
-            doc.add(new Field("content", cleanedContent, contentFieldType));
+            doc.add(new Field("content", content, contentFieldType));
 
             // content_reversed (analyzed with ReverseUnicodeNormalizingAnalyzer, not stored)
             // Stores reversed tokens so that leading wildcard queries (*vertrag) can be
             // rewritten as efficient trailing wildcard queries on this field (gartrev*).
             // The PerFieldAnalyzerWrapper in LuceneIndexService routes this field to the
             // ReverseUnicodeNormalizingAnalyzer automatically.
-            doc.add(new TextField("content_reversed", cleanedContent, Field.Store.NO));
+            doc.add(new TextField("content_reversed", content, Field.Store.NO));
 
             // Lemmatized shadow fields (analyzed with OpenNLPLemmatizingAnalyzer, not stored)
             // Only added when the document's detected language matches a supported lemmatizer.
             // The PerFieldAnalyzerWrapper in LuceneIndexService routes each field to the
             // appropriate language-specific OpenNLPLemmatizingAnalyzer automatically.
             if ("de".equals(extracted.detectedLanguage())) {
-                doc.add(new TextField("content_lemma_de", cleanedContent, Field.Store.NO));
+                doc.add(new TextField("content_lemma_de", content, Field.Store.NO));
             } else if ("en".equals(extracted.detectedLanguage())) {
-                doc.add(new TextField("content_lemma_en", cleanedContent, Field.Store.NO));
+                doc.add(new TextField("content_lemma_en", content, Field.Store.NO));
             }
         }
 
