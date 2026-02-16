@@ -113,13 +113,13 @@ public class LuceneIndexService {
 
     /** Fields that are analyzed TextField — cannot be filtered with exact term match. */
     static final Set<String> ANALYZED_FIELDS = Set.of(
-            "content", "content_reversed", "content_stemmed_de", "content_stemmed_en",
+            "content", "content_reversed", "content_lemma_de", "content_lemma_en",
             "keywords", "file_name", "title", "author", "creator", "subject");
 
     /** Mapping from language code to the corresponding stemmed shadow field. */
     static final Map<String, String> STEMMED_FIELD_BY_LANGUAGE = Map.of(
-            "de", "content_stemmed_de",
-            "en", "content_stemmed_en");
+            "de", "content_lemma_de",
+            "en", "content_lemma_en");
 
     /** Fields that are StringField (exact match, not analyzed). */
     static final Set<String> STRING_FIELDS = Set.of(
@@ -130,7 +130,7 @@ public class LuceneIndexService {
      * lowercased before querying to match the indexed tokens.
      */
     static final Set<String> LOWERCASE_WILDCARD_FIELDS = Set.of(
-            "content", "content_reversed", "content_stemmed_de", "content_stemmed_en");
+            "content", "content_reversed", "content_lemma_de", "content_lemma_en");
 
     /**
      * States for long-running admin operations.
@@ -151,7 +151,8 @@ public class LuceneIndexService {
     private IndexWriter indexWriter;
     private SearcherManager searcherManager;
     private ScheduledExecutorService refreshScheduler;
-    private final Analyzer analyzer;
+    private final Analyzer indexAnalyzer;
+    private final Analyzer queryAnalyzer;
     private final DocumentIndexer documentIndexer;
     private boolean schemaUpgradeRequired = false;
 
@@ -181,10 +182,17 @@ public class LuceneIndexService {
                               final DocumentIndexer documentIndexer) {
         this.config = config;
         final Analyzer defaultAnalyzer = new UnicodeNormalizingAnalyzer();
-        this.analyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
+        // Index analyzer: sentence-aware OpenNLP pipeline for accurate POS tagging on long texts
+        this.indexAnalyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
                 "content_reversed", new ReverseUnicodeNormalizingAnalyzer(),
-                "content_stemmed_de", new StemmedUnicodeNormalizingAnalyzer("German"),
-                "content_stemmed_en", new StemmedUnicodeNormalizingAnalyzer("English")
+                "content_lemma_de", new OpenNLPLemmatizingAnalyzer("de", true),
+                "content_lemma_en", new OpenNLPLemmatizingAnalyzer("en", true)
+        ));
+        // Query analyzer: simple mode (no sentence detection) for better handling of short queries
+        this.queryAnalyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
+                "content_reversed", new ReverseUnicodeNormalizingAnalyzer(),
+                "content_lemma_de", new OpenNLPLemmatizingAnalyzer("de", false),
+                "content_lemma_en", new OpenNLPLemmatizingAnalyzer("en", false)
         ));
         this.indexPath = config.getIndexPath();
         this.nrtRefreshIntervalMs = config.getNrtRefreshIntervalMs();
@@ -222,7 +230,7 @@ public class LuceneIndexService {
         }
 
         // Open IndexWriter
-        final IndexWriterConfig config = new IndexWriterConfig(analyzer);
+        final IndexWriterConfig config = new IndexWriterConfig(indexAnalyzer);
         config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
         indexWriter = new IndexWriter(directory, config);
 
@@ -387,7 +395,7 @@ public class LuceneIndexService {
                 mainQuery = new MatchAllDocsQuery();
                 highlightQuery = mainQuery;
             } else {
-                final QueryParser parser = new QueryParser("content", analyzer);
+                final QueryParser parser = new QueryParser("content", queryAnalyzer);
                 parser.setAllowLeadingWildcard(true);
                 final Query parsed = parser.parse(queryString);
                 final Query contentQuery = rewriteLeadingWildcards(parsed);
@@ -555,7 +563,7 @@ public class LuceneIndexService {
             final int maxPassages = config.getMaxPassages();
             final int maxPassageCharLength = config.getMaxPassageCharLength();
             final PassageAwareHighlighter highlighter = new PassageAwareHighlighter(
-                    UnifiedHighlighter.builder(searcher, analyzer)
+                    UnifiedHighlighter.builder(searcher, queryAnalyzer)
                             .withMaxLength(10_000)
                             .withFormatter(new IndividualPassageFormatter())
                             .withHandleMultiTermQuery(true)
@@ -630,7 +638,7 @@ public class LuceneIndexService {
             if (request.effectiveQuery() == null || request.effectiveQuery().isBlank()) {
                 mainQuery = new MatchAllDocsQuery();
             } else {
-                final QueryParser parser = new QueryParser("content", analyzer);
+                final QueryParser parser = new QueryParser("content", queryAnalyzer);
                 parser.setAllowLeadingWildcard(true);
                 final Query parsed = parser.parse(request.effectiveQuery());
                 final Query contentQuery = rewriteLeadingWildcards(parsed);
@@ -1186,7 +1194,7 @@ public class LuceneIndexService {
         }
 
         directory = FSDirectory.open(path);
-        final IndexWriterConfig config = new IndexWriterConfig(analyzer);
+        final IndexWriterConfig config = new IndexWriterConfig(indexAnalyzer);
         config.setOpenMode(IndexWriterConfig.OpenMode.CREATE);
         indexWriter = new IndexWriter(directory, config);
 
@@ -1699,7 +1707,7 @@ public class LuceneIndexService {
      * ensures the correct analyzer is used for the target field.
      */
     private Query parseQueryForField(final String queryString, final String targetField) throws ParseException {
-        final QueryParser parser = new QueryParser(targetField, analyzer);
+        final QueryParser parser = new QueryParser(targetField, queryAnalyzer);
         parser.setAllowLeadingWildcard(true);
         return parser.parse(queryString);
     }

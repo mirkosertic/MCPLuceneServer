@@ -36,8 +36,9 @@ public class DocumentIndexer {
      * MUST be incremented whenever the index schema changes (fields added/removed/modified, analyzers changed, etc.).
      * Version 2: Added text cleaning to remove broken/invalid characters during indexing.
      * Version 3: Added content_stemmed_de and content_stemmed_en fields for Snowball stemming.
+     * Version 4: Replaced Snowball stemmed fields with OpenNLP lemmatized fields (content_lemma_de, content_lemma_en).
      */
-    public static final int SCHEMA_VERSION = 3;
+    public static final int SCHEMA_VERSION = 4;
 
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;
@@ -83,14 +84,14 @@ public class DocumentIndexer {
             // ReverseUnicodeNormalizingAnalyzer automatically.
             doc.add(new TextField("content_reversed", cleanedContent, Field.Store.NO));
 
-            // Stemmed shadow fields (analyzed with StemmedUnicodeNormalizingAnalyzer, not stored)
-            // Only added when the document's detected language matches a supported stemmer.
+            // Lemmatized shadow fields (analyzed with OpenNLPLemmatizingAnalyzer, not stored)
+            // Only added when the document's detected language matches a supported lemmatizer.
             // The PerFieldAnalyzerWrapper in LuceneIndexService routes each field to the
-            // appropriate language-specific StemmedUnicodeNormalizingAnalyzer automatically.
+            // appropriate language-specific OpenNLPLemmatizingAnalyzer automatically.
             if ("de".equals(extracted.detectedLanguage())) {
-                doc.add(new TextField("content_stemmed_de", cleanedContent, Field.Store.NO));
+                doc.add(new TextField("content_lemma_de", cleanedContent, Field.Store.NO));
             } else if ("en".equals(extracted.detectedLanguage())) {
-                doc.add(new TextField("content_stemmed_en", cleanedContent, Field.Store.NO));
+                doc.add(new TextField("content_lemma_en", cleanedContent, Field.Store.NO));
             }
         }
 
