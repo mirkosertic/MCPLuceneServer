@@ -483,7 +483,7 @@ The index uses a custom `UnicodeNormalizingAnalyzer` built on Lucene's `ICUFoldi
 - ✅ Case-insensitive wildcard queries -- wildcard and prefix terms (e.g. `Vertrag*`, `House*`) are automatically lowercased to match the lowercased index tokens, so capitalization does not affect wildcard results
 - ❌ No automatic synonym expansion at the index level
 - ❌ No phonetic matching (e.g., "Smith" won't match "Smyth")
-- ✅ Automatic Snowball stemming for German and English -- morphological variants are found automatically (e.g., "Vertrag" matches "Verträge"/"Vertrages", "contract" matches "contracts"/"contracting"). Exact matches rank highest. Irregular forms (e.g., "ran" ≠ "run") are not unified.
+- ✅ Automatic OpenNLP lemmatization for German and English -- morphological variants are found automatically, including irregular forms (e.g., "ran" matches "run", "ging" matches "gehen", "paid" matches "pay", "analyses" matches "analysis"). Exact matches rank highest.
 
 The AI assistant compensates for the remaining limitations by expanding your queries intelligently.
 
@@ -530,14 +530,14 @@ German compound words (e.g., "Arbeitsvertrag", "Vertragsbedingungen") can be sea
 
 Leading wildcard queries are optimised internally using a reverse token index (`content_reversed` field), so they execute as fast as trailing wildcards.
 
-**Automatic Stemming:**
+**Automatic Lemmatization:**
 
-The search engine applies Snowball stemming for German and English automatically. When you search for a word, it also finds morphological variants:
-- **German:** "Vertrag" finds "Verträge", "Vertrages"; "Haus" finds "Häuser", "Hauses"; "Zahlung" finds "Zahlungen"
-- **English:** "contract" finds "contracts", "contracted", "contracting"; "house" finds "houses", "housing"; "payment" finds "payments"
-- **Exact matches always rank highest** (boost 2.0) over stemmed matches
-- **Limitations:** Irregular forms are not unified (e.g., "ran" ≠ "run", "paid" ≠ "pay"). Use OR queries for these.
-- **Language-based:** Stemmed fields are only present for documents with detected language "de" or "en". Documents with other or unknown languages are still searchable via the unstemmed `content` field.
+The search engine applies OpenNLP dictionary-based lemmatization for German and English automatically. Unlike rule-based stemming, lemmatization uses trained language models to correctly reduce words to their dictionary form (lemma), including irregular forms:
+- **German:** "Vertrag" finds "Vertrages"; "Haus" finds "Häuser", "Hauses"; "suchen" finds "gesucht", "suchte"; "gehen" finds "ging"
+- **English:** "contract" finds "contracts", "contracted"; "run" finds "ran", "running"; "pay" finds "paid"; "analysis" finds "analyses"; "go" finds "went"; "see" finds "saw"
+- **Exact matches always rank highest** (boost 2.0) over lemmatized matches
+- **Precision preserved:** "house" and "housing" are kept distinct (not conflated), unlike aggressive stemming approaches
+- **Language-based:** Lemmatized fields are only present for documents with detected language "de" or "en". Documents with other or unknown languages are still searchable via the unstemmed `content` field.
 
 **Returns:**
 - Paginated document results, each containing a `passages` array with highlighted text and quality metadata
@@ -1142,8 +1142,8 @@ When documents are indexed by the crawler, the following fields are automaticall
 ### Content Fields
 - **`content`**: Full text content of the document (analyzed, searchable)
 - **`content_reversed`**: Reversed tokens of the content (analyzed with `ReverseUnicodeNormalizingAnalyzer`, not stored). Used internally for efficient leading wildcard queries -- not directly searchable by users.
-- **`content_stemmed_de`**: Stemmed tokens using German Snowball stemmer (analyzed with `StemmedUnicodeNormalizingAnalyzer`, not stored). Only present for documents with detected language "de". Used internally for stemming-based search -- not directly searchable by users.
-- **`content_stemmed_en`**: Stemmed tokens using English Snowball stemmer (analyzed with `StemmedUnicodeNormalizingAnalyzer`, not stored). Only present for documents with detected language "en". Used internally for stemming-based search -- not directly searchable by users.
+- **`content_lemma_de`**: Lemmatized tokens using German OpenNLP lemmatizer (analyzed with `OpenNLPLemmatizingAnalyzer`, not stored). Only present for documents with detected language "de". Used internally for lemmatization-based search -- not directly searchable by users.
+- **`content_lemma_en`**: Lemmatized tokens using English OpenNLP lemmatizer (analyzed with `OpenNLPLemmatizingAnalyzer`, not stored). Only present for documents with detected language "en". Used internally for lemmatization-based search -- not directly searchable by users.
 - **`passages`**: Array of highlighted passages returned in search results (see [Search Response Format](#search-response-format) below)
 
 ### File Information
