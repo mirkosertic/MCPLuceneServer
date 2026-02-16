@@ -280,4 +280,74 @@ class FileContentExtractorTest {
         final String result = FileContentExtractor.normalizeContent(input);
         assertThat(result).isEqualTo("Hello World");  // nbsp -> space, then collapsed
     }
+
+    // ========== Tests for Unicode replacement character and zero-width char removal ==========
+
+    @Test
+    @DisplayName("Should remove Unicode replacement character U+FFFD")
+    void shouldRemoveReplacementCharacter() {
+        final String input = "Hello \uFFFD World";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("Hello World");
+    }
+
+    @Test
+    @DisplayName("Should remove zero-width non-joiner U+200C")
+    void shouldRemoveZeroWidthNonJoiner() {
+        final String input = "Hello\u200CWorld";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("HelloWorld");
+    }
+
+    @Test
+    @DisplayName("Should remove zero-width joiner U+200D")
+    void shouldRemoveZeroWidthJoiner() {
+        final String input = "Hello\u200DWorld";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("HelloWorld");
+    }
+
+    @Test
+    @DisplayName("Should remove multiple problematic characters in one pass")
+    void shouldRemoveMultipleProblematicChars() {
+        final String input = "He\uFFFDllo\u200C Wo\u200Drld";
+        final String result = FileContentExtractor.normalizeContent(input);
+        assertThat(result).isEqualTo("Hello World");
+    }
+
+    // ========== Tests for language detection on long content ==========
+
+    @Test
+    @DisplayName("Should detect language correctly on very long content")
+    void shouldDetectLanguageOnLongContent() throws Exception {
+        // Create a large German text (> 10,000 chars) to verify truncation doesn't break detection
+        final StringBuilder largeGermanText = new StringBuilder();
+        final String germanSentence = "Dies ist ein deutscher Text mit vielen Wörtern und Sätzen. ";
+        while (largeGermanText.length() < 50_000) {
+            largeGermanText.append(germanSentence);
+        }
+
+        // Write to a temp file
+        final Path testFile = tempDir.resolve("large-german.txt");
+        java.nio.file.Files.writeString(testFile, largeGermanText.toString());
+
+        // Extract and verify language detection works
+        final ExtractedDocument result = extractor.extract(testFile);
+        assertThat(result.detectedLanguage())
+                .as("Language should be detected correctly even for very long content")
+                .isEqualTo("de");
+    }
+
+    @Test
+    @DisplayName("Should detect language correctly on short content")
+    void shouldDetectLanguageOnShortContent() throws Exception {
+        final String englishText = "This is a simple English text that should be detected as English by the language detector.";
+        final Path testFile = tempDir.resolve("short-english.txt");
+        java.nio.file.Files.writeString(testFile, englishText);
+
+        final ExtractedDocument result = extractor.extract(testFile);
+        assertThat(result.detectedLanguage())
+                .as("Language should be detected for short content")
+                .isEqualTo("en");
+    }
 }

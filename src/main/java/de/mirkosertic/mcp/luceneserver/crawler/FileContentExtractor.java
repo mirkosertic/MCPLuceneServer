@@ -1,7 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
-import org.apache.tika.Tika;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.langdetect.optimaize.OptimaizeLangDetector;
 import org.apache.tika.language.detect.LanguageDetector;
@@ -32,14 +31,14 @@ public class FileContentExtractor {
 
     private static final Logger logger = LoggerFactory.getLogger(FileContentExtractor.class);
 
+    private static final int LANG_DETECT_MAX_CHARS = 10_000;
+
     private final ApplicationConfig config;
-    private final Tika tika;
     private final Parser parser;
     private final LanguageDetector languageDetector;
 
     public FileContentExtractor(final ApplicationConfig config) {
         this.config = config;
-        this.tika = new Tika();
         this.parser = new AutoDetectParser();
         this.languageDetector = new OptimaizeLangDetector().loadModels();
     }
@@ -92,7 +91,9 @@ public class FileContentExtractor {
             String detectedLanguage = null;
             if (config.isDetectLanguage() && !content.isEmpty()) {
                 try {
-                    final LanguageResult result = languageDetector.detect(content);
+                    final String langSample = content.length() > LANG_DETECT_MAX_CHARS
+                            ? content.substring(0, LANG_DETECT_MAX_CHARS) : content;
+                    final LanguageResult result = languageDetector.detect(langSample);
                     if (result.isReasonablyCertain()) {
                         detectedLanguage = result.getLanguage();
                     }
@@ -101,8 +102,13 @@ public class FileContentExtractor {
                 }
             }
 
-            // Detect MIME type
-            final String fileType = tika.detect(file);
+            // Get MIME type from parser metadata (more accurate than tika.detect()
+            // since the parser has access to full content, not just file headers).
+            // Strip parameters (e.g., "; charset=ISO-8859-1") to keep only the base type.
+            final String rawContentType = metadata.get(Metadata.CONTENT_TYPE);
+            final String fileType = rawContentType != null && rawContentType.contains(";")
+                    ? rawContentType.substring(0, rawContentType.indexOf(';')).trim()
+                    : rawContentType;
 
             final String normalizedContent = normalizeContent(content);
 
@@ -133,8 +139,9 @@ public class FileContentExtractor {
      *   <li>NFKC Unicode normalization – expands compatibility characters such as
      *       ligatures (fi-ligature → fi, fl-ligature → fl) and full-width forms.</li>
      *   <li>Control-character removal – strips U+0000–U+0008, U+000B–U+000C,
-     *       U+000E–U+001F, and U+007F–U+009F while preserving newline (U+000A)
-     *       and tab (U+0009).</li>
+     *       U+000E–U+001F, U+007F–U+009F, U+200C (zero-width non-joiner),
+     *       U+200D (zero-width joiner), and U+FFFD (replacement character)
+     *       while preserving newline (U+000A) and tab (U+0009).</li>
      *   <li>Unicode-whitespace normalisation – replaces non-breaking space (U+00A0),
      *       narrow no-break space (U+202F), medium mathematical space (U+205F),
      *       ideographic space (U+3000), and other Unicode whitespace variants
@@ -162,9 +169,11 @@ public class FileContentExtractor {
         // Step 3: NFKC normalization (expands ligatures, full-width chars, etc.)
         result = Normalizer.normalize(result, Normalizer.Form.NFKC);
 
-        // Step 4: Remove control characters except newline (U+000A) and tab (U+0009)
+        // Step 4: Remove control characters except newline (U+000A) and tab (U+0009),
+        // plus U+FFFD (replacement character), U+200C (zero-width non-joiner),
+        // and U+200D (zero-width joiner)
         // Ranges: U+0000-U+0008, U+000B-U+000C, U+000E-U+001F, U+007F-U+009F
-        result = result.replaceAll("[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]", "");
+        result = result.replaceAll("[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200C\u200D\uFFFD]", "");
 
         // Step 5: Replace various Unicode whitespace with regular ASCII space
         // U+00A0 NO-BREAK SPACE, U+1680 OGHAM SPACE MARK, U+2000-U+200A (EN QUAD through
