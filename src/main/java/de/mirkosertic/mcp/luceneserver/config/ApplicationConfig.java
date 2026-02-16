@@ -67,6 +67,7 @@ public class ApplicationConfig {
     private boolean reconciliationEnabled = true;
     private int maxPassages = 3;
     private int maxPassageCharLength = 200;
+    private long watchDebounceMs = 500;
 
     // Profile settings
     private boolean deployedMode = false;
@@ -220,6 +221,9 @@ public class ApplicationConfig {
         }
         if (crawlerConfig.containsKey("max-passage-char-length")) {
             this.maxPassageCharLength = ((Number) crawlerConfig.get("max-passage-char-length")).intValue();
+        }
+        if (crawlerConfig.containsKey("watch-debounce-ms")) {
+            this.watchDebounceMs = ((Number) crawlerConfig.get("watch-debounce-ms")).longValue();
         }
     }
 
@@ -405,5 +409,9 @@ public class ApplicationConfig {
 
     public int getMaxPassageCharLength() {
         return maxPassageCharLength;
+    }
+
+    public long getWatchDebounceMs() {
+        return watchDebounceMs;
     }
 }
