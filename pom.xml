@@ -39,7 +39,7 @@
 		<jackson.version>2.21.0</jackson.version>
 		<opennlp.version>2.5.3</opennlp.version>
 		<opennlp.models.version>1.2.0</opennlp.models.version>
-		<junit.version>6.0.2</junit.version>
+		<junit.version>6.0.3</junit.version>
 	</properties>
 
 	<dependencyManagement>
