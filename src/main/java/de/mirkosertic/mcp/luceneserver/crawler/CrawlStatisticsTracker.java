@@ -5,9 +5,17 @@ import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
  * Tracks crawler progress statistics and sends notifications.
@@ -33,9 +41,19 @@ public class CrawlStatisticsTracker {
 
     private final Map<String, DirectoryStats> directoryStats = new ConcurrentHashMap<>();
 
+    // In-flight file tracking (file path -> start timestamp in millis)
+    private final ConcurrentHashMap<String, Long> activeFiles = new ConcurrentHashMap<>();
+
+    // Periodic progress notification timer
+    private final ScheduledExecutorService progressTimerExecutor =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                final Thread t = new Thread(r, "progress-timer");
+                t.setDaemon(true);
+                return t;
+            });
+    private volatile ScheduledFuture<?> progressTimerFuture;
+
     private volatile long startTime = 0;
-    private volatile long lastNotificationTime = 0;
-    private volatile long lastNotifiedFileCount = 0;
     /** The crawl mode currently tracked: "full" or "incremental". */
     private volatile String crawlMode = "full";
 
@@ -54,9 +72,8 @@ public class CrawlStatisticsTracker {
         filesSkippedUnchanged.set(0);
         reconciliationTimeMs.set(0);
         directoryStats.clear();
+        activeFiles.clear();
         startTime = System.currentTimeMillis();
-        lastNotificationTime = startTime;
-        lastNotifiedFileCount = 0;
         crawlMode = "full";
     }
 
@@ -69,7 +86,6 @@ public class CrawlStatisticsTracker {
         filesProcessed.incrementAndGet();
         bytesProcessed.addAndGet(bytes);
         getOrCreateDirectoryStats(directory).filesProcessed.incrementAndGet();
-        checkNotificationTrigger();
     }
 
     public void incrementFilesIndexed(final String directory) {
@@ -102,33 +118,98 @@ public class CrawlStatisticsTracker {
         this.crawlMode = mode;
     }
 
+    /** Register a file as currently being processed (extraction/indexing in progress). */
+    public void registerActiveFile(final String path) {
+        activeFiles.put(path, System.currentTimeMillis());
+    }
+
+    /** Unregister a file after processing completes (success or failure). */
+    public void unregisterActiveFile(final String path) {
+        activeFiles.remove(path);
+    }
+
+    /** Returns a snapshot of all currently active files (path -> start timestamp). */
+    public Map<String, Long> getActiveFiles() {
+        return new ConcurrentHashMap<>(activeFiles);
+    }
+
+    /**
+     * Start sending periodic progress notifications at the configured interval.
+     * Replaces the old file-count-based trigger mechanism.
+     */
+    public void startPeriodicNotifications() {
+        final long intervalMs = config.getProgressNotificationIntervalMs();
+        progressTimerFuture = progressTimerExecutor.scheduleAtFixedRate(
+                this::sendProgressNotification,
+                intervalMs,
+                intervalMs,
+                TimeUnit.MILLISECONDS
+        );
+        logger.debug("Started periodic progress notifications every {}ms", intervalMs);
+    }
+
+    /**
+     * Stop periodic progress notifications. Does not shut down the executor,
+     * so notifications can be restarted for the next crawl.
+     */
+    public void stopPeriodicNotifications() {
+        final ScheduledFuture<?> future = progressTimerFuture;
+        if (future != null) {
+            future.cancel(false);
+            progressTimerFuture = null;
+            logger.debug("Stopped periodic progress notifications");
+        }
+    }
+
+    /**
+     * Shut down the progress timer executor. Called on application shutdown.
+     */
+    public void shutdown() {
+        stopPeriodicNotifications();
+        progressTimerExecutor.shutdown();
+        try {
+            if (!progressTimerExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                progressTimerExecutor.shutdownNow();
+            }
+        } catch (final InterruptedException e) {
+            progressTimerExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private DirectoryStats getOrCreateDirectoryStats(final String directory) {
         return directoryStats.computeIfAbsent(directory, k -> new DirectoryStats());
     }
 
-    private void checkNotificationTrigger() {
-        final long filesProcessedNow = filesProcessed.get();
-        final long timeSinceLastNotification = System.currentTimeMillis() - lastNotificationTime;
-
-        if (filesProcessedNow - lastNotifiedFileCount >= config.getProgressNotificationFiles() ||
-            timeSinceLastNotification >= config.getProgressNotificationIntervalMs()) {
-            sendProgressNotification();
-            lastNotificationTime = System.currentTimeMillis();
-            lastNotifiedFileCount = filesProcessedNow;
-        }
-    }
-
     private void sendProgressNotification() {
-        final CrawlStatistics stats = getStatistics();
-        final String message = String.format(
-                "Indexed %d/%d files (%.1f files/sec, %.2f MB/sec)",
-                stats.filesIndexed(),
-                stats.filesFound(),
-                stats.filesPerSecond(),
-                stats.megabytesPerSecond()
-        );
-        notificationService.notify("Crawler Progress", message);
-        logger.info("Crawler progress: {}", message);
+        try {
+            final CrawlStatistics stats = getStatistics();
+            final StringBuilder message = new StringBuilder();
+            message.append(String.format(
+                    "Indexed %d/%d files (%.1f files/sec, %.2f MB/sec)",
+                    stats.filesIndexed(),
+                    stats.filesFound(),
+                    stats.filesPerSecond(),
+                    stats.megabytesPerSecond()
+            ));
+
+            // Append currently processing filenames if any are active
+            final List<CrawlStatistics.ActiveFile> processing = stats.currentlyProcessing();
+            if (!processing.isEmpty()) {
+                final String fileNames = processing.stream()
+                        .map(af -> Paths.get(af.filePath()).getFileName().toString())
+                        .collect(Collectors.joining(", "));
+                message.append(" \u2014 processing: ").append(fileNames);
+            }
+
+            final String msg = message.toString();
+            notificationService.notify("Crawler Progress", msg);
+            logger.info("Crawler progress: {}", msg);
+        } catch (final Exception e) {
+            // Must catch all exceptions: ScheduledExecutorService silently cancels
+            // the periodic task if the Runnable throws any uncaught exception.
+            logger.error("Failed to send progress notification", e);
+        }
     }
 
     public void sendStartNotification(final int directoryCount) {
@@ -198,6 +279,14 @@ public class CrawlStatisticsTracker {
             ));
         }
 
+        // Snapshot active files and compute processing durations
+        final long now = System.currentTimeMillis();
+        final List<CrawlStatistics.ActiveFile> currentlyProcessing = new ArrayList<>();
+        for (final Map.Entry<String, Long> entry : activeFiles.entrySet()) {
+            final long durationMs = now - entry.getValue();
+            currentlyProcessing.add(new CrawlStatistics.ActiveFile(entry.getKey(), durationMs));
+        }
+
         return new CrawlStatistics(
                 filesFound.get(),
                 filesProcessed.get(),
@@ -210,7 +299,8 @@ public class CrawlStatisticsTracker {
                 orphansDeleted.get(),
                 filesSkippedUnchanged.get(),
                 reconciliationTimeMs.get(),
-                crawlMode
+                crawlMode,
+                currentlyProcessing
         );
     }
 
