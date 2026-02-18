@@ -53,6 +53,7 @@ public class LuceneSearchTools {
     private final LuceneIndexService indexService;
     private final DocumentCrawlerService crawlerService;
     private final CrawlerConfigurationManager configManager;
+    private final QueryRuntimeStats queryRuntimeStats = new QueryRuntimeStats();
 
     public LuceneSearchTools(final LuceneIndexService indexService,
                              final DocumentCrawlerService crawlerService,
@@ -203,7 +204,7 @@ public class LuceneSearchTools {
 
             **Faceted (DrillSideways):**
             - `language`, `file_extension`, `file_type`
-            - `author`, `creator`, `subject`
+            - `author`
 
             **String (exact match):**
             - `file_path`, `content_hash`
@@ -599,8 +600,11 @@ public class LuceneSearchTools {
         tools.add(McpServerFeatures.SyncToolSpecification.builder()
                 .tool(McpSchema.Tool.builder()
                         .name("getIndexStats")
-                        .description("Get index statistics: document count, schema version, date field ranges. " +
-                                "Note: Stats update during next search, not immediately after directory changes.")
+                        .description("Get index statistics: document count, schema version, date field ranges, " +
+                                "lemmatizer cache performance (hit rate, size, evictions per language), " +
+                                "and query runtime metrics (avg/min/max duration, p50-p99 percentiles, " +
+                                "per-field facet computation timing). " +
+                                "Note: Query metrics are available after the first search; stats update on next search.")
                         .inputSchema(SchemaGenerator.emptySchema())
                         .build())
                 .callHandler((exchange, request) -> getIndexStats())
@@ -808,6 +812,8 @@ public class LuceneSearchTools {
                     request.effectiveSortBy(),
                     request.effectiveSortOrder());
             final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+            queryRuntimeStats.recordQuery(durationMs, result.totalHits(),
+                    result.facetTotalDurationMicros(), result.facetFieldDurationMicros());
 
             // Convert facets to DTO format
             final Map<String, List<SearchResponse.FacetValue>> facets = result.facets().entrySet().stream()
@@ -906,10 +912,41 @@ public class LuceneSearchTools {
                 ));
             }
 
+            // Build query runtime metrics
+            final IndexStatsResponse.QueryRuntimeMetrics queryRuntimeMetrics;
+            if (queryRuntimeStats.getTotalQueries() > 0) {
+                final QueryRuntimeStats.Percentiles percentiles = queryRuntimeStats.getPercentiles();
+                final String averageFacetDurationMs = String.format("%.3f",
+                        queryRuntimeStats.getAverageFacetDurationMicros() / 1000.0);
+                final Map<String, String> perFieldAvgFacetMs = new HashMap<>();
+                final Map<String, Long> perFieldCumulative = queryRuntimeStats.getPerFieldFacetDurationMicros();
+                final long totalQueriesForFacets = queryRuntimeStats.getTotalQueries();
+                for (final var entry : perFieldCumulative.entrySet()) {
+                    perFieldAvgFacetMs.put(entry.getKey(),
+                            String.format("%.3f", (double) entry.getValue() / totalQueriesForFacets / 1000.0));
+                }
+                queryRuntimeMetrics = new IndexStatsResponse.QueryRuntimeMetrics(
+                        queryRuntimeStats.getTotalQueries(),
+                        String.format("%.1f", queryRuntimeStats.getAverageDurationMs()),
+                        queryRuntimeStats.getMinDurationMs(),
+                        queryRuntimeStats.getMaxDurationMs(),
+                        String.format("%.1f", queryRuntimeStats.getAverageHitCount()),
+                        percentiles != null ? percentiles.p50() : null,
+                        percentiles != null ? percentiles.p75() : null,
+                        percentiles != null ? percentiles.p90() : null,
+                        percentiles != null ? percentiles.p95() : null,
+                        percentiles != null ? percentiles.p99() : null,
+                        averageFacetDurationMs,
+                        perFieldAvgFacetMs
+                );
+            } else {
+                queryRuntimeMetrics = null;
+            }
+
             logger.info("Index stats: {} documents, schema v{}", documentCount, schemaVersion);
 
             return ToolResultHelper.createResult(IndexStatsResponse.success(
-                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp, dateFieldHints, lemmatizerMetrics));
+                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp, dateFieldHints, lemmatizerMetrics, queryRuntimeMetrics));
 
         } catch (final IOException e) {
             logger.error("Error getting index stats", e);

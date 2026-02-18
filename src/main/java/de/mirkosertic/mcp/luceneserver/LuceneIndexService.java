@@ -101,7 +101,7 @@ public class LuceneIndexService {
 
     /** Fields indexed as SortedSetDocValuesFacetField (facetable via DrillSideways). */
     static final Set<String> FACETED_FIELDS = Set.of(
-            "language", "file_extension", "file_type", "author", "creator", "subject");
+            "language", "file_extension", "file_type", "author");
 
     /** Fields indexed as LongPoint (support range queries). */
     static final Set<String> LONG_POINT_FIELDS = Set.of(
@@ -510,7 +510,7 @@ public class LuceneIndexService {
 
             // 6. Execute search — DrillSideways if positive facet filters exist, otherwise FacetsCollectorManager
             final TopDocs topDocs;
-            final Map<String, List<FacetValue>> facets;
+            final FacetBuildResult facetBuildResult;
 
             if (!positiveFacetFilters.isEmpty()) {
                 // DrillSideways path
@@ -544,7 +544,7 @@ public class LuceneIndexService {
                 }
 
                 topDocs = dsResult.hits;
-                facets = buildFacetsFromDrillSideways(dsResult.facets);
+                facetBuildResult = buildFacetsFromDrillSideways(dsResult.facets);
             } else {
                 // Standard FacetsCollectorManager path (preserves original behavior)
                 final FacetsCollectorManager facetsCollectorManager = new FacetsCollectorManager();
@@ -558,8 +558,9 @@ public class LuceneIndexService {
                 }
 
                 topDocs = result.topDocs();
-                facets = buildFacets(searcher, result.facetsCollector());
+                facetBuildResult = buildFacets(searcher, result.facetsCollector());
             }
+            final Map<String, List<FacetValue>> facets = facetBuildResult.facets();
 
             final long totalHits = topDocs.totalHits.value();
 
@@ -614,7 +615,8 @@ public class LuceneIndexService {
             // 8. Compute active filters
             final List<ActiveFilter> activeFilters = computeActiveFilters(filters, facets);
 
-            return new SearchResult(results, totalHits, page, pageSize, facets, activeFilters);
+            return new SearchResult(results, totalHits, page, pageSize, facets, activeFilters,
+                    facetBuildResult.perFieldDurationMicros(), facetBuildResult.totalDurationMicros());
         } finally {
             searcherManager.release(searcher);
         }
@@ -1985,12 +1987,12 @@ public class LuceneIndexService {
     /**
      * Build facets map from DrillSideways result.
      */
-    private Map<String, List<FacetValue>> buildFacetsFromDrillSideways(final Facets facetsResult) {
+    private FacetBuildResult buildFacetsFromDrillSideways(final Facets facetsResult) {
         final Map<String, List<FacetValue>> facets = new HashMap<>();
-        final String[] facetDimensions = {
-                "language", "file_extension", "file_type", "author", "creator", "subject"
-        };
-        for (final String dimension : facetDimensions) {
+        final Map<String, Long> perFieldDurationMicros = new LinkedHashMap<>();
+        final long overallStart = System.nanoTime();
+        for (final String dimension : FACETED_FIELDS) {
+            final long fieldStart = System.nanoTime();
             try {
                 final FacetResult facetResult = facetsResult.getTopChildren(100, dimension);
                 if (facetResult != null && facetResult.labelValues.length > 0) {
@@ -2003,8 +2005,10 @@ public class LuceneIndexService {
             } catch (final Exception e) {
                 logger.debug("Facet dimension {} not available in DrillSideways result", dimension);
             }
+            perFieldDurationMicros.put(dimension, (System.nanoTime() - fieldStart) / 1_000L);
         }
-        return facets;
+        final long totalDurationMicros = (System.nanoTime() - overallStart) / 1_000L;
+        return new FacetBuildResult(facets, perFieldDurationMicros, totalDurationMicros);
     }
 
     /**
@@ -2099,9 +2103,10 @@ public class LuceneIndexService {
         }
     }
 
-    private Map<String, List<FacetValue>> buildFacets(final IndexSearcher searcher, final FacetsCollector facetsCollector) {
+    private FacetBuildResult buildFacets(final IndexSearcher searcher, final FacetsCollector facetsCollector) {
         final Map<String, List<FacetValue>> facets = new HashMap<>();
-
+        final Map<String, Long> perFieldDurationMicros = new LinkedHashMap<>();
+        final long overallStart = System.nanoTime();
         try {
             // Create facets state from the index using the same FacetsConfig as indexing
             final SortedSetDocValuesReaderState state = new DefaultSortedSetDocValuesReaderState(
@@ -2112,18 +2117,9 @@ public class LuceneIndexService {
             // Create facet counts
             final Facets facetsResult = new SortedSetDocValuesFacetCounts(state, facetsCollector);
 
-            // Define facet dimensions to retrieve
-            final String[] facetDimensions = {
-                    "language",
-                    "file_extension",
-                    "file_type",
-                    "author",
-                    "creator",
-                    "subject"
-            };
-
             // Retrieve top facets for each dimension
-            for (final String dimension : facetDimensions) {
+            for (final String dimension : FACETED_FIELDS) {
+                final long fieldStart = System.nanoTime();
                 try {
                     final FacetResult facetResult = facetsResult.getTopChildren(100, dimension);
                     if (facetResult != null && facetResult.labelValues.length > 0) {
@@ -2137,12 +2133,14 @@ public class LuceneIndexService {
                     // Dimension doesn't exist in index - skip it
                     logger.debug("Facet dimension {} not found in index", dimension);
                 }
+                perFieldDurationMicros.put(dimension, (System.nanoTime() - fieldStart) / 1_000L);
             }
         } catch (final Exception e) {
             logger.warn("Error building facets", e);
         }
 
-        return facets;
+        final long totalDurationMicros = (System.nanoTime() - overallStart) / 1_000L;
+        return new FacetBuildResult(facets, perFieldDurationMicros, totalDurationMicros);
     }
 
     /**
@@ -2774,13 +2772,21 @@ public class LuceneIndexService {
     public record FacetValue(String value, int count) {
     }
 
+    private record FacetBuildResult(
+            Map<String, List<FacetValue>> facets,
+            Map<String, Long> perFieldDurationMicros,
+            long totalDurationMicros
+    ) {}
+
     public record SearchResult(
             List<SearchDocument> documents,
             long totalHits,
             int page,
             int pageSize,
             Map<String, List<FacetValue>> facets,
-            List<ActiveFilter> activeFilters
+            List<ActiveFilter> activeFilters,
+            Map<String, Long> facetFieldDurationMicros,
+            long facetTotalDurationMicros
     ) {
         public int totalPages() {
             return (int) Math.ceil((double) totalHits / pageSize);

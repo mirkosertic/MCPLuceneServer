@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import opennlp.tools.lemmatizer.LemmatizerModel;
 import opennlp.tools.postag.POSModel;
 import opennlp.tools.sentdetect.SentenceModel;
@@ -72,12 +73,18 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
      */
     private static final String MODEL_VERSION = "1.2-2.5.0";
 
+    /**
+     * Maximum number of (token, POS tag) → lemma entries in the shared cache per language.
+     */
+    private static final int MAX_CACHE_SIZE = 1_500_000;
+
     private final SentenceModel sentenceModel;
     private final TokenizerModel tokenizerModel;
     private final POSModel posModel;
     private final LemmatizerModel lemmatizerModel;
     private final boolean useSentenceDetection;
     private final LemmatizerCacheStats cacheStats;
+    private final Cache<CachedNLPLemmatizerOp.TokenPosPair, String> sharedLemmatizerCache;
 
     /**
      * Creates a new sentence-aware {@code OpenNLPLemmatizingAnalyzer} (for indexing).
@@ -112,6 +119,7 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
 
         this.useSentenceDetection = useSentenceDetection;
         this.cacheStats = new LemmatizerCacheStats();
+        this.sharedLemmatizerCache = CachedNLPLemmatizerOp.createSharedCache(MAX_CACHE_SIZE, this.cacheStats);
 
         try {
             this.sentenceModel = new SentenceModel(
@@ -132,27 +140,40 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
                                        final POSModel posModel,
                                        final LemmatizerModel lemmatizerModel,
                                        final boolean useSentenceDetection,
-                                       final LemmatizerCacheStats cacheStats) {
+                                       final LemmatizerCacheStats cacheStats,
+                                       final Cache<CachedNLPLemmatizerOp.TokenPosPair, String> sharedLemmatizerCache) {
         this.sentenceModel = sentenceModel;
         this.tokenizerModel = tokenizerModel;
         this.posModel = posModel;
         this.lemmatizerModel = lemmatizerModel;
         this.useSentenceDetection = useSentenceDetection;
         this.cacheStats = cacheStats;
+        this.sharedLemmatizerCache = sharedLemmatizerCache;
     }
 
     /**
      * Creates a new analyzer that shares the loaded models from this instance
      * but uses the specified sentence detection mode.
      *
+     * <p><strong>Important:</strong> The new analyzer gets its own independent cache and stats,
+     * because sentence-aware (indexing) and sentence-unaware (query-time) modes may assign
+     * different POS tags to the same token, leading to different lemma mappings. Sharing the
+     * cache between these two modes would cause incorrect query-time results (e.g. a gerund
+     * lemmatized as a noun during indexing overwriting the correct verb lemma used at query time).
+     * </p>
+     *
      * @param useSentenceDetection {@code true} for sentence-aware mode (indexing),
      *                              {@code false} for simple mode (query time)
-     * @return a new analyzer sharing this instance's models
+     * @return a new analyzer with its own independent cache, sharing only the loaded models
      */
     public OpenNLPLemmatizingAnalyzer withSentenceDetection(final boolean useSentenceDetection) {
+        final LemmatizerCacheStats newStats = new LemmatizerCacheStats();
+        final Cache<CachedNLPLemmatizerOp.TokenPosPair, String> newCache =
+                CachedNLPLemmatizerOp.createSharedCache(MAX_CACHE_SIZE, newStats);
         return new OpenNLPLemmatizingAnalyzer(
                 this.sentenceModel, this.tokenizerModel,
-                this.posModel, this.lemmatizerModel, useSentenceDetection, this.cacheStats);
+                this.posModel, this.lemmatizerModel, useSentenceDetection,
+                newStats, newCache);
     }
 
     @Override
@@ -181,7 +202,8 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
 
             TokenStream stream = new OpenNLPPOSFilter(tokenizer, new NLPPOSTaggerOp(posModel));
             final NLPLemmatizerOp baseLemmatizer = new NLPLemmatizerOp(null, lemmatizerModel);
-            final CachedNLPLemmatizerOp cachedLemmatizer = new CachedNLPLemmatizerOp(baseLemmatizer, lemmatizerModel, cacheStats);
+            final CachedNLPLemmatizerOp cachedLemmatizer = new CachedNLPLemmatizerOp(
+                    baseLemmatizer, lemmatizerModel, cacheStats, sharedLemmatizerCache);
             stream = new OpenNLPLemmatizerFilter(stream, cachedLemmatizer);
             stream = new LowerCaseFilter(stream);
             stream = new ICUFoldingFilter(stream);
