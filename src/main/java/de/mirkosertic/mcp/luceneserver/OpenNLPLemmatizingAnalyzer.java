@@ -77,6 +77,7 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
     private final POSModel posModel;
     private final LemmatizerModel lemmatizerModel;
     private final boolean useSentenceDetection;
+    private final LemmatizerCacheStats cacheStats;
 
     /**
      * Creates a new sentence-aware {@code OpenNLPLemmatizingAnalyzer} (for indexing).
@@ -110,6 +111,7 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
         }
 
         this.useSentenceDetection = useSentenceDetection;
+        this.cacheStats = new LemmatizerCacheStats();
 
         try {
             this.sentenceModel = new SentenceModel(
@@ -123,6 +125,34 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
         } catch (final IOException e) {
             throw new UncheckedIOException("Failed to load OpenNLP models for language: " + languageCode, e);
         }
+    }
+
+    private OpenNLPLemmatizingAnalyzer(final SentenceModel sentenceModel,
+                                       final TokenizerModel tokenizerModel,
+                                       final POSModel posModel,
+                                       final LemmatizerModel lemmatizerModel,
+                                       final boolean useSentenceDetection,
+                                       final LemmatizerCacheStats cacheStats) {
+        this.sentenceModel = sentenceModel;
+        this.tokenizerModel = tokenizerModel;
+        this.posModel = posModel;
+        this.lemmatizerModel = lemmatizerModel;
+        this.useSentenceDetection = useSentenceDetection;
+        this.cacheStats = cacheStats;
+    }
+
+    /**
+     * Creates a new analyzer that shares the loaded models from this instance
+     * but uses the specified sentence detection mode.
+     *
+     * @param useSentenceDetection {@code true} for sentence-aware mode (indexing),
+     *                              {@code false} for simple mode (query time)
+     * @return a new analyzer sharing this instance's models
+     */
+    public OpenNLPLemmatizingAnalyzer withSentenceDetection(final boolean useSentenceDetection) {
+        return new OpenNLPLemmatizingAnalyzer(
+                this.sentenceModel, this.tokenizerModel,
+                this.posModel, this.lemmatizerModel, useSentenceDetection, this.cacheStats);
     }
 
     @Override
@@ -150,7 +180,9 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
             }
 
             TokenStream stream = new OpenNLPPOSFilter(tokenizer, new NLPPOSTaggerOp(posModel));
-            stream = new OpenNLPLemmatizerFilter(stream, new NLPLemmatizerOp(null, lemmatizerModel));
+            final NLPLemmatizerOp baseLemmatizer = new NLPLemmatizerOp(null, lemmatizerModel);
+            final CachedNLPLemmatizerOp cachedLemmatizer = new CachedNLPLemmatizerOp(baseLemmatizer, lemmatizerModel, cacheStats);
+            stream = new OpenNLPLemmatizerFilter(stream, cachedLemmatizer);
             stream = new LowerCaseFilter(stream);
             stream = new ICUFoldingFilter(stream);
 
@@ -158,6 +190,15 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
         } catch (final IOException e) {
             throw new UncheckedIOException("Failed to create OpenNLP token stream components", e);
         }
+    }
+
+    /**
+     * Returns the cache statistics for monitoring lemmatizer performance.
+     *
+     * @return the {@link LemmatizerCacheStats} instance for this analyzer
+     */
+    public LemmatizerCacheStats getCacheStats() {
+        return cacheStats;
     }
 
     /**

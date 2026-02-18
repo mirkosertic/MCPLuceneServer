@@ -156,6 +156,10 @@ public class LuceneIndexService {
     private final DocumentIndexer documentIndexer;
     private boolean schemaUpgradeRequired = false;
 
+    // Lemmatizing analyzers for cache stats access
+    private final OpenNLPLemmatizingAnalyzer deLemmatizer;
+    private final OpenNLPLemmatizingAnalyzer enLemmatizer;
+
     // Language distribution cache for stemmed query boosting
     private volatile Map<String, Long> cachedLanguageDistribution = Map.of();
     private volatile long cachedTotalDocs = 0;
@@ -182,17 +186,19 @@ public class LuceneIndexService {
                               final DocumentIndexer documentIndexer) {
         this.config = config;
         final Analyzer defaultAnalyzer = new UnicodeNormalizingAnalyzer();
+        this.deLemmatizer = new OpenNLPLemmatizingAnalyzer("de", true);
+        this.enLemmatizer = new OpenNLPLemmatizingAnalyzer("en", true);
         // Index analyzer: sentence-aware OpenNLP pipeline for accurate POS tagging on long texts
         this.indexAnalyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
                 "content_reversed", new ReverseUnicodeNormalizingAnalyzer(),
-                "content_lemma_de", new OpenNLPLemmatizingAnalyzer("de", true),
-                "content_lemma_en", new OpenNLPLemmatizingAnalyzer("en", true)
+                "content_lemma_de", deLemmatizer,
+                "content_lemma_en", enLemmatizer
         ));
         // Query analyzer: simple mode (no sentence detection) for better handling of short queries
         this.queryAnalyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
                 "content_reversed", new ReverseUnicodeNormalizingAnalyzer(),
-                "content_lemma_de", new OpenNLPLemmatizingAnalyzer("de", false),
-                "content_lemma_en", new OpenNLPLemmatizingAnalyzer("en", false)
+                "content_lemma_de", deLemmatizer.withSentenceDetection(false),
+                "content_lemma_en", enLemmatizer.withSentenceDetection(false)
         ));
         this.indexPath = config.getIndexPath();
         this.nrtRefreshIntervalMs = config.getNrtRefreshIntervalMs();
@@ -788,6 +794,18 @@ public class LuceneIndexService {
 
     public String getIndexPath() {
         return indexPath;
+    }
+
+    /**
+     * Returns lemmatizer cache statistics for all language analyzers.
+     *
+     * @return a map of language code to cache statistics
+     */
+    public Map<String, LemmatizerCacheStats> getLemmatizerCacheStats() {
+        return Map.of(
+                "de", deLemmatizer.getCacheStats(),
+                "en", enLemmatizer.getCacheStats()
+        );
     }
 
     /**

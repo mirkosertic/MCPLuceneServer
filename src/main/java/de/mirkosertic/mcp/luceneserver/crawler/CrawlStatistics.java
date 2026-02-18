@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
+import java.util.List;
 import java.util.Map;
 
 public record CrawlStatistics(
@@ -18,7 +19,9 @@ public record CrawlStatistics(
         /** Wall-clock time in milliseconds spent in the reconciliation phase. */
         long reconciliationTimeMs,
         /** The crawl mode that produced these statistics: {@code "full"} or {@code "incremental"}. */
-        String crawlMode
+        String crawlMode,
+        /** Files currently being processed (extracted/indexed). */
+        List<ActiveFile> currentlyProcessing
 ) {
     public double filesPerSecond() {
         final long elapsedMs = endTimeMs - startTimeMs;
@@ -44,5 +47,9 @@ public record CrawlStatistics(
             long filesIndexed,
             long filesFailed
     ) {
+    }
+
+    /** Represents a file currently being processed by the crawler. */
+    public record ActiveFile(String filePath, long processingDurationMs) {
     }
 }

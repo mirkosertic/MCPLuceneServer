@@ -16,11 +16,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -49,7 +48,6 @@ public class DocumentCrawlerService implements FileChangeListener {
     private final IndexReconciliationService reconciliationService;
     private final CrawlerConfigurationManager configManager;
 
-    private final BlockingQueue<Document> batchQueue = new LinkedBlockingQueue<>();
     private final AtomicBoolean crawling = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
 
@@ -63,7 +61,8 @@ public class DocumentCrawlerService implements FileChangeListener {
             });
     private final AtomicBoolean flushScheduled = new AtomicBoolean(false);
 
-    private volatile Future<?> batchProcessorFuture;
+    private volatile Thread coordinatorThread;
+    private volatile ScheduledExecutorService commitTimer;
     private volatile long originalNrtRefreshInterval;
     private volatile CrawlerState state = CrawlerState.IDLE;
 
@@ -176,9 +175,7 @@ public class DocumentCrawlerService implements FileChangeListener {
             }
 
             statisticsTracker.sendStartNotification(config.getDirectories().size());
-
-            // Start batch processor
-            batchProcessorFuture = crawlExecutor.submit(this::processBatches);
+            statisticsTracker.startPeriodicNotifications();
 
             // Determine total files for bulk indexing decision without a separate filesystem walk.
             // For incremental crawls, the reconciliation result already knows the exact count.
@@ -199,65 +196,39 @@ public class DocumentCrawlerService implements FileChangeListener {
                 indexService.setNrtRefreshInterval(config.getSlowNrtRefreshIntervalMs());
             }
 
-            // Crawl each directory in parallel
-            final List<Future<?>> futures = new ArrayList<>();
-            for (final String directory : config.getDirectories()) {
-                final Future<?> future = crawlExecutor.submit(() -> crawlDirectory(directory));
-                futures.add(future);
-            }
+            // Start periodic commit timer
+            startCommitTimer();
 
-            // Capture for use in the completion lambda
             final long totalFilesCaptured = totalFiles;
             final String crawlModeCaptured = crawlMode;
 
-            // Wait for all crawl tasks to complete
-            crawlExecutor.execute(() -> {
+            final Thread coordinator = new Thread(() -> {
                 try {
-                    for (final Future<?> future : futures) {
-                        future.get();
+                    final List<Future<?>> fileFutures = new ArrayList<>();
+                    for (final String directory : config.getDirectories()) {
+                        submitFileTasks(directory, fileFutures);
                     }
-
-                    // Signal batch processor to finish
-                    crawling.set(false);
-
-                    // Wait for batch processor to complete
-                    if (batchProcessorFuture != null) {
-                        batchProcessorFuture.get();
+                    // Wait for all file processing to complete
+                    for (final Future<?> future : fileFutures) {
+                        try {
+                            future.get();
+                        } catch (final ExecutionException e) {
+                            logger.error("Error in file processing task", e.getCause());
+                        }
                     }
-
-                    // Restore original NRT refresh interval
-                    if (totalFilesCaptured >= config.getBulkIndexThreshold()) {
-                        indexService.setNrtRefreshInterval(originalNrtRefreshInterval);
-                        logger.info("Restored NRT refresh interval to {}ms", originalNrtRefreshInterval);
-                    }
-
-                    // Final commit
-                    indexService.commit();
-
-                    // Send completion notification
-                    statisticsTracker.sendCompleteNotification();
-
-                    // Persist crawl state on successful completion
-                    saveCrawlStateOnSuccess(crawlModeCaptured);
-
-                    // Clear the incremental filter
-                    filesToProcess = null;
-
-                    // Setup directory watching if enabled
-                    if (config.isWatchEnabled()) {
-                        setupWatchers();
-                        state = CrawlerState.WATCHING;
-                    } else {
-                        state = CrawlerState.IDLE;
-                    }
-
+                    onCrawlComplete(totalFilesCaptured, crawlModeCaptured);
+                } catch (final InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    logger.warn("Crawl coordinator interrupted");
+                    onCrawlFailed();
                 } catch (final Exception e) {
-                    logger.error("Error during crawl completion", e);
-                    crawling.set(false);
-                    filesToProcess = null;
-                    state = CrawlerState.IDLE;
+                    logger.error("Error during crawl coordination", e);
+                    onCrawlFailed();
                 }
-            });
+            }, "crawl-coordinator");
+            coordinator.setDaemon(true);
+            coordinatorThread = coordinator;
+            coordinator.start();
 
         } else {
             logger.warn("Crawl already in progress");
@@ -297,7 +268,7 @@ public class DocumentCrawlerService implements FileChangeListener {
         }
     }
 
-    private void crawlDirectory(final String directory) {
+    private void submitFileTasks(final String directory, final List<Future<?>> futures) {
         logger.info("Crawling directory: {}", directory);
         final Path dirPath = Paths.get(directory);
 
@@ -321,28 +292,17 @@ public class DocumentCrawlerService implements FileChangeListener {
                     .filter(matcher::shouldInclude)
                     .filter(this::shouldProcessFile)
                     .forEach(file -> {
-                        // Check if paused
-                        while (paused.get() && crawling.get()) {
-                            try {
-                                Thread.sleep(100);
-                            } catch (final InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                                return;
-                            }
-                        }
-
                         if (!crawling.get()) {
                             return;
                         }
-
                         statisticsTracker.incrementFilesFound(directory);
-                        processFile(file, directory);
+                        futures.add(crawlExecutor.submit(() -> processFile(file, directory)));
                     });
         } catch (final IOException e) {
             logger.error("Error crawling directory: {}", directory, e);
         }
 
-        logger.info("Finished crawling directory: {}", directory);
+        logger.info("Finished submitting tasks for directory: {}", directory);
     }
 
     /**
@@ -358,91 +318,131 @@ public class DocumentCrawlerService implements FileChangeListener {
         return toProcess.contains(file.toString());
     }
 
-    private void processFile(final Path file, final String directory) {
+    /**
+     * Returns {@code true} if the file exists and has zero bytes.
+     * Returns {@code false} if the file does not exist or its size cannot be determined.
+     */
+    private static boolean isEmptyFile(final Path file) {
         try {
-            // Extract content
-            final ExtractedDocument extracted = contentExtractor.extract(file);
-
-            // Create Lucene document
-            final Document document = documentIndexer.createDocument(file, extracted);
-
-            // Add to batch queue
-            batchQueue.put(document);
-
-            // Update statistics
-            statisticsTracker.incrementFilesProcessed(directory, extracted.fileSize());
-
-        } catch (final Exception e) {
-            logger.error("Error processing file: {}", file, e);
-            statisticsTracker.incrementFilesFailed(directory);
+            return Files.exists(file) && Files.size(file) == 0;
+        } catch (final IOException e) {
+            return false;
         }
     }
 
-    private void processBatches() {
-        final List<Document> batch = new ArrayList<>(config.getBatchSize());
-        long lastBatchTime = System.currentTimeMillis();
-
-        while (crawling.get() || !batchQueue.isEmpty()) {
+    private void processFile(final Path file, final String directory) {
+        // Check if paused
+        while (paused.get() && crawling.get()) {
             try {
-                // Poll for documents with timeout
-                final Document doc = batchQueue.poll(100, TimeUnit.MILLISECONDS);
-
-                if (doc != null) {
-                    batch.add(doc);
-                }
-
-                // Check if we should process the batch
-                final long timeSinceLastBatch = System.currentTimeMillis() - lastBatchTime;
-                if (batch.size() >= config.getBatchSize() ||
-                        (timeSinceLastBatch >= config.getBatchTimeoutMs() && !batch.isEmpty())) {
-
-                    // Index the batch
-                    indexBatch(batch);
-
-                    // Clear batch and reset timer
-                    batch.clear();
-                    lastBatchTime = System.currentTimeMillis();
-                }
-
+                Thread.sleep(100);
             } catch (final InterruptedException e) {
                 Thread.currentThread().interrupt();
-                logger.warn("Batch processor interrupted");
-                break;
-            } catch (final Exception e) {
-                logger.error("Error processing batch", e);
+                return;
             }
         }
-
-        // Process any remaining documents
-        if (!batch.isEmpty()) {
-            try {
-                indexBatch(batch);
-            } catch (final Exception e) {
-                logger.error("Error processing final batch", e);
-            }
-        }
-
-        logger.info("Batch processor finished");
-    }
-
-    private void indexBatch(final List<Document> batch) throws IOException {
-        if (batch.isEmpty()) {
+        if (!crawling.get()) {
             return;
         }
 
-        for (final Document doc : batch) {
-            documentIndexer.indexDocument(indexService.getIndexWriter(), doc);
-            final String directory = doc.get("file_path");
-            if (directory != null) {
-                // Extract directory from file path for statistics
-                final Path path = Paths.get(directory);
-                final String dir = path.getParent().toString();
-                statisticsTracker.incrementFilesIndexed(dir);
+        final String filePath = file.toString();
+        statisticsTracker.registerActiveFile(filePath);
+        try {
+            if (isEmptyFile(file)) {
+                logger.debug("Skipping empty file (0 bytes): {}", file);
+                documentIndexer.deleteDocument(indexService.getIndexWriter(), filePath);
+                statisticsTracker.incrementFilesProcessed(directory, 0);
+                return;
             }
+            final ExtractedDocument extracted = contentExtractor.extract(file);
+            if (extracted.content() == null || extracted.content().isBlank()) {
+                logger.debug("Skipping file with no extractable content: {}", file);
+                documentIndexer.deleteDocument(indexService.getIndexWriter(), filePath);
+                statisticsTracker.incrementFilesProcessed(directory, extracted.fileSize());
+                return;
+            }
+            final Document document = documentIndexer.createDocument(file, extracted);
+            documentIndexer.indexDocument(indexService.getIndexWriter(), document);
+            statisticsTracker.incrementFilesProcessed(directory, extracted.fileSize());
+            statisticsTracker.incrementFilesIndexed(directory);
+        } catch (final Exception e) {
+            logger.error("Error processing file: {}", file, e);
+            statisticsTracker.incrementFilesFailed(directory);
+        } finally {
+            statisticsTracker.unregisterActiveFile(filePath);
         }
+    }
 
-        indexService.commit();
-        logger.debug("Indexed batch of {} documents", batch.size());
+    private void startCommitTimer() {
+        final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
+            final Thread t = new Thread(r, "commit-timer");
+            t.setDaemon(true);
+            return t;
+        });
+        timer.scheduleAtFixedRate(() -> {
+            try {
+                indexService.commit();
+            } catch (final IOException e) {
+                logger.error("Error during periodic commit", e);
+            }
+        }, config.getBatchTimeoutMs(), config.getBatchTimeoutMs(), TimeUnit.MILLISECONDS);
+        this.commitTimer = timer;
+    }
+
+    private void stopCommitTimer() {
+        final ScheduledExecutorService timer = this.commitTimer;
+        if (timer != null) {
+            timer.shutdown();
+            this.commitTimer = null;
+        }
+    }
+
+    private void onCrawlComplete(final long totalFiles, final String crawlMode) {
+        try {
+            // Stop commit timer before final commit
+            stopCommitTimer();
+
+            // Restore original NRT refresh interval
+            if (totalFiles >= config.getBulkIndexThreshold()) {
+                indexService.setNrtRefreshInterval(originalNrtRefreshInterval);
+                logger.info("Restored NRT refresh interval to {}ms", originalNrtRefreshInterval);
+            }
+
+            // Final commit
+            indexService.commit();
+
+            // Stop periodic progress notifications before sending completion
+            statisticsTracker.stopPeriodicNotifications();
+
+            // Send completion notification
+            statisticsTracker.sendCompleteNotification();
+
+            // Persist crawl state on successful completion
+            saveCrawlStateOnSuccess(crawlMode);
+
+            // Clear the incremental filter
+            filesToProcess = null;
+
+            // Setup directory watching if enabled
+            if (config.isWatchEnabled()) {
+                setupWatchers();
+                state = CrawlerState.WATCHING;
+            } else {
+                state = CrawlerState.IDLE;
+            }
+        } catch (final Exception e) {
+            logger.error("Error during crawl completion", e);
+            onCrawlFailed();
+        } finally {
+            crawling.set(false);
+        }
+    }
+
+    private void onCrawlFailed() {
+        stopCommitTimer();
+        statisticsTracker.stopPeriodicNotifications();
+        crawling.set(false);
+        filesToProcess = null;
+        state = CrawlerState.IDLE;
     }
 
     private void setupWatchers() {
@@ -524,10 +524,20 @@ public class DocumentCrawlerService implements FileChangeListener {
                     }
                 } else {
                     try {
+                        if (isEmptyFile(evt.file())) {
+                            logger.debug("Skipping empty file (0 bytes): {}", evt.file());
+                            documentIndexer.deleteDocument(indexService.getIndexWriter(), evt.file().toString());
+                            continue;
+                        }
                         final ExtractedDocument extracted = contentExtractor.extract(evt.file());
-                        final Document document = documentIndexer.createDocument(evt.file(), extracted);
-                        documentIndexer.indexDocument(indexService.getIndexWriter(), document);
-                        logger.info("Indexed file: {}", evt.file());
+                        if (extracted.content() == null || extracted.content().isBlank()) {
+                            logger.debug("Skipping file with no extractable content: {}", evt.file());
+                            documentIndexer.deleteDocument(indexService.getIndexWriter(), evt.file().toString());
+                        } else {
+                            final Document document = documentIndexer.createDocument(evt.file(), extracted);
+                            documentIndexer.indexDocument(indexService.getIndexWriter(), document);
+                            logger.info("Indexed file: {}", evt.file());
+                        }
                     } catch (final Exception e) {
                         logger.error("Error indexing file: {}", evt.file(), e);
                     }
@@ -615,12 +625,20 @@ public class DocumentCrawlerService implements FileChangeListener {
             Thread.currentThread().interrupt();
         }
 
-        // Wait for batch processor to finish
-        if (batchProcessorFuture != null) {
+        // Shut down statistics tracker (progress timer)
+        statisticsTracker.shutdown();
+
+        // Stop commit timer
+        stopCommitTimer();
+
+        // Wait for coordinator thread to finish
+        final Thread coord = coordinatorThread;
+        if (coord != null) {
             try {
-                batchProcessorFuture.get(10, TimeUnit.SECONDS);
-            } catch (final Exception e) {
-                logger.warn("Batch processor did not finish in time", e);
+                coord.join(10000);
+            } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.warn("Interrupted while waiting for coordinator thread");
             }
         }
     }

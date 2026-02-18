@@ -890,10 +890,26 @@ public class LuceneSearchTools {
                 dateFieldHints.put(entry.getKey(), new IndexStatsResponse.DateFieldHint(minDate, maxDate));
             }
 
+            // Get lemmatizer cache statistics
+            final Map<String, LemmatizerCacheStats> cacheStatsMap = indexService.getLemmatizerCacheStats();
+            final Map<String, IndexStatsResponse.LemmatizerCacheMetrics> lemmatizerMetrics = new HashMap<>();
+            for (final var entry : cacheStatsMap.entrySet()) {
+                final String language = entry.getKey();
+                final LemmatizerCacheStats stats = entry.getValue();
+                lemmatizerMetrics.put(language, new IndexStatsResponse.LemmatizerCacheMetrics(
+                        language,
+                        String.format("%.1f%%", stats.getHitRate()),
+                        stats.getCacheHits(),
+                        stats.getCacheMisses(),
+                        stats.getCurrentSize(),
+                        stats.getEvictions()
+                ));
+            }
+
             logger.info("Index stats: {} documents, schema v{}", documentCount, schemaVersion);
 
             return ToolResultHelper.createResult(IndexStatsResponse.success(
-                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp, dateFieldHints));
+                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp, dateFieldHints, lemmatizerMetrics));
 
         } catch (final IOException e) {
             logger.error("Error getting index stats", e);

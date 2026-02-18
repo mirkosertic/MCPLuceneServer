@@ -4,6 +4,7 @@ import de.mirkosertic.mcp.luceneserver.crawler.CrawlState;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlStatistics;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -24,6 +25,7 @@ public record CrawlerStatsResponse(
         long filesSkippedUnchanged,
         long reconciliationTimeMs,
         String crawlMode,
+        List<CrawlStatistics.ActiveFile> currentlyProcessing,
         @Nullable Long lastCrawlCompletionTimeMs,
         @Nullable Long lastCrawlDocumentCount,
         @Nullable String lastCrawlMode,
@@ -45,6 +47,7 @@ public record CrawlerStatsResponse(
                 stats.filesSkippedUnchanged(),
                 stats.reconciliationTimeMs(),
                 stats.crawlMode(),
+                stats.currentlyProcessing(),
                 lastCrawlState != null ? lastCrawlState.lastCompletionTimeMs() : null,
                 lastCrawlState != null ? lastCrawlState.lastDocumentCount() : null,
                 lastCrawlState != null ? lastCrawlState.lastCrawlMode() : null,
@@ -53,6 +56,6 @@ public record CrawlerStatsResponse(
     }
 
     public static CrawlerStatsResponse error(final String errorMessage) {
-        return new CrawlerStatsResponse(false, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, null, null, null, null, errorMessage);
+        return new CrawlerStatsResponse(false, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, null, List.of(), null, null, null, errorMessage);
     }
 }
