@@ -13,6 +13,7 @@ public record IndexStatsResponse(
         String softwareVersion,
         String buildTimestamp,
         Map<String, DateFieldHint> dateFieldHints,
+        Map<String, LemmatizerCacheMetrics> lemmatizerCacheMetrics,
         String error
 ) {
     /**
@@ -21,15 +22,29 @@ public record IndexStatsResponse(
     public record DateFieldHint(String minDate, String maxDate) {
     }
 
+    /**
+     * Lemmatizer cache metrics for a specific language analyzer.
+     */
+    public record LemmatizerCacheMetrics(
+            String language,
+            String hitRate,
+            long totalHits,
+            long totalMisses,
+            long cacheSize,
+            long evictions
+    ) {
+    }
+
     public static IndexStatsResponse success(final long documentCount, final String indexPath,
                                               final int schemaVersion, final String softwareVersion,
                                               final String buildTimestamp,
-                                              final Map<String, DateFieldHint> dateFieldHints) {
+                                              final Map<String, DateFieldHint> dateFieldHints,
+                                              final Map<String, LemmatizerCacheMetrics> lemmatizerCacheMetrics) {
         return new IndexStatsResponse(true, documentCount, indexPath, schemaVersion, softwareVersion,
-                buildTimestamp, dateFieldHints, null);
+                buildTimestamp, dateFieldHints, lemmatizerCacheMetrics, null);
     }
 
     public static IndexStatsResponse error(final String errorMessage) {
-        return new IndexStatsResponse(false, 0, null, 0, null, null, null, errorMessage);
+        return new IndexStatsResponse(false, 0, null, 0, null, null, null, null, errorMessage);
     }
 }
