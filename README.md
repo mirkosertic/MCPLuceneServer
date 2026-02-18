@@ -449,7 +449,7 @@ The `filters` array accepts objects with these fields:
 | `range` | Numeric/date range | `{field: "modified_date", operator: "range", from: "2024-01-01", to: "2025-12-31"}` |
 
 **Filterable fields:**
-- **Faceted** (DrillSideways): `language`, `file_extension`, `file_type`, `author`, `creator`, `subject`
+- **Faceted** (DrillSideways): `language`, `file_extension`, `file_type`, `author`
 - **String (exact match)**: `file_path`, `content_hash`
 - **Numeric/date (range)**: `file_size`, `created_date`, `modified_date`, `indexed_date`
 
@@ -775,7 +775,7 @@ This analyzes filter effectiveness, potentially revealing:
 
 ### `getIndexStats`
 
-Get statistics about the Lucene index, including lemmatizer cache performance metrics.
+Get statistics about the Lucene index, including lemmatizer cache performance metrics, query runtime percentiles (p50-p99), and per-field facet computation timing.
 
 **Returns:**
 - `documentCount`: Total number of documents in the index
@@ -791,14 +791,23 @@ Get statistics about the Lucene index, including lemmatizer cache performance me
   - `totalMisses`: Number of times a token required lemmatization
   - `cacheSize`: Current number of entries in the cache
   - `evictions`: Number of cache entries evicted due to size limits
+- `queryRuntimeMetrics`: Aggregate search query performance statistics (null before any searches are executed)
+  - `totalQueries`: Total number of search queries executed since server start
+  - `averageDurationMs`: Average query duration in milliseconds (e.g., "12.5")
+  - `minDurationMs`: Fastest query duration in milliseconds
+  - `maxDurationMs`: Slowest query duration in milliseconds
+  - `averageHitCount`: Average number of matching documents per query (e.g., "42.3")
+  - `p50Ms` / `p75Ms` / `p90Ms` / `p95Ms` / `p99Ms`: Query duration percentiles in milliseconds (computed from last 1000 queries)
+  - `averageFacetDurationMs`: Average facet computation time per query in milliseconds (e.g., "0.125")
+  - `perFieldAverageFacetDurationMs`: Per-field average facet computation time in milliseconds (e.g., `{"language": "0.031", "file_extension": "0.028", ...}`)
 
 **Lemmatizer Cache Performance:**
 
-The server uses single-token caching for OpenNLP lemmatization to reduce CPU usage during indexing and querying. Each language analyzer (German and English) maintains a separate LRU cache with up to 200,000 entries. The cache uses case-insensitive keys for common words (e.g., "Vertrag" and "vertrag" share the same cache entry) while keeping proper nouns case-sensitive (e.g., "Berlin" vs "berlin").
+The server uses single-token caching for OpenNLP lemmatization to reduce CPU usage during indexing and querying. Each language analyzer (German and English) maintains a shared LRU cache with up to 1,500,000 entries, shared across all Lucene indexing threads. The cache uses case-insensitive keys for common words (e.g., "Vertrag" and "vertrag" share the same cache entry) while keeping proper nouns case-sensitive (e.g., "Berlin" vs "berlin").
 
 **Key Metrics:**
 - **Hit Rate**: Higher is better. 85-95% is typical after indexing a few thousand documents. Higher hit rates mean less CPU usage.
-- **Cache Size**: Current number of cached (token, POS tag) → lemma mappings. Grows up to 200,000 entries per language.
+- **Cache Size**: Current number of cached (token, POS tag) → lemma mappings. Grows up to 1,500,000 entries per language.
 - **Evictions**: How many entries have been removed to make room for new ones. Some evictions are normal with large document sets.
 
 **Performance Impact:**
@@ -1272,8 +1281,6 @@ Search results are optimized for MCP responses (< 1 MB) and include:
   - `file_extension` - File extension (pdf, docx, etc.)
   - `file_type` - MIME type
   - `author` - Document author (multi-valued)
-  - `creator` - Document creator (multi-valued)
-  - `subject` - Document subject (multi-valued)
 
 ### Faceted Search Examples
 
