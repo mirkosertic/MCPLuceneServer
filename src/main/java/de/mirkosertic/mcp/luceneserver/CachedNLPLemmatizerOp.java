@@ -18,7 +18,8 @@ import java.util.Locale;
  *
  * <p>Cache characteristics:</p>
  * <ul>
- *   <li>Maximum size: 200,000 entries per analyzer instance (one cache per language)</li>
+ *   <li>Shared cache across all Lucene threads (one cache per language, created in
+ *       {@link OpenNLPLemmatizingAnalyzer} and passed to every instance via the constructor)</li>
  *   <li>Eviction policy: LRU (Least Recently Used)</li>
  *   <li>Thread-safe for concurrent indexing</li>
  *   <li>Case-insensitive for common words, case-sensitive for proper nouns</li>
@@ -34,7 +35,7 @@ public class CachedNLPLemmatizerOp extends NLPLemmatizerOp {
     /**
      * Cache key representing a (token, POS tag) pair.
      */
-    private record TokenPosPair(String token, String posTag) {
+    record TokenPosPair(String token, String posTag) {
     }
 
     /**
@@ -58,11 +59,32 @@ public class CachedNLPLemmatizerOp extends NLPLemmatizerOp {
         return new TokenPosPair(token.toLowerCase(Locale.ROOT), posTag);
     }
 
-    private static final int MAX_CACHE_SIZE = 200_000;
-
     private final NLPLemmatizerOp delegate;
     private final Cache<TokenPosPair, String> cache;
     private final LemmatizerCacheStats stats;
+
+    /**
+     * Creates a shared Caffeine cache to be passed to all {@link CachedNLPLemmatizerOp}
+     * instances for the same language.
+     *
+     * <p>Call this once per language in {@link OpenNLPLemmatizingAnalyzer} and pass the
+     * returned cache to every {@link CachedNLPLemmatizerOp} constructor so that all
+     * Lucene threads share a single cache instead of each maintaining their own.</p>
+     *
+     * @param maxSize the maximum number of entries in the cache
+     * @param stats   the statistics collector for tracking evictions
+     * @return a new Caffeine cache ready for sharing across threads
+     */
+    static Cache<TokenPosPair, String> createSharedCache(final int maxSize, final LemmatizerCacheStats stats) {
+        return Caffeine.newBuilder()
+                .maximumSize(maxSize)
+                .evictionListener((TokenPosPair key, String value, RemovalCause cause) -> {
+                    if (cause.wasEvicted()) {
+                        stats.recordEviction();
+                    }
+                })
+                .build();
+    }
 
     /**
      * Creates a new caching lemmatizer wrapper.
@@ -70,28 +92,23 @@ public class CachedNLPLemmatizerOp extends NLPLemmatizerOp {
      * <p>Note: We pass the model from the delegate to the superclass constructor.
      * The superclass is not used for actual lemmatization; we delegate to our cached implementation.</p>
      *
-     * @param delegate the underlying {@link NLPLemmatizerOp} to delegate cache misses to
-     * @param model    the lemmatizer model (same as used in delegate)
-     * @param stats    the statistics collector for tracking cache performance
+     * @param delegate    the underlying {@link NLPLemmatizerOp} to delegate cache misses to
+     * @param model       the lemmatizer model (same as used in delegate)
+     * @param stats       the statistics collector for tracking cache performance
+     * @param sharedCache the shared Caffeine cache created via {@link #createSharedCache}
      * @throws IOException if the superclass constructor fails
      */
     public CachedNLPLemmatizerOp(final NLPLemmatizerOp delegate,
                                   final opennlp.tools.lemmatizer.LemmatizerModel model,
-                                  final LemmatizerCacheStats stats) throws IOException {
+                                  final LemmatizerCacheStats stats,
+                                  final Cache<TokenPosPair, String> sharedCache) throws IOException {
         // Pass the model to super to satisfy constructor requirements.
         // We override lemmatize() so the superclass implementation is never called.
         super(null, model);
 
         this.delegate = delegate;
         this.stats = stats;
-        this.cache = Caffeine.newBuilder()
-                .maximumSize(MAX_CACHE_SIZE)
-                .evictionListener((TokenPosPair key, String value, RemovalCause cause) -> {
-                    if (cause.wasEvicted()) {
-                        stats.recordEviction();
-                    }
-                })
-                .build();
+        this.cache = sharedCache;
     }
 
     /**

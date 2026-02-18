@@ -36,8 +36,9 @@ public class DocumentIndexer {
      * Version 2: Added text cleaning to remove broken/invalid characters during indexing.
      * Version 3: Added content_stemmed_de and content_stemmed_en fields for Snowball stemming.
      * Version 4: Replaced Snowball stemmed fields with OpenNLP lemmatized fields (content_lemma_de, content_lemma_en).
+     * Version 5: Removed creator and subject from faceted fields (kept as stored/searchable TextField only).
      */
-    public static final int SCHEMA_VERSION = 4;
+    public static final int SCHEMA_VERSION = 5;
 
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;
@@ -46,8 +47,6 @@ public class DocumentIndexer {
         this.facetsConfig = new FacetsConfig();
         // Configure multi-valued facet fields
         facetsConfig.setMultiValued("author", true);
-        facetsConfig.setMultiValued("creator", true);
-        facetsConfig.setMultiValued("subject", true);
     }
 
     public FacetsConfig getFacetsConfig() {
@@ -150,18 +149,16 @@ public class DocumentIndexer {
                 doc.add(new SortedSetDocValuesFacetField("author", author));
             }
 
-            // creator (faceted): xmp:CreatorTool > creator > Creator > Application-Name
+            // creator: xmp:CreatorTool > creator > Creator > Application-Name
             final String creator = getMetadataWithFallback(meta, "xmp:CreatorTool", "creator", "Creator", "Application-Name");
             if (creator != null && !creator.isEmpty()) {
                 doc.add(new TextField("creator", creator, Field.Store.YES));
-                doc.add(new SortedSetDocValuesFacetField("creator", creator));
             }
 
-            // subject (faceted): dc:subject > subject > Subject
+            // subject: dc:subject > subject > Subject
             final String subject = getMetadataWithFallback(meta, "dc:subject", "subject", "Subject");
             if (subject != null && !subject.isEmpty()) {
                 doc.add(new TextField("subject", subject, Field.Store.YES));
-                doc.add(new SortedSetDocValuesFacetField("subject", subject));
             }
 
             // keywords: meta:keyword > Keywords > keywords

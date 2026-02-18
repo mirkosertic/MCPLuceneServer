@@ -31,7 +31,7 @@ class CachedNLPLemmatizerOpTest {
         model = new LemmatizerModel(modelStream);
         delegate = new NLPLemmatizerOp(null, model);
         stats = new LemmatizerCacheStats();
-        cachedLemmatizer = new CachedNLPLemmatizerOp(delegate, model, stats);
+        cachedLemmatizer = new CachedNLPLemmatizerOp(delegate, model, stats, CachedNLPLemmatizerOp.createSharedCache(200_000, stats));
     }
 
     @Test
@@ -140,7 +140,7 @@ class CachedNLPLemmatizerOpTest {
     void testThreadSafety() throws InterruptedException, IOException {
         // Create a fresh stats and lemmatizer for this test to avoid state leakage
         final LemmatizerCacheStats threadTestStats = new LemmatizerCacheStats();
-        final CachedNLPLemmatizerOp threadTestLemmatizer = new CachedNLPLemmatizerOp(delegate, model, threadTestStats);
+        final CachedNLPLemmatizerOp threadTestLemmatizer = new CachedNLPLemmatizerOp(delegate, model, threadTestStats, CachedNLPLemmatizerOp.createSharedCache(200_000, threadTestStats));
 
         final int threadCount = 10;
         final int operationsPerThread = 100;
