@@ -39,8 +39,8 @@ class IndividualPassageFormatterTest {
     }
 
     @Test
-    @DisplayName("Should wrap matched terms in <em> tags")
-    void shouldWrapMatchedTermsInEmTags() {
+    @DisplayName("Should wrap matched terms in ** markdown bold")
+    void shouldWrapMatchedTermsInMarkdownBold() {
         final String content = "The quick brown fox jumps over the lazy dog";
 
         final Passage passage = createPassage(0, content.length(), 2.0f);
@@ -56,7 +56,7 @@ class IndividualPassageFormatterTest {
 
         assertThat(result).hasSize(1);
         assertThat(result.getFirst().text())
-                .isEqualTo("The <em>quick</em> brown <em>fox</em> jumps over the lazy dog");
+                .isEqualTo("The **quick** brown **fox** jumps over the lazy dog");
     }
 
     @Test
@@ -75,7 +75,7 @@ class IndividualPassageFormatterTest {
 
         assertThat(result.getFirst().text())
                 .startsWith("...")
-                .contains("<em>keyword</em>");
+                .contains("**keyword**");
     }
 
     @Test
@@ -93,7 +93,7 @@ class IndividualPassageFormatterTest {
 
         assertThat(result.getFirst().text())
                 .doesNotStartWith("...")
-                .startsWith("<em>Keyword</em>");
+                .startsWith("**Keyword**");
     }
 
     @Test
@@ -150,7 +150,7 @@ class IndividualPassageFormatterTest {
 
         // Should not crash on overlapping matches; the second overlap is skipped
         assertThat(result.getFirst().text())
-                .contains("<em>testing</em>");
+                .contains("**testing**");
     }
 
     @Test
@@ -169,7 +169,7 @@ class IndividualPassageFormatterTest {
         assertThat(result).hasSize(1);
         assertThat(result.getFirst().text())
                 .isEqualTo(content)
-                .doesNotContain("<em>");
+                .doesNotContain("**");
         assertThat(result.getFirst().numMatches()).isZero();
     }
 
@@ -201,10 +201,10 @@ class IndividualPassageFormatterTest {
 
         assertThat(result.getFirst().numMatches()).isEqualTo(3);
         assertThat(result.getFirst().text())
-                .contains("<em>alpha</em>")
-                .contains("<em>beta</em>")
-                .contains("<em>delta</em>")
-                .doesNotContain("<em>gamma</em>");
+                .contains("**alpha**")
+                .contains("**beta**")
+                .contains("**delta**")
+                .doesNotContain("**gamma**");
     }
 
     /**

@@ -175,6 +175,32 @@ Includes include-patterns in `application.yaml` + `ApplicationConfig.java`, test
 
 **Key files**: `application.yaml`, `ApplicationConfig.java`, `TestDocumentGenerator.java`, `FileContentExtractorTest.java`, README.md
 
+#### 8.5. Markdown Bold Highlighting for Search Results
+**Status**: ✅ Done
+**Effort**: Low
+**Impact**: Medium
+
+Changed search result highlighting from HTML `<em>` tags to markdown `**bold**` syntax for proper rendering in Claude Desktop.
+
+**What was implemented:**
+- Updated `IndividualPassageFormatter` to use `**` instead of `<em>` tags
+- Modified `extractMatchedTerms()` in `LuceneIndexService` to parse markdown bold markers
+- Updated all documentation and test expectations
+- Highlighted terms now render as bold in markdown-aware interfaces
+
+**Rationale:**
+- HTML tags show as literal text in Claude Desktop markdown rendering
+- Markdown `**bold**` syntax renders properly as visual emphasis
+- More LLM-friendly and conventional for markdown-based interfaces
+- Aligns with how Claude Desktop displays content
+
+**Key files:** `IndividualPassageFormatter.java`, `LuceneIndexService.java`, `Passage.java`, test files
+
+**Key decisions:**
+- Chose markdown over HTML for native Claude Desktop rendering
+- Changed from Lucene's default `<b>` tags to markdown `**`
+- Maintained all existing functionality (matched term extraction, coverage calculation)
+
 #### 9. Query Profiling and Debugging Tool
 **Status**: ✅ Done
 **Effort**: High
@@ -252,6 +278,115 @@ Implemented MCP Resources pattern to move verbose documentation out of tool desc
 - Create resource for index field schema documentation
 - Create resource for troubleshooting common issues
 - Pattern should be used for all future complex tools
+
+#### 10.5. Search Result Visualization Enhancements
+**Status**: Not started
+**Effort**: Medium
+**Impact**: Medium-High
+
+Enhance visual presentation of search results in Claude Desktop through rich markdown formatting and optional document previews.
+
+**Proposed enhancements:**
+
+**Tier 1 (High Value, Low Cost) - Implement First:**
+1. **Rich Markdown Formatting** - Format search results with proper markdown structure:
+   - Headers for document titles
+   - Code blocks for file paths
+   - Bold/italic for metadata
+   - Structured result cards with visual hierarchy
+   - Syntax-highlighted code snippets for code files
+
+2. **Structured Result Cards** - Clear visual layout:
+   ```
+   ### 📄 Document Title
+   **Path:** `/path/to/file.pdf`
+   **Modified:** 2024-01-15 | **Size:** 2.3 MB
+
+   **Preview:**
+   The **budget** for Q4 2024 was exceeded...
+   ```
+
+3. **Better Snippets** - Enhanced passage formatting:
+   - Already using markdown bold for matched terms ✅
+   - Context around matches
+   - Syntax highlighting for code
+
+**Tier 2 (Medium Value, Medium Cost) - Optional:**
+4. **File Type Icons** - Embed tiny base64 icons (5-10 common types, ~50 KB total)
+5. **Search Statistics** - Formatted facet counts, distribution charts as text
+
+**Tier 3 (High Value, High Cost) - Make Optional:**
+6. **Document Thumbnails** - MCP supports base64-encoded images in responses
+   - PDF first page preview
+   - Image file thumbnails
+   - Office document previews
+   - **Constraint:** 1 MB maximum per image (MCP limit)
+   - **Performance:** Generation during indexing vs. on-demand
+   - **Configuration:** Make opt-in via `thumbnails.enabled: false` (default)
+
+**MCP Support:**
+MCP tool responses support multiple content types:
+- `{"type": "text", "text": "..."}` - Markdown-formatted text
+- `{"type": "image", "data": "base64...", "mimeType": "image/jpeg"}` - Images
+
+**Rationale:**
+- Claude Desktop renders markdown natively - leverage it
+- Visual hierarchy improves result scanning
+- Thumbnails provide immediate document recognition
+- All enhancements are additive (no breaking changes)
+
+**Key files:** `LuceneSearchTools.java`, new `ThumbnailGenerator.java` (if implementing thumbnails), `SearchResponse.java`
+
+**Implementation priority:** Start with Tier 1 (zero cost, immediate value), add thumbnails only if users request it.
+
+#### 11. Automatic Phrase Proximity Expansion
+**Status**: ✅ Done
+**Effort**: Low-Medium
+**Impact**: Medium-High
+
+Implemented automatic expansion of exact phrase queries to include proximity matching, improving recall while maintaining precision through differential scoring.
+
+**What was implemented:**
+- Created `ProximityExpandingQueryParser` extending Lucene's QueryParser
+- Automatically expands multi-word exact phrases: `"Domain Design"` → `("Domain Design")^2.0 OR ("Domain Design"~3)`
+- Exact matches score highest (2.0x boost), proximity matches score lower
+- User-specified slop honored (no expansion if user already used ~N)
+- Single-word phrases not expanded (no benefit)
+- 10 unit tests + 7 integration tests
+- All 359 tests pass (no regressions)
+
+**Rationale:**
+- Users/Claude don't need to know slop syntax
+- Finds "Domain-driven Design" when searching "Domain Design"
+- Exact matches still rank highest via boost (typically 2-3x higher score)
+- Deterministic, predictable behavior
+- No external dependencies (pure Lucene)
+- Solves the original use case without adding Solr ComplexPhraseQueryParser
+
+**Real-world example:**
+```
+Query: "Domain Design"
+Results by score:
+1. "Domain Design" (exact) - Score: 0.6981 ⭐⭐⭐
+2. "Domain-driven Design" - Score: 0.1360 ⭐⭐
+3. "Domain Effective Design" - Score: 0.1360 ⭐⭐
+4. "Domain Very Effective Design" - Score: 0.0864 ⭐
+```
+
+**Configuration:**
+- Default slop: 3 words (configurable via constructor)
+- Default exact boost: 2.0x (configurable via constructor)
+- Future: Could make configurable via application.yaml
+
+**Key decisions:**
+- Only multi-word phrases get expanded (single words have no benefit)
+- User-specified slop always honored (backward compatible)
+- Boost ensures exact matches always rank highest
+- Slop of 3 balances recall (find variations) vs precision (avoid noise)
+
+**Key files:** `ProximityExpandingQueryParser.java`, `LuceneIndexService.java`, `ProximityExpandingQueryParserTest.java`, `AutomaticPhraseExpansionIntegrationTest.java`
+
+**Alternative considered:** Solr ComplexPhraseQueryParser - rejected due to Solr dependency, less control over scoring, and SpanQuery limitations with stopwords
 
 ---
 
@@ -643,55 +778,15 @@ OpenNLPTokenizer(sentenceModel, tokenizerModel)
 
 #### OpenNLP as a Platform Investment: NLP-vs-LLM Boundary Analysis
 
-If the OpenNLP pipeline is committed to (Approach C), it becomes a **platform investment** — not just "better stemming" but a foundation for multiple features. The key insight: paying the startup/memory cost once unlocks capabilities beyond lemmatization.
+**Note:** This analysis was written for server deployment scenarios. For the **desktop/Claude Desktop use case**, most OpenNLP features beyond basic lemmatization are rejected due to resource constraints (see "Explicitly Rejected" section). The architectural principle remains valid, but the desktop context shifts the boundary heavily toward client-side LLM processing.
+
+If the OpenNLP pipeline were committed to in a **server deployment** (not the current desktop use case), it becomes a **platform investment** — not just "better stemming" but a foundation for multiple features. The key insight: paying the startup/memory cost once unlocks capabilities beyond lemmatization.
 
 **The Principle: "NLP enriches the index, LLM enriches the query"**
 
 NLP processing at index time adds **structure to unstructured data** — this structure lives permanently in the index and benefits every future query. LLM processing at query time adds **intelligence from context** — understanding user intent, expanding queries semantically, iterating on results. These are complementary, not competing.
 
 The boundary criterion: **If a capability produces deterministic, cacheable, document-level structure, it belongs in the NLP layer. If it requires contextual reasoning, user intent, or cross-document synthesis, it belongs in the LLM layer.**
-
----
-
-**Feature 1: Named Entity Recognition (NER) — The Killer Feature**
-
-NER extracts structured entities from document text: person names, organizations, locations, dates, monetary amounts, etc.
-
-*What it enables:*
-- New facet fields: `entity_person`, `entity_organization`, `entity_location` — automatically populated from document content
-- Search like `filters: [{field: "entity_person", operator: "eq", value: "Schmidt"}]` — finds all documents mentioning Schmidt, even if "Schmidt" appears only in running text (not metadata)
-- The AI client could ask: "Find all documents mentioning both Schmidt and Munich" → two entity filters
-- Cross-document entity linking: discover that "Dr. Schmidt", "M. Schmidt", and "Schmidt GmbH" appear across the corpus
-
-*Why NLP, not LLM:*
-- NER is a **deterministic classification** task on individual documents — no cross-document reasoning needed
-- Running at index time means entities are pre-extracted once, searchable instantly via facets
-- LLM-based entity extraction at query time would require reading every document for every query (infeasible)
-- OpenNLP NER models: ~5-15 MB per entity type, ~10,000 tokens/second throughput
-
-*Available models (Apache 2.0):*
-- EN: `en-ner-person`, `en-ner-organization`, `en-ner-location`, `en-ner-date`, `en-ner-money`, `en-ner-time`
-- DE: Community-trained models available, or trainable on custom corpora
-
-*Impact assessment:*
-- **Value**: Very high — transforms the server from "text search" to "knowledge search"
-- **Effort**: Medium (OpenNLP pipeline already present for lemmatization)
-- **Memory**: ~5-15 MB per entity model (~30-90 MB for 6 EN types)
-- **Index time**: Additional ~50-200ms per document for NER pass
-- **Schema**: New `SortedSetDocValuesFacetField` per entity type, SCHEMA_VERSION bump
-
-*Implementation sketch:*
-```java
-// At index time, after content extraction:
-NameFinderME personFinder = new NameFinderME(personModel);
-String[] tokens = SimpleTokenizer.INSTANCE.tokenize(content);
-Span[] personSpans = personFinder.find(tokens);
-for (Span span : personSpans) {
-    String entity = String.join(" ", Arrays.copyOfRange(tokens, span.getStart(), span.getEnd()));
-    doc.add(new SortedSetDocValuesFacetField("entity_person", entity));
-    doc.add(new StringField("entity_person", entity, Store.YES));
-}
-```
 
 ---
 
@@ -1189,6 +1284,44 @@ These are **Lucene design limitations**, not implementation choices:
 
 ## Explicitly Rejected (With Reasoning)
 
+### Named Entity Recognition (NER) at Index Time
+**Decision**: Rejected for desktop/Claude Desktop use case
+**Reasoning**:
+
+**The proposal:** Extract entities (persons, organizations, locations) during indexing using OpenNLP NER models, store in faceted fields for searchable entity dimensions.
+
+**Why rejected:**
+1. **Desktop hardware constraints** - This MCP tool runs on consumer desktops, not servers:
+   - Transformer NER models: 1-2 GB disk, 2-4 GB RAM
+   - 30-second startup time (unacceptable for Claude Desktop integration)
+   - 10-50x slower indexing than current pipeline
+   - Users expect fast, lightweight tools, not multi-day indexing
+
+2. **Claude already does excellent NER** - The AI client handles entity recognition on search results:
+   - Reading 10 result documents vs indexing 100,000 documents
+   - Context-aware entity disambiguation
+   - No model files or memory overhead
+   - Works for all languages (not just EN/DE)
+
+3. **Division of labor** - Fast search retrieval (server) + intelligent understanding (Claude)
+   - Server: "Find documents containing 'Schmidt' and 'Munich'"
+   - Claude: "These mention Dr. Schmidt of Munich, not the city or other Schmidts"
+
+4. **Battery and performance** - Laptop users care about:
+   - Not spinning up fans constantly
+   - Not draining battery during indexing
+   - Responsive system while indexing runs in background
+
+**When this would make sense:**
+- Server deployment with dedicated resources
+- GPU available for model inference
+- Large corpus where pre-extraction provides significant value
+- Multi-user environment amortizing indexing cost
+
+**Alternative approach:** Let Claude do entity extraction on the top N search results (already happens naturally). The server focuses on fast, accurate text retrieval.
+
+**Related:** The broader OpenNLP platform analysis (lemmatization, sentence detection, POS tagging) also needs reevaluation for desktop constraints. Snowball stemming (Candidate E - completed) provides good recall improvement without the OpenNLP overhead.
+
 ### Real-Time Query Performance Profiling (Per-Component Timing)
 
 **Decision**: Rejected
@@ -1351,7 +1484,7 @@ When adding detailed documentation to avoid context pollution:
 
 ## Current Status Overview
 
-### ✅ Completed (12 items)
+### ✅ Completed (13 items)
 
 | Item | Impact | Notes |
 |------|--------|-------|
@@ -1360,8 +1493,10 @@ When adding detailed documentation to avoid context pollution:
 | Multi-Language Snowball Stemming | High | Tier 2 #E — SCHEMA_VERSION 3, DE+EN shadow fields |
 | Date-Friendly Query Parameters | Medium | Tier 2 #6 (via filters) |
 | Expanded File Format Support | Low-Medium | Tier 2 #8 |
+| Markdown Bold Highlighting | Medium | New #8.5 — Changed from `<em>` to `**` for Claude Desktop rendering |
 | Query Profiling & Debugging | High | Tier 2 #9 |
 | Context Pollution Reduction | High | New #10 |
+| Automatic Phrase Proximity Expansion | Medium-High | New #11 — Auto-expands `"Domain Design"` to include variations |
 
 ### 🚀 High Priority (Next to implement)
 
@@ -1481,11 +1616,11 @@ Based on impact, effort, and dependencies:
 
 The MCP Lucene Server has matured from a basic search tool to a comprehensive, production-ready search platform with:
 
-- ✅ **11 completed major features** including profiling, sorting, and context optimization
+- ✅ **13 completed major features** including profiling, sorting, markdown highlighting, automatic phrase expansion, and context optimization
 - 🚀 **3 high-priority items** ready for implementation
 - 🎯 **7 medium-priority enhancements** with clear value propositions
 - 🔮 **9 future possibilities** for long-term roadmap
-- ❌ **11 rejected ideas** with documented reasoning
+- ❌ **12 rejected ideas** with documented reasoning
 
 **Key architectural strengths to preserve**:
 - Client-side intelligence (AI does semantics, server does lexical)
@@ -1493,5 +1628,10 @@ The MCP Lucene Server has matured from a basic search tool to a comprehensive, p
 - Fast defaults with opt-in complexity (like `profileQuery`)
 - LLM-optimized output structures
 - MCP Resources pattern for documentation
+
+**Desktop-first architecture decisions**:
+- Rejected heavy NLP models (NER, full OpenNLP pipeline) for desktop deployment
+- Focus on fast, lightweight search with client-side AI intelligence
+- Resource constraints: <100 MB RAM, <2 sec startup, no multi-day indexing
 
 **Next recommended focus**: Index backup/restore (critical) + Index observability tools (high ROI) + Duplicate detection (common user need)
