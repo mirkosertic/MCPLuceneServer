@@ -60,6 +60,7 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - [Document Crawler Features](#document-crawler-features)
 - [Usage Examples](#usage-examples)
 - [Troubleshooting](#troubleshooting)
+- [Security Considerations](#security-considerations)
 - [Development](#development)
   - [Running for Development](#running-for-development)
   - [Debugging with MCP Inspector](#debugging-with-mcp-inspector)
@@ -521,6 +522,76 @@ The AI assistant compensates for the remaining limitations by expanding your que
 - Grouping: `(contract OR agreement) AND signed`
 - Range queries: `modified_date:[1609459200000 TO 1640995200000]` (timestamps in milliseconds)
 
+**Automatic Phrase Proximity Expansion:**
+
+When you search for exact phrases, the server **automatically expands** them to include near-matches while keeping exact matches ranked highest.
+
+**Example:**
+```
+Query:  "Domain Design"
+Expands to:  ("Domain Design")^2.0 OR ("Domain Design"~3)
+```
+
+**What this means:**
+- ✅ **Exact match** "Domain Design" → **Highest score** (2.0x boost)
+- ✅ **Near matches** "Domain-driven Design", "Domain Effective Design" → **Lower score** (within 3 words)
+- ❌ **Too far apart** "Domain is a good Design" → **No match** (exceeds slop)
+
+**When expansion occurs:**
+- Multi-word phrase queries: `"Domain Design"` ✅
+- Not for single words: `"Design"` (no benefit)
+- Not if you specify slop: `"Domain Design"~5` (already set)
+
+**Benefits:**
+- Better recall - finds variations you might miss
+- Maintains precision - exact matches always rank highest
+- No syntax knowledge required - works automatically
+
+**Adaptive Prefix Query Scoring:**
+
+Prefix queries (e.g., `vertrag*`) now use **real BM25 scoring** instead of constant scores when the prefix is specific enough, improving ranking quality while maintaining performance.
+
+**How it works:**
+
+```
+Query: vertrag*  (>= 4 characters → scoring enabled)
+
+Results with BM25 scoring:
+1. "vertrag" (short, frequent)        → Score: 2.8 ⭐⭐⭐
+2. "vertrags"                         → Score: 1.9 ⭐⭐
+3. "vertragsklausel" (long, rare)     → Score: 1.2 ⭐
+
+Query: ver*  (< 4 characters → constant score)
+
+Results without adaptive scoring:
+1. "verarbeiten"  → Score: 1.0
+2. "veranlassen"  → Score: 1.0
+3. "vertrag"      → Score: 1.0
+(all equal scores)
+```
+
+**When scoring is enabled:**
+- ✅ Prefix >= 4 characters (`vertrag*`, `design*`, `contract*`)
+- ✅ Top 50 most frequent matching terms are scored
+- ✅ Shorter/more frequent matches rank higher
+- ✅ Better ranking for exact/short matches
+
+**When constant score is used:**
+- Short prefixes (< 4 chars): `ver*`, `de*` - too many matches, performance
+- Leading wildcards: `*vertrag` - uses reversed field optimization
+- Both-sided wildcards: `*vertrag*` - constant score
+
+**Benefits:**
+- **Better ranking** - exact/short matches rank higher than long compounds
+- **Performance safe** - only for specific prefixes (>= 4 chars)
+- **Automatic** - no syntax knowledge required
+- **Smart defaults** - balances quality and speed
+
+**Technical details:**
+- Uses `TopTermsBlendedFreqScoringRewrite` with limit of 50 terms
+- Short prefixes keep constant scoring to avoid performance impact
+- Complements phrase expansion and lemmatization features
+
 **German Compound Word Search:**
 
 German compound words (e.g., "Arbeitsvertrag", "Vertragsbedingungen") can be searched effectively using wildcards:
@@ -537,7 +608,24 @@ The search engine applies OpenNLP dictionary-based lemmatization for German and 
 - **English:** "contract" finds "contracts", "contracted"; "run" finds "ran", "running"; "pay" finds "paid"; "analysis" finds "analyses"; "go" finds "went"; "see" finds "saw"
 - **Exact matches always rank highest** (boost 2.0) over lemmatized matches
 - **Precision preserved:** "house" and "housing" are kept distinct (not conflated), unlike aggressive stemming approaches
-- **Language-based:** Lemmatized fields are only present for documents with detected language "de" or "en". Documents with other or unknown languages are still searchable via the unstemmed `content` field.
+
+**Dual-Language Lemmatization (Mixed-Language Support):**
+
+ALL documents are indexed with BOTH German and English lemmatization fields (`content_lemma_de` and `content_lemma_en`), regardless of detected language. This enables robust mixed-language content matching:
+- **German documents with English technical terms:** A German document containing "Recommendation Engine" will match a search for "Recommendation Engines" (plural) via the English lemmatizer
+- **English documents with German terms:** An English document referencing "Vertrag" will match searches for "Vertrages" (genitive) via the German lemmatizer
+- **Technical vocabulary:** Brand names, product names, and technical terms in mixed-language documents are now searchable with full singular/plural and morphological variant support
+- **Example:** A German product spec mentioning "Machine Learning Models" matches queries for "machine learning model" (singular) automatically
+- **Performance impact:** Minimal, thanks to shared LRU caching across all indexing threads (LemmatizerCacheStats tracks cache efficiency)
+
+**German Umlaut Digraph Transliteration:**
+
+A dedicated `content_translit_de` shadow field handles the German convention of writing umlauts as ASCII digraphs:
+- `ae` → `ä` (e.g., "Kaese" matches "Käse")
+- `oe` → `ö` (e.g., "Goethe" matches "Göthe")
+- `ue` → `ü` (e.g., "Mueller" matches "Müller")
+
+This transliteration is applied before standard Unicode normalization, so both the digraph form and the umlaut form produce identical index tokens. The field uses a low boost (0.5) to ensure exact matches on the primary `content` field are always ranked higher.
 
 **Returns:**
 - Paginated document results, each containing a `passages` array with highlighted text and quality metadata
@@ -759,6 +847,39 @@ This analyzes filter effectiveness, potentially revealing:
 - `file_extension=pdf` reduces results by 75% (high selectivity)
 - `file_type=application/pdf` reduces results by 0% (redundant with file_extension)
 - Recommendation: Remove redundant `file_type` filter
+
+**Example: Understanding Automatic Phrase Expansion**
+
+When you search for an exact phrase like `"Domain Design"`, the query is automatically expanded to improve recall while maintaining precision:
+
+```
+{
+  "query": "\"Domain Design\"",
+  "analyzeDocumentScoring": true,
+  "maxDocExplanations": 3
+}
+```
+
+The profiler reveals how the query was expanded:
+
+**Query Analysis:**
+- **Original Query:** `"Domain Design"`
+- **Parsed Type:** `BooleanQuery`
+- **Rewrite:** Automatic phrase proximity expansion (exact match boosted + proximity variants)
+- **Query Components:**
+  - `PhraseQuery (boost=4.0)` - `"domain design"` (exact match, highest boost)
+  - `PhraseQuery (boost=2.0)` - `"domain design"~3` (proximity match, slop=3)
+  - Additional stemmed variants with lower boosts
+
+**Document Scoring:**
+- **Exact match** ("Domain Design"): Score 0.81 - matches both clauses, exact clause dominates
+- **Proximity match** ("Domain-driven Design"): Score 0.15 - matches only proximity clause
+- **Proximity match** ("Domain Effective Design"): Score 0.15 - matches only proximity clause
+
+This shows:
+1. **Exact matches rank highest** due to the 4.0x accumulated boost (2.0 from stemming × 2.0 from phrase expansion)
+2. **Proximity matches still found** with slop=3 (allowing up to 3 words between terms)
+3. **Clear score separation** between exact and proximity matches ensures precision
 
 **Performance Notes:**
 - **Basic analysis** (default): Very fast, negligible overhead (~5-10ms)
@@ -1173,8 +1294,9 @@ When documents are indexed by the crawler, the following fields are automaticall
 ### Content Fields
 - **`content`**: Full text content of the document (analyzed, searchable)
 - **`content_reversed`**: Reversed tokens of the content (analyzed with `ReverseUnicodeNormalizingAnalyzer`, not stored). Used internally for efficient leading wildcard queries -- not directly searchable by users.
-- **`content_lemma_de`**: Lemmatized tokens using German OpenNLP lemmatizer (analyzed with `OpenNLPLemmatizingAnalyzer`, not stored). Only present for documents with detected language "de". Used internally for lemmatization-based search -- not directly searchable by users.
-- **`content_lemma_en`**: Lemmatized tokens using English OpenNLP lemmatizer (analyzed with `OpenNLPLemmatizingAnalyzer`, not stored). Only present for documents with detected language "en". Used internally for lemmatization-based search -- not directly searchable by users.
+- **`content_lemma_de`**: Lemmatized tokens using German OpenNLP lemmatizer (analyzed with `OpenNLPLemmatizingAnalyzer`, not stored). ALWAYS present for ALL documents regardless of detected language to enable mixed-language matching. Used internally for lemmatization-based search -- not directly searchable by users.
+- **`content_lemma_en`**: Lemmatized tokens using English OpenNLP lemmatizer (analyzed with `OpenNLPLemmatizingAnalyzer`, not stored). ALWAYS present for ALL documents regardless of detected language to enable mixed-language matching. Used internally for lemmatization-based search -- not directly searchable by users.
+- **`content_translit_de`**: German transliteration shadow field that maps umlaut digraphs (ae→ä, oe→ö, ue→ü) before standard Unicode normalization (analyzed with `GermanTransliteratingAnalyzer`, not stored). ALWAYS present for ALL documents. Enables ASCII digraph queries like "Mueller" to match umlaut-containing documents like "Müller". Used internally -- not directly searchable by users.
 - **`passages`**: Array of highlighted passages returned in search results (see [Search Response Format](#search-response-format) below)
 
 ### File Information
@@ -1537,6 +1659,25 @@ If you encounter OOM errors with very large documents:
 3. **Disable language detection**: Set `detect-language: false` if not needed
 4. **Disable metadata extraction**: Set `extract-metadata: false` if not needed
 5. **Check disk I/O**: Slow disk can bottleneck indexing
+
+## Security Considerations
+
+**Untrusted Document Content**
+
+The MCP Lucene Server indexes documents from crawled directories and returns their content (passages, metadata, full text) in MCP tool responses. This content is inherently untrusted — any document placed in a crawled directory can influence what the MCP client (LLM) sees in tool responses.
+
+**Indirect Prompt Injection Risk**
+
+This creates a potential for indirect prompt injection: a maliciously crafted document could contain text designed to manipulate an LLM that processes the search results. For example, a document might include instructions that appear as natural text but are intended to influence the LLM's behavior or responses.
+
+**Recommendations**
+
+- **MCP clients should treat all document-derived content in tool responses as untrusted data**
+- The server adds a `contentNote` field to responses containing document content as a reminder
+- Consider the trust level of crawled directories when configuring the server
+- Be aware that indexed content can influence LLM behavior through search results
+
+This is an inherent characteristic of systems that retrieve and present external content to language models.
 
 ## Usage Examples
 

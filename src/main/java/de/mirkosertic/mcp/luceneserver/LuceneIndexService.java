@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.ProximityExpandingQueryParser;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
@@ -114,6 +115,7 @@ public class LuceneIndexService {
     /** Fields that are analyzed TextField — cannot be filtered with exact term match. */
     static final Set<String> ANALYZED_FIELDS = Set.of(
             "content", "content_reversed", "content_lemma_de", "content_lemma_en",
+            "content_translit_de",
             "keywords", "file_name", "title", "author", "creator", "subject");
 
     /** Mapping from language code to the corresponding stemmed shadow field. */
@@ -130,7 +132,8 @@ public class LuceneIndexService {
      * lowercased before querying to match the indexed tokens.
      */
     static final Set<String> LOWERCASE_WILDCARD_FIELDS = Set.of(
-            "content", "content_reversed", "content_lemma_de", "content_lemma_en");
+            "content", "content_reversed", "content_lemma_de", "content_lemma_en",
+            "content_translit_de");
 
     /**
      * States for long-running admin operations.
@@ -188,17 +191,20 @@ public class LuceneIndexService {
         final Analyzer defaultAnalyzer = new UnicodeNormalizingAnalyzer();
         this.deLemmatizer = new OpenNLPLemmatizingAnalyzer("de", true);
         this.enLemmatizer = new OpenNLPLemmatizingAnalyzer("en", true);
+        final GermanTransliteratingAnalyzer translitAnalyzer = new GermanTransliteratingAnalyzer();
         // Index analyzer: sentence-aware OpenNLP pipeline for accurate POS tagging on long texts
         this.indexAnalyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
                 "content_reversed", new ReverseUnicodeNormalizingAnalyzer(),
                 "content_lemma_de", deLemmatizer,
-                "content_lemma_en", enLemmatizer
+                "content_lemma_en", enLemmatizer,
+                "content_translit_de", translitAnalyzer
         ));
         // Query analyzer: simple mode (no sentence detection) for better handling of short queries
         this.queryAnalyzer = new PerFieldAnalyzerWrapper(defaultAnalyzer, Map.of(
                 "content_reversed", new ReverseUnicodeNormalizingAnalyzer(),
                 "content_lemma_de", deLemmatizer.withSentenceDetection(false),
-                "content_lemma_en", enLemmatizer.withSentenceDetection(false)
+                "content_lemma_en", enLemmatizer.withSentenceDetection(false),
+                "content_translit_de", translitAnalyzer
         ));
         this.indexPath = config.getIndexPath();
         this.nrtRefreshIntervalMs = config.getNrtRefreshIntervalMs();
@@ -401,7 +407,7 @@ public class LuceneIndexService {
                 mainQuery = new MatchAllDocsQuery();
                 highlightQuery = mainQuery;
             } else {
-                final QueryParser parser = new QueryParser("content", queryAnalyzer);
+                final QueryParser parser = new ProximityExpandingQueryParser("content", queryAnalyzer);
                 parser.setAllowLeadingWildcard(true);
                 final Query parsed = parser.parse(queryString);
                 final Query contentQuery = rewriteLeadingWildcards(parsed);
@@ -646,7 +652,7 @@ public class LuceneIndexService {
             if (request.effectiveQuery() == null || request.effectiveQuery().isBlank()) {
                 mainQuery = new MatchAllDocsQuery();
             } else {
-                final QueryParser parser = new QueryParser("content", queryAnalyzer);
+                final QueryParser parser = new ProximityExpandingQueryParser("content", queryAnalyzer);
                 parser.setAllowLeadingWildcard(true);
                 final Query parsed = parser.parse(request.effectiveQuery());
                 final Query contentQuery = rewriteLeadingWildcards(parsed);
@@ -1345,7 +1351,7 @@ public class LuceneIndexService {
                     ? Math.round((double) fp.score() / maxScore * 100.0) / 100.0
                     : 0.0;
 
-            // --- matchedTerms: extract text between <em> tags, with fallback to query-term scanning ---
+            // --- matchedTerms: extract text between markdown bold markers, with fallback to query-term scanning ---
             final List<String> matchedTerms = extractMatchedTerms(cleanedPassageText, queryTerms);
 
             // --- termCoverage: unique matched terms / total query terms ---
@@ -1380,15 +1386,15 @@ public class LuceneIndexService {
     }
 
     /**
-     * Extract all terms wrapped in {@code <em>...</em>} tags from a highlighted passage.
+     * Extract all terms wrapped in {@code **markdown bold**} markers from a highlighted passage.
      * Duplicates are removed (case-insensitive); order follows first appearance.
      *
-     * <p>If no {@code <em>} tags are found but {@code queryTerms} is non-empty the method
+     * <p>If no {@code **} markers are found but {@code queryTerms} is non-empty the method
      * falls back to scanning the passage for any query term that appears verbatim
      * (after NFKC + lowercase normalisation).  This handles the case where the
      * highlighter returns a relevant passage without wrapping the matched tokens.</p>
      *
-     * @param highlightedText the passage text (may contain {@code <em>} markup)
+     * @param highlightedText the passage text (may contain {@code **} markdown bold markup)
      * @param queryTerms      the original query terms; used only for the fallback scan
      * @return list of matched terms in first-appearance order
      */
@@ -1396,25 +1402,25 @@ public class LuceneIndexService {
         final List<String> terms = new ArrayList<>();
         final Set<String> seen = new HashSet<>();
 
-        // First try to extract from <em> tags
+        // First try to extract from markdown bold syntax
         int searchFrom = 0;
         while (true) {
-            final int emOpen = highlightedText.indexOf("<em>", searchFrom);
+            final int emOpen = highlightedText.indexOf("**", searchFrom);
             if (emOpen < 0) {
                 break;
             }
-            final int emClose = highlightedText.indexOf("</em>", emOpen + 4);
+            final int emClose = highlightedText.indexOf("**", emOpen + 2);
             if (emClose < 0) {
                 break;
             }
-            final String term = highlightedText.substring(emOpen + 4, emClose);
+            final String term = highlightedText.substring(emOpen + 2, emClose);
             if (!term.isEmpty() && seen.add(term.toLowerCase())) {
                 terms.add(term);
             }
-            searchFrom = emClose + 5;
+            searchFrom = emClose + 2;
         }
 
-        // Fallback: if no <em> tags found, check which query terms appear in the passage
+        // Fallback: if no ** markers found, check which query terms appear in the passage
         if (terms.isEmpty() && queryTerms != null && !queryTerms.isEmpty()) {
             final String normalizedPassage = normalizeForComparison(highlightedText);
             for (final String qt : queryTerms) {
@@ -1433,7 +1439,7 @@ public class LuceneIndexService {
     /**
      * Calculate the term coverage: fraction of query terms that appear among the matched terms.
      *
-     * @param matchedTerms terms found in this passage (from {@code <em>} tags or fallback scan)
+     * @param matchedTerms terms found in this passage (from {@code **} markdown bold markers or fallback scan)
      * @param queryTerms   the full set of query terms
      * @return coverage fraction in [0.0, 1.0], rounded to 2 decimal places
      */
@@ -1727,7 +1733,7 @@ public class LuceneIndexService {
      * ensures the correct analyzer is used for the target field.
      */
     private Query parseQueryForField(final String queryString, final String targetField) throws ParseException {
-        final QueryParser parser = new QueryParser(targetField, queryAnalyzer);
+        final QueryParser parser = new ProximityExpandingQueryParser(targetField, queryAnalyzer);
         parser.setAllowLeadingWildcard(true);
         return parser.parse(queryString);
     }
@@ -1769,6 +1775,11 @@ public class LuceneIndexService {
                 builder.add(new BoostQuery(stemmedQuery, boost), BooleanClause.Occur.SHOULD);
             }
         }
+
+        // Always add German transliteration field — harmless for non-German content,
+        // enables Mueller→Müller matching regardless of language hint.
+        final Query translitQuery = rewriteLeadingWildcards(parseQueryForField(rawQueryString, "content_translit_de"));
+        builder.add(new BoostQuery(translitQuery, 0.5f), BooleanClause.Occur.SHOULD);
 
         builder.setMinimumNumberShouldMatch(1);
         return builder.build();
@@ -2168,6 +2179,18 @@ public class LuceneIndexService {
             ));
         }
 
+        // Detect automatic phrase expansion
+        if (originalQueryString != null && originalQueryString.contains("\"") &&
+                query instanceof BooleanQuery) {
+            if (detectsPhraseExpansion(query)) {
+                rewrites.add(new QueryRewrite(
+                        originalQueryString,
+                        query.toString(),
+                        "Automatic phrase proximity expansion (exact match boosted + proximity variants)"
+                ));
+            }
+        }
+
         // Add warnings for common issues
         if (originalQueryString != null && originalQueryString.contains("*") &&
                 !originalQueryString.startsWith("*")) {
@@ -2193,40 +2216,160 @@ public class LuceneIndexService {
             final Query query,
             final List<QueryComponent> components,
             final IndexSearcher searcher) {
+        extractQueryComponentsWithBoost(query, components, searcher, null, 1.0f);
+    }
+
+    /**
+     * Extract query components recursively, tracking accumulated boost.
+     */
+    private void extractQueryComponentsWithBoost(
+            final Query query,
+            final List<QueryComponent> components,
+            final IndexSearcher searcher,
+            final String occur,
+            final float accumulatedBoost) {
 
         if (query instanceof final BooleanQuery bq) {
             // Iterate over all occur types
-            for (final BooleanClause.Occur occur : BooleanClause.Occur.values()) {
-                for (final Query subQuery : bq.getClauses(occur)) {
-                    final long cost = estimateQueryCost(subQuery, searcher);
-                    final String occurName = occur.name();
-
-                    if (subQuery instanceof TermQuery || subQuery instanceof WildcardQuery) {
-                        components.add(new QueryComponent(
-                                subQuery.getClass().getSimpleName(),
-                                extractField(subQuery),
-                                extractValue(subQuery),
-                                occurName,
-                                cost,
-                                formatCost(cost)
-                        ));
-                    } else {
-                        // Recursively extract from nested boolean queries
-                        extractQueryComponents(subQuery, components, searcher);
-                    }
+            for (final BooleanClause.Occur clauseOccur : BooleanClause.Occur.values()) {
+                for (final Query subQuery : bq.getClauses(clauseOccur)) {
+                    extractQueryComponentsWithBoost(subQuery, components, searcher,
+                            clauseOccur.name(), accumulatedBoost);
                 }
             }
+        } else if (query instanceof final org.apache.lucene.search.BoostQuery boostQuery) {
+            // Unwrap boost and accumulate it
+            final float newBoost = accumulatedBoost * boostQuery.getBoost();
+            extractQueryComponentsWithBoost(boostQuery.getQuery(), components, searcher, occur, newBoost);
+        } else if (query instanceof final org.apache.lucene.search.PhraseQuery phraseQuery) {
+            // Leaf node - add PhraseQuery component
+            final long cost = estimateQueryCost(query, searcher);
+            final String type = accumulatedBoost != 1.0f
+                    ? "PhraseQuery (boost=" + String.format("%.1f", accumulatedBoost) + ")"
+                    : "PhraseQuery";
+
+            components.add(new QueryComponent(
+                    type,
+                    extractField(query),
+                    formatPhraseQueryValue(phraseQuery),
+                    occur,
+                    cost,
+                    formatCost(cost)
+            ));
+        } else if (query instanceof TermQuery || query instanceof WildcardQuery) {
+            // Leaf node - add Term/Wildcard component
+            final long cost = estimateQueryCost(query, searcher);
+            final String type = accumulatedBoost != 1.0f
+                    ? query.getClass().getSimpleName() + " (boost=" + String.format("%.1f", accumulatedBoost) + ")"
+                    : query.getClass().getSimpleName();
+
+            components.add(new QueryComponent(
+                    type,
+                    extractField(query),
+                    extractValue(query),
+                    occur,
+                    cost,
+                    formatCost(cost)
+            ));
         } else {
+            // Other query types - add as-is
             final long cost = estimateQueryCost(query, searcher);
             components.add(new QueryComponent(
                     query.getClass().getSimpleName(),
                     extractField(query),
                     extractValue(query),
-                    null,
+                    occur,
                     cost,
                     formatCost(cost)
             ));
         }
+    }
+
+    /**
+     * Format PhraseQuery value to show the terms and slop.
+     */
+    private String formatPhraseQueryValue(final org.apache.lucene.search.PhraseQuery phraseQuery) {
+        final var terms = phraseQuery.getTerms();
+        if (terms.length == 0) {
+            return null;
+        }
+
+        final StringBuilder sb = new StringBuilder("\"");
+        for (int i = 0; i < terms.length; i++) {
+            if (i > 0) {
+                sb.append(" ");
+            }
+            sb.append(terms[i].text());
+        }
+        sb.append("\"");
+
+        if (phraseQuery.getSlop() > 0) {
+            sb.append("~").append(phraseQuery.getSlop());
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Recursively detect if a query contains phrase expansion pattern
+     * (boosted exact phrase + proximity phrase variants).
+     */
+    private boolean detectsPhraseExpansion(final Query query) {
+        if (query instanceof final BooleanQuery bq) {
+            final var shouldClauses = bq.getClauses(BooleanClause.Occur.SHOULD);
+
+            // Look for pattern: boosted PhraseQuery (slop=0) and PhraseQuery with slop>0
+            boolean hasExactPhrase = false;
+            boolean hasProximityPhrase = false;
+
+            for (final Query clause : shouldClauses) {
+                final org.apache.lucene.search.PhraseQuery phraseQuery = extractPhraseQuery(clause);
+                if (phraseQuery != null) {
+                    if (phraseQuery.getSlop() == 0) {
+                        hasExactPhrase = true;
+                    } else {
+                        hasProximityPhrase = true;
+                    }
+                }
+
+                // Recurse into nested BooleanQuery
+                if (clause instanceof BooleanQuery || clause instanceof org.apache.lucene.search.BoostQuery) {
+                    if (detectsPhraseExpansion(unwrapBoostQuery(clause))) {
+                        return true;
+                    }
+                }
+            }
+
+            return hasExactPhrase && hasProximityPhrase;
+        } else if (query instanceof final org.apache.lucene.search.BoostQuery boostQuery) {
+            return detectsPhraseExpansion(boostQuery.getQuery());
+        }
+
+        return false;
+    }
+
+    /**
+     * Extract PhraseQuery from a clause, unwrapping BoostQuery if needed.
+     */
+    private org.apache.lucene.search.PhraseQuery extractPhraseQuery(final Query query) {
+        if (query instanceof final org.apache.lucene.search.PhraseQuery pq) {
+            return pq;
+        } else if (query instanceof final org.apache.lucene.search.BoostQuery boostQuery) {
+            if (boostQuery.getQuery() instanceof final org.apache.lucene.search.PhraseQuery pq) {
+                return pq;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Unwrap BoostQuery to get the inner query.
+     */
+    private Query unwrapBoostQuery(final Query query) {
+        if (query instanceof final org.apache.lucene.search.BoostQuery boostQuery) {
+            return boostQuery.getQuery();
+        }
+        return query;
     }
 
     /**

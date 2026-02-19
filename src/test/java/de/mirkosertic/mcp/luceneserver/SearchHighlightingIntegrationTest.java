@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
  *   <li>Content normalization (HTML entities, special characters)</li>
  *   <li>Indexing with term vectors (positions and offsets)</li>
  *   <li>Search with UnifiedHighlighter</li>
- *   <li>Passage generation with {@code <em>} highlighting tags</li>
+ *   <li>Passage generation with {@code **} markdown bold highlighting</li>
  * </ol>
  */
 @DisplayName("Search Highlighting Integration Tests")
@@ -130,12 +130,11 @@ class SearchHighlightingIntegrationTest {
             .as("Passage text should not be empty for %s", extension)
             .isNotEmpty();
 
-        // Verify highlighting with <em> tags (at least one term should be highlighted)
-        final boolean hasHighlighting = firstPassage.text().contains("<em>")
-            && firstPassage.text().contains("</em>");
+        // Verify highlighting with ** tags (at least one term should be highlighted)
+        final boolean hasHighlighting = firstPassage.text().contains("**");
 
         assertThat(hasHighlighting)
-            .as("Passage should contain <em> highlighting tags for %s. Actual passage: %s",
+            .as("Passage should contain ** highlighting tags for %s. Actual passage: %s",
                 extension, firstPassage.text())
             .isTrue();
 
@@ -196,8 +195,8 @@ class SearchHighlightingIntegrationTest {
 
         final Passage passage = result.documents().getFirst().passages().getFirst();
         assertThat(passage.text())
-            .contains("<em>")
-            .contains("</em>");
+            .contains("**")
+            .contains("**");
 
         // Should have matched at least one of the terms
         assertThat(passage.matchedTerms())
@@ -327,8 +326,8 @@ class SearchHighlightingIntegrationTest {
         // Each passage should contain highlighting
         for (final Passage passage : passages) {
             assertThat(passage.text())
-                .as("Each individual passage should contain <em> highlighting")
-                .contains("<em>");
+                .as("Each individual passage should contain ** highlighting")
+                .contains("**");
         }
 
         // The best passage should have score 1.0 (normalised maximum)
@@ -477,7 +476,7 @@ class SearchHighlightingIntegrationTest {
         final Passage passage = result.documents().getFirst().passages().getFirst();
         assertThat(passage.text())
             .as("Should contain highlighting for wildcard match")
-            .contains("<em>");
+            .contains("**");
     }
 
     @Test
@@ -546,7 +545,7 @@ class SearchHighlightingIntegrationTest {
         final LuceneIndexService.SearchResult result = indexService.search(
             "*vertrag", List.of(), 0, 10, "_score", "desc");
 
-        // Then: Should find and have passages (highlighting may not use <em> for
+        // Then: Should find and have passages (highlighting may not use ** for
         // reversed-field queries, but passages should still be present)
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(1);
 
@@ -602,7 +601,7 @@ class SearchHighlightingIntegrationTest {
         final Passage passage = result.documents().getFirst().passages().getFirst();
         assertThat(passage.text())
             .as("Should contain highlighting for wildcard match")
-            .contains("<em>");
+            .contains("**");
     }
 
     @Test

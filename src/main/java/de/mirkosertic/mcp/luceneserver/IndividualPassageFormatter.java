@@ -23,7 +23,7 @@ class IndividualPassageFormatter extends PassageFormatter {
     /**
      * A single formatted passage with its Lucene-computed metadata.
      *
-     * @param text        the passage text with matched terms wrapped in {@code <em>...</em>} tags
+     * @param text        the passage text with matched terms wrapped in {@code **markdown bold**}
      * @param score       the BM25-based passage score assigned by Lucene's highlighter
      * @param numMatches  number of query-term matches within this passage
      * @param startOffset character offset of the passage start in the original content
@@ -56,7 +56,7 @@ class IndividualPassageFormatter extends PassageFormatter {
     }
 
     /**
-     * Format a single passage: insert {@code <em>} tags around matched terms
+     * Format a single passage: insert {@code **} markdown bold markers around matched terms
      * and prepend an ellipsis if the passage does not start at the beginning
      * of the document.
      */
@@ -78,9 +78,9 @@ class IndividualPassageFormatter extends PassageFormatter {
                 sb.append(content, pos, start);
             }
             if (end > pos) {
-                sb.append("<em>");
+                sb.append("**");
                 sb.append(content, Math.max(pos, start), end);
-                sb.append("</em>");
+                sb.append("**");
                 pos = end;
             }
         }
