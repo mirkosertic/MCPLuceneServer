@@ -12,14 +12,14 @@ import java.util.List;
  * are most useful without having to re-rank them.</p>
  */
 public record Passage(
-        @Description("The highlighted passage text. Query terms that matched are wrapped in <em>...</em> tags.")
+        @Description("The highlighted passage text. Query terms that matched are wrapped in **markdown bold** syntax.")
         String text,
 
         @Description("Passage relevance score normalised to the 0.0-1.0 range. " +
                 "Derived from the highlighter's passage ordering: the first (best) passage receives the highest score.")
         double score,
 
-        @Description("Query terms that were found in this passage, extracted from the text between <em> tags. " +
+        @Description("Query terms that were found in this passage, extracted from the text between markdown bold markers (**). " +
                 "Useful for understanding which parts of a multi-term query this passage satisfies.")
         List<String> matchedTerms,
 

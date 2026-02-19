@@ -37,8 +37,10 @@ public class DocumentIndexer {
      * Version 3: Added content_stemmed_de and content_stemmed_en fields for Snowball stemming.
      * Version 4: Replaced Snowball stemmed fields with OpenNLP lemmatized fields (content_lemma_de, content_lemma_en).
      * Version 5: Removed creator and subject from faceted fields (kept as stored/searchable TextField only).
+     * Version 6: Always index BOTH content_lemma_de and content_lemma_en fields for mixed-language support.
+     * Version 7: Added content_translit_de field for German umlaut digraph transliteration (ae→ä, oe→ö, ue→ü).
      */
-    public static final int SCHEMA_VERSION = 5;
+    public static final int SCHEMA_VERSION = 7;
 
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;
@@ -83,14 +85,19 @@ public class DocumentIndexer {
             doc.add(new TextField("content_reversed", content, Field.Store.NO));
 
             // Lemmatized shadow fields (analyzed with OpenNLPLemmatizingAnalyzer, not stored)
-            // Only added when the document's detected language matches a supported lemmatizer.
+            // BOTH German and English lemmatization fields are ALWAYS indexed, regardless of
+            // detected language. This enables mixed-language matching: German documents with
+            // English technical terms (e.g., "Recommendation Engine") can match English plural
+            // queries (e.g., "Recommendation Engines") via the content_lemma_en field, and vice versa.
             // The PerFieldAnalyzerWrapper in LuceneIndexService routes each field to the
             // appropriate language-specific OpenNLPLemmatizingAnalyzer automatically.
-            if ("de".equals(extracted.detectedLanguage())) {
-                doc.add(new TextField("content_lemma_de", content, Field.Store.NO));
-            } else if ("en".equals(extracted.detectedLanguage())) {
-                doc.add(new TextField("content_lemma_en", content, Field.Store.NO));
-            }
+            doc.add(new TextField("content_lemma_de", content, Field.Store.NO));
+            doc.add(new TextField("content_lemma_en", content, Field.Store.NO));
+
+            // German transliteration shadow field (analyzed with GermanTransliteratingAnalyzer, not stored)
+            // Maps umlaut digraphs (ae→ä, oe→ö, ue→ü) so "Mueller" matches "Müller" via the
+            // common normalized form "muller". Always indexed regardless of detected language.
+            doc.add(new TextField("content_translit_de", content, Field.Store.NO));
         }
 
         // file_extension (not analyzed, stored, faceted)

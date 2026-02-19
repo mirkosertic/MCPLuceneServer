@@ -156,12 +156,22 @@ public class LuceneSearchTools {
 
             ## Wildcards
 
-            | Pattern | Matches | Example |
-            |---------|---------|---------|
-            | `*` | Any characters | `contract*` → contracts, contracting, contracted |
-            | `?` | Single character | `te?t` → test, text |
-            | `*word` | Leading wildcard | `*vertrag` → Arbeitsvertrag, Mietvertrag |
-            | `*word*` | Contains | `*vertrag*` → Arbeitsvertrag, Vertragsbedingungen |
+            | Pattern | Matches | Example | Scoring |
+            |---------|---------|---------|---------|
+            | `word*` | Suffix wildcard | `vertrag*` → vertrag, vertrags, vertragsklausel | BM25 (>= 4 chars) or constant (< 4 chars) |
+            | `?` | Single character | `te?t` → test, text | BM25 |
+            | `*word` | Leading wildcard | `*vertrag` → Arbeitsvertrag, Mietvertrag | Constant (optimized) |
+            | `*word*` | Contains | `*vertrag*` → Arbeitsvertrag, Vertragsbedingungen | Constant |
+
+            **Adaptive Prefix Scoring:**
+            - ✅ **Specific prefixes (>= 4 chars):** `vertrag*`, `contract*` get **BM25 scoring**
+              - Shorter/frequent matches rank higher (e.g., "vertrag" > "vertragsklausel")
+              - Top 50 most frequent terms are scored
+            - ✅ **Broad prefixes (< 4 chars):** `ver*`, `de*` use **constant scoring**
+              - Avoids performance impact with very broad matches
+              - All results have equal score
+            - 🚀 **Leading wildcards:** `*vertrag` use reversed field optimization (fast!)
+            - 📊 **Both-sided:** `*vertrag*` use constant scoring
 
             **German Compound Words:** Use leading wildcards `*vertrag` to find:
             - Arbeitsvertrag, Mietvertrag, Kaufvertrag, etc.
@@ -179,6 +189,30 @@ public class LuceneSearchTools {
             "signed contract"~5
             ```
             Finds "signed" and "contract" within 5 words of each other.
+
+            ### Automatic Phrase Proximity Expansion
+
+            **Multi-word phrase queries are automatically expanded for better recall while maintaining precision:**
+
+            ```
+            Query:  "Domain Design"
+            Expands to:  ("Domain Design")^2.0 OR ("Domain Design"~3)
+            ```
+
+            **What this means:**
+            - ✅ **Exact match** "Domain Design" → **Highest score** (2.0x boost)
+            - ✅ **Near matches** "Domain-driven Design", "Domain Effective Design" → **Lower score** (within 3 words)
+            - ❌ **Too far apart** "Domain is a good Design" → **No match** (exceeds slop=3)
+
+            **When expansion occurs:**
+            - Multi-word phrase queries: `"Domain Design"` ✅
+            - Not for single words: `"Design"` (no benefit)
+            - Not if you specify slop: `"Domain Design"~5` (already set - your slop is honored)
+
+            **Benefits:**
+            - Better recall - finds variations you might miss (hyphenated, words in between)
+            - Maintains precision - exact matches always rank highest
+            - No syntax knowledge required - works automatically
 
             ### Field-Specific Search
             ```
