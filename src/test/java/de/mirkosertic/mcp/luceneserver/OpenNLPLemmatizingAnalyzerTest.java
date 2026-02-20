@@ -222,4 +222,94 @@ class OpenNLPLemmatizingAnalyzerTest {
             assertThat(de).isNotNull();
         }
     }
+
+    // ========== Punctuation filtering ==========
+
+    @Test
+    @DisplayName("German: punctuation tokens are filtered out")
+    void germanPunctuationFiltered() throws IOException {
+        try (final Analyzer analyzer = new OpenNLPLemmatizingAnalyzer("de")) {
+            final List<String> tokens = analyzeToTokens(analyzer, "Er ging, sie blieb.");
+            assertThat(tokens).doesNotContain(",", ".", ";", ":", "!", "?", "(", ")", "\"", "-", "...", "&");
+            assertThat(tokens).contains("gehen", "bleiben");
+        }
+    }
+
+    @Test
+    @DisplayName("English: punctuation tokens are filtered out")
+    void englishPunctuationFiltered() throws IOException {
+        try (final Analyzer analyzer = new OpenNLPLemmatizingAnalyzer("en")) {
+            final List<String> tokens = analyzeToTokens(analyzer, "He went, she stayed.");
+            assertThat(tokens).doesNotContain(",", ".", ";", ":", "!", "?");
+            assertThat(tokens).contains("go", "stay");
+        }
+    }
+
+    @Test
+    @DisplayName("German: ampersand symbol is filtered out")
+    void germanAmpersandFiltered() throws IOException {
+        try (final Analyzer analyzer = new OpenNLPLemmatizingAnalyzer("de")) {
+            final List<String> tokens = analyzeToTokens(analyzer, "Forschung & Entwicklung sind wichtig.");
+            assertThat(tokens).doesNotContain("&");
+            assertThat(tokens).contains("forschung", "entwicklung");
+        }
+    }
+
+    @Test
+    @DisplayName("German: R&D stays as single token (not split)")
+    void germanRAndDStaysAsToken() throws IOException {
+        try (final Analyzer analyzer = new OpenNLPLemmatizingAnalyzer("de")) {
+            final List<String> tokens = analyzeToTokens(analyzer, "R&D Abteilung im Haus.");
+            assertThat(tokens).contains("r&d");
+        }
+    }
+
+    // ========== Compound lemma splitting ==========
+
+    @Test
+    @DisplayName("German: contraction 'im' splits to 'in' and 'der'")
+    void germanContractionImSplits() throws IOException {
+        try (final Analyzer analyzer = new OpenNLPLemmatizingAnalyzer("de")) {
+            final List<String> tokens = analyzeToTokens(analyzer, "Er ist im Haus.");
+            assertThat(tokens).contains("in");
+            assertThat(tokens).doesNotContain("in+der");
+        }
+    }
+
+    @Test
+    @DisplayName("German: contraction 'zum' splits to 'zu' and 'der'")
+    void germanContractionZumSplits() throws IOException {
+        try (final Analyzer analyzer = new OpenNLPLemmatizingAnalyzer("de")) {
+            final List<String> tokens = analyzeToTokens(analyzer, "Er ging zum Haus.");
+            assertThat(tokens).contains("zu");
+            assertThat(tokens).doesNotContain("zu+der");
+        }
+    }
+
+    @Test
+    @DisplayName("German: all common contractions are properly split")
+    void germanAllContractionsHandled() throws IOException {
+        try (final Analyzer analyzer = new OpenNLPLemmatizingAnalyzer("de")) {
+            // Test all common German contractions
+            assertThat(analyzeToTokens(analyzer, "Er ist im Haus.")).doesNotContain("in+der");
+            assertThat(analyzeToTokens(analyzer, "Er ging zum Markt.")).doesNotContain("zu+der");
+            assertThat(analyzeToTokens(analyzer, "Sie ging zur Schule.")).doesNotContain("zu+der");
+            assertThat(analyzeToTokens(analyzer, "Er ging ins Haus.")).doesNotContain("in+der");
+            assertThat(analyzeToTokens(analyzer, "Er steht am Fenster.")).doesNotContain("an+der");
+            assertThat(analyzeToTokens(analyzer, "Er war beim Arzt.")).doesNotContain("bei+der");
+            assertThat(analyzeToTokens(analyzer, "Er kam vom Markt.")).doesNotContain("von+der");
+        }
+    }
+
+    // ========== Query mode: punctuation filtering ==========
+
+    @Test
+    @DisplayName("Query mode: punctuation does not appear in tokens")
+    void queryModePunctuationFiltered() throws IOException {
+        try (final Analyzer analyzer = new OpenNLPLemmatizingAnalyzer("de", false)) {
+            // StandardTokenizer already strips punctuation, but TypeTokenFilter is harmless
+            final List<String> tokens = analyzeToTokens(analyzer, "Vertrag, Haus");
+            assertThat(tokens).doesNotContain(",");
+        }
+    }
 }

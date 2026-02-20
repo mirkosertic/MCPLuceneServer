@@ -41,7 +41,10 @@ import org.apache.lucene.facet.sortedset.SortedSetDocValuesReaderState;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.PointValues;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.index.Term;
@@ -63,6 +66,7 @@ import org.apache.lucene.search.WildcardQuery;
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.BytesRef;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -735,6 +739,138 @@ public class LuceneIndexService {
                 }
             }
             return fields;
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    // ==================== Index Observability ====================
+
+    /**
+     * Result of a term suggestion query.
+     */
+    public record TermSuggestionResult(List<Map.Entry<String, Integer>> terms, int totalMatched) {
+    }
+
+    /**
+     * Result of a top-terms query.
+     */
+    public record TopTermsResult(List<Map.Entry<String, Integer>> terms, long uniqueTermCount, String warning) {
+    }
+
+    /**
+     * Validate that a field name is suitable for term enumeration.
+     *
+     * @return error message if invalid, {@code null} if valid
+     */
+    public String validateTermField(final String field) {
+        if (field == null || field.isBlank()) {
+            return "Field name is required";
+        }
+        if (LONG_POINT_FIELDS.contains(field)) {
+            return "Field '" + field + "' is a numeric/date point field and does not support term enumeration. " +
+                    "Use getIndexStats for date field ranges, or filter with range queries.";
+        }
+        return null;
+    }
+
+    /**
+     * Suggest terms from the index that match a given prefix.
+     * <p>
+     * For fields in {@link #LOWERCASE_WILDCARD_FIELDS}, the prefix is lowercased
+     * to match the indexed (analyzed) tokens.
+     * </p>
+     *
+     * @param field  the field to enumerate terms from
+     * @param prefix the prefix to match
+     * @param limit  maximum number of terms to return
+     * @return suggestion result sorted by docFreq descending
+     */
+    public TermSuggestionResult suggestTerms(final String field, final String prefix, final int limit) throws IOException {
+        final String effectivePrefix = LOWERCASE_WILDCARD_FIELDS.contains(field)
+                ? prefix.toLowerCase(Locale.ROOT)
+                : prefix;
+
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            final Map<String, Integer> termFreqs = new HashMap<>();
+
+            for (final LeafReaderContext leafCtx : searcher.getIndexReader().leaves()) {
+                final Terms terms = leafCtx.reader().terms(field);
+                if (terms == null) {
+                    continue;
+                }
+                final TermsEnum termsEnum = terms.iterator();
+                final TermsEnum.SeekStatus status = termsEnum.seekCeil(new BytesRef(effectivePrefix));
+                if (status == TermsEnum.SeekStatus.END) {
+                    continue;
+                }
+
+                do {
+                    final BytesRef termBytes = termsEnum.term();
+                    final String termText = termBytes.utf8ToString();
+                    if (!termText.startsWith(effectivePrefix)) {
+                        break;
+                    }
+                    termFreqs.merge(termText, termsEnum.docFreq(), Integer::sum);
+                } while (termsEnum.next() != null);
+            }
+
+            final int totalMatched = termFreqs.size();
+
+            final List<Map.Entry<String, Integer>> sorted = termFreqs.entrySet().stream()
+                    .sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
+                            .thenComparing(Map.Entry.comparingByKey()))
+                    .limit(limit)
+                    .toList();
+
+            return new TermSuggestionResult(sorted, totalMatched);
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    /**
+     * Get the most frequent terms in a field.
+     * <p>
+     * Iterates all terms in the field across all segments, aggregating doc frequencies.
+     * For fields with more than 100,000 unique terms a warning is included in the result.
+     * </p>
+     *
+     * @param field the field to enumerate terms from
+     * @param limit maximum number of terms to return
+     * @return top-terms result sorted by docFreq descending
+     */
+    public TopTermsResult getTopTerms(final String field, final int limit) throws IOException {
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            final Map<String, Integer> termFreqs = new HashMap<>();
+
+            for (final LeafReaderContext leafCtx : searcher.getIndexReader().leaves()) {
+                final Terms terms = leafCtx.reader().terms(field);
+                if (terms == null) {
+                    continue;
+                }
+                final TermsEnum termsEnum = terms.iterator();
+                BytesRef termBytes;
+                while ((termBytes = termsEnum.next()) != null) {
+                    termFreqs.merge(termBytes.utf8ToString(), termsEnum.docFreq(), Integer::sum);
+                }
+            }
+
+            final long uniqueTermCount = termFreqs.size();
+            final String warning = uniqueTermCount > 100_000
+                    ? "Field '" + field + "' has " + uniqueTermCount + " unique terms. " +
+                      "Consider using suggestTerms with a prefix for more targeted exploration."
+                    : null;
+
+            final List<Map.Entry<String, Integer>> sorted = termFreqs.entrySet().stream()
+                    .sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
+                            .thenComparing(Map.Entry.comparingByKey()))
+                    .limit(limit)
+                    .toList();
+
+            return new TopTermsResult(sorted, uniqueTermCount, warning);
         } finally {
             searcherManager.release(searcher);
         }

@@ -50,27 +50,17 @@ These improve the **AI client's ability to use the server effectively** without 
 Implemented `filters[]` array with operators (`eq`, `in`, `not`, `not_in`, `range`), DrillSideways faceting for faceted fields, ISO-8601 date parsing, `activeFilters` with `matchCount` in response, `dateFieldHints` in `getIndexStats`, and backward compatibility with legacy `filterField`/`filterValue`. Also addresses item 6 (Date-Friendly Query Parameters) via the `range` operator with ISO-8601 support.
 
 #### 2. Index Observability Tools
-**Status**: Not started
+**Status**: Done
 **Effort**: Low-Medium
 **Impact**: High
 
-Give the AI better visibility into what's actually in the index, so it can formulate better queries.
+Implemented two read-only MCP tools for index vocabulary exploration:
 
-**`suggestTerms` tool** — Given a field and prefix, return the N most frequent terms:
-```json
-{"field": "content", "prefix": "vertrag", "limit": 20}
-// Returns: ["vertrag", "vertragsklausel", "vertragsbedingungen", ...]
-```
-This lets the AI discover vocabulary it wouldn't have guessed.
+**`suggestTerms`** — Prefix-based term completion with doc frequency sorting. Auto-lowercases prefix for analyzed fields (using `LOWERCASE_WILDCARD_FIELDS`). Cross-segment aggregation via HashMap merge. Point fields rejected with helpful error message.
 
-**`getTopTerms` tool** — For a given field, return the N most frequent terms:
-```json
-{"field": "author", "limit": 50}
-// Returns: [{"term": "John Doe", "count": 42}, ...]
-```
-Useful for author/subject/keyword exploration beyond facets.
+**`getTopTerms`** — Full term enumeration sorted by frequency. Warning for fields with >100K unique terms. Works with both analyzed and StringFields.
 
-**Key files**: New tool methods in `LuceneSearchTools.java`, new index reader methods in `LuceneIndexService.java`
+Both tools: empty results for nonexistent fields (graceful), validation rejects `LONG_POINT_FIELDS`, new `IndexObservabilityIntegrationTest` with 20 tests covering prefix matching, case handling, limits, empty index, cross-segment aggregation.
 
 #### 3. Document Chunking for Long Documents
 **Status**: Not started
@@ -556,11 +546,26 @@ Scaling options (in order of preference):
 
 **Supersedes**: The previously rejected "Server-Side Stemming" — the multi-field approach avoids the original objections (precision loss from stemming the content field, highlighting breakage, analyzer complexity).
 
+#### E1b. OpenNLP Lemmatizer Token Cleanup
+**Status**: Done (SCHEMA_VERSION 8)
+**Effort**: Low
+**Impact**: Medium — eliminates index noise, improves term observability tools
+
+**Problem**: The `OpenNLPTokenizer` (UD-trained) retains punctuation as separate tokens (unlike `StandardTokenizer`). These get indexed as terms in `content_lemma_de`/`content_lemma_en`, polluting term frequency data. Additionally, the German UD-GSD lemmatizer produces compound lemmas for contractions (`im` → `in+der`, `zum` → `zu+der`, `beim` → `bei+der`) which never match any query.
+
+**Solution**: Two filters added to the lemmatizer chain after `OpenNLPLemmatizerFilter`:
+1. `TypeTokenFilter(drop type ".")` — removes all punctuation tokens (OpenNLP POS models assign type `"."` to all punctuation)
+2. `CompoundLemmaSplittingFilter` — splits tokens on `+` into separate sequential tokens (`in+der` → `in`, `der`)
+
+Updated chain: `OpenNLPTokenizer → POS → Lemmatizer → TypeTokenFilter → CompoundLemmaSplitter → LowerCase → ICUFolding`
+
+**Known remaining edge case**: `er/sie` tokenized as single token by German OpenNLPTokenizer (not tagged as punctuation). Rare in real documents, acceptable for now.
+
 #### E2. Irregular Verb Stemming (Extends Snowball Stemming)
-**Status**: Not implemented — design analysis complete, two viable approaches identified
-**Priority**: Medium
-**Impact**: Medium (estimated 3-8% recall gain for verb-heavy queries, 1-3% overall)
-**Depends on**: Candidate E (Snowball stemming — done)
+**Status**: Superseded — OpenNLP lemmatization handles irregular verbs correctly
+**Priority**: N/A
+**Impact**: N/A (problem solved by lemmatizer)
+**Depends on**: Candidate E (Snowball stemming — replaced by OpenNLP lemmatization)
 
 **Problem**: Snowball is an algorithmic suffix-stripper. It handles regular morphology well but fails on irregular forms that involve vowel changes (Ablaut), suppletion, or prefix patterns:
 
@@ -1502,7 +1507,7 @@ When adding detailed documentation to avoid context pollution:
 
 | Item | Effort | Impact | Justification |
 |------|--------|--------|---------------|
-| **Index Observability Tools** | Low-Medium | High | Tier 1 #2 - Helps AI discover vocabulary |
+| ~~Index Observability Tools~~ | ~~Low-Medium~~ Done | ~~High~~ | Tier 1 #2 - Done: `suggestTerms` + `getTopTerms` |
 | **Index Backup & Restore** | Medium | Critical | Missing Gap A - Production necessity |
 | **Duplicate Detection** | Medium | High | Missing Gap B - Common user need |
 
@@ -1510,7 +1515,7 @@ When adding detailed documentation to avoid context pollution:
 
 | Item | Effort | Impact | Justification |
 |------|--------|--------|---------------|
-| **Irregular Verb Stemming** | Medium | Medium | E2 - StemmerOverrideFilter or Hunspell, extends Snowball |
+| **Irregular Verb Stemming** | ~~Medium~~ Done | ~~Medium~~ | E2 - Superseded by OpenNLP lemmatization |
 | Document Chunking | High | High | Tier 1 #3 - Solves long doc problem |
 | "More Like This" | Medium | Medium | Tier 2 #5 - AI-friendly feature |
 | OCR Support | Medium-High | Medium | Tier 2 #7 - Depends on user docs |
