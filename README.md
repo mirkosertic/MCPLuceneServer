@@ -53,14 +53,14 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 ## Table of Contents
 
 - [Quick Start](#quick-start)
-- [Configuration Options](#configuration-options)
-  - [Document Crawler Configuration](#document-crawler-configuration)
 - [Available MCP Tools](#available-mcp-tools)
 - [Index Field Schema](#index-field-schema)
-- [Document Crawler Features](#document-crawler-features)
 - [Usage Examples](#usage-examples)
+- [Document Crawler Features](#document-crawler-features)
 - [Troubleshooting](#troubleshooting)
 - [Security Considerations](#security-considerations)
+- [Configuration Options](#configuration-options)
+  - [Document Crawler Configuration](#document-crawler-configuration)
 - [Development](#development)
   - [Running for Development](#running-for-development)
   - [Debugging with MCP Inspector](#debugging-with-mcp-inspector)
@@ -140,212 +140,6 @@ That's it! The configuration is saved to `~/.mcplucene/config.yaml` and persists
 - "Search for machine learning papers"
 - "Find all PDFs by John Doe"
 - "What documents mention quarterly reports?"
-
-## Configuration Options
-
-> **Note:** The [Quick Start](#quick-start) above uses zero-configuration. This section covers advanced customization options.
-
-The server can be configured via environment variables and `application.yaml`:
-
-### Logging Profiles
-
-The server supports two logging profiles (for backwards compatibility, uses the same system property as Spring Boot):
-
-| Profile | Usage | Logging Output |
-|---------|-------|---------------|
-| **default** | Development in IDE | Console logging enabled |
-| **deployed** | Production/Claude Desktop | File logging only |
-
-**Default profile (no profile specified):**
-- Full logging enabled to console
-- Suitable for debugging and development
-
-**Deployed profile (`-Dspring.profiles.active=deployed`):**
-- Console logging disabled (required for STDIO transport)
-- File logging enabled (`~/.mcplucene/log/mcplucene.log`)
-- Used when running under Claude Desktop or other MCP clients
-
-### Environment Variables
-
-| Environment Variable | Default                                | Description |
-|---------------------|----------------------------------------|-------------|
-| `LUCENE_INDEX_PATH` | `${user.home}/.mcplucene/luceneindex}` | Path to the Lucene index directory |
-| `LUCENE_CRAWLER_DIRECTORIES` | none                                   | Comma-separated list of directories to crawl (overrides config file) |
-| `SPRING_PROFILES_ACTIVE` | none (default)                         | Set to `deployed` for production use |
-
-**Note on `LUCENE_CRAWLER_DIRECTORIES`:**
-When this environment variable is set, it takes precedence over `~/.mcplucene/config.yaml` and `application.yaml`. The MCP configuration tools (`addCrawlableDirectory`, `removeCrawlableDirectory`) will refuse to modify configuration while this override is active. To use runtime configuration, remove this environment variable.
-
-### Document Crawler Configuration
-
-The crawler directories can be configured in three ways, with the following priority (highest to lowest):
-
-1. **Environment Variable**: `LUCENE_CRAWLER_DIRECTORIES` (comma-separated paths)
-2. **Runtime Configuration**: `~/.mcplucene/config.yaml` (managed via MCP tools)
-3. **Application Default**: `src/main/resources/application.yaml`
-
-#### Runtime Configuration via MCP Tools (Recommended)
-
-The server provides MCP tools to manage crawlable directories at runtime without editing configuration files:
-
-**`listCrawlableDirectories`** - List all configured directories
-```
-Ask Claude: "What directories are being crawled?"
-```
-
-**`addCrawlableDirectory`** - Add a new directory to crawl
-```
-Ask Claude: "Add /Users/yourname/Documents as a crawlable directory"
-Ask Claude: "Add /path/to/folder and start crawling it immediately"
-```
-
-**`removeCrawlableDirectory`** - Remove a directory from crawling
-```
-Ask Claude: "Stop crawling /Users/yourname/Downloads"
-```
-
-**Benefits of Runtime Configuration:**
-- No need to rebuild the JAR or restart the server
-- Configuration persists across restarts in `~/.mcplucene/config.yaml`
-- Easy to distribute pre-built JARs
-- Conversational interface via Claude
-
-**Configuration File Location:**
-```
-~/.mcplucene/config.yaml
-```
-
-**Example config.yaml:**
-```yaml
-lucene:
-  crawler:
-    directories:
-      - /Users/yourname/Documents
-      - /Users/yourname/Downloads
-```
-
-#### Static Configuration via application.yaml
-
-Configure the document crawler in `src/main/resources/application.yaml`:
-
-```yaml
-lucene:
-  index:
-    path: ${LUCENE_INDEX_PATH:./lucene-index}
-  crawler:
-    # Directories to crawl and index
-    directories:
-      - "/path/to/your/documents"
-      - "/another/path/to/index"
-
-    # File patterns to include
-    include-patterns:
-      - "*.pdf"
-      - "*.doc"
-      - "*.docx"
-      - "*.odt"
-      - "*.ppt"
-      - "*.pptx"
-      - "*.xls"
-      - "*.xlsx"
-      - "*.ods"
-      - "*.txt"
-      - "*.eml"
-      - "*.msg"
-      - "*.md"
-      - "*.rst"
-      - "*.html"
-      - "*.htm"
-      - "*.rtf"
-      - "*.epub" 
-
-    # File patterns to exclude
-    exclude-patterns:
-      - "**/node_modules/**"
-      - "**/.git/**"
-      - "**/target/**"
-      - "**/build/**"
-
-    # Performance settings
-    thread-pool-size: 4                    # Parallel crawling threads
-    batch-size: 100                        # Documents per batch
-    batch-timeout-ms: 5000                 # Batch processing timeout
-
-    # Directory watching
-    watch-enabled: true                    # Monitor directories for changes
-    watch-poll-interval-ms: 2000          # Watch polling interval
-
-    # NRT optimization
-    bulk-index-threshold: 1000            # Files before NRT slowdown
-    slow-nrt-refresh-interval-ms: 5000    # NRT interval during bulk indexing
-
-    # Content extraction
-    max-content-length: -1                 # -1 = unlimited, or max characters
-    extract-metadata: true                 # Extract author, title, etc.
-    detect-language: true                  # Auto-detect document language
-
-    # Auto-crawl
-    crawl-on-startup: true                 # Start crawling on server startup
-
-    # Progress notifications
-    progress-notification-files: 100       # Notify every N files
-    progress-notification-interval-ms: 30000  # Or every N milliseconds
-
-    # Incremental indexing
-    reconciliation-enabled: true           # Skip unchanged files, remove orphans (default: true)
-
-    # Search passages
-    max-passages: 3                        # Max highlighted passages per search result (default: 3)
-    max-passage-char-length: 200           # Max character length per passage; longer ones are truncated (default: 200, 0 = no limit)
-```
-
-**Supported File Formats:**
-- PDF documents (`.pdf`)
-- Microsoft Office: Word (`.doc`, `.docx`), Excel (`.xls`, `.xlsx`), PowerPoint (`.ppt`, `.pptx`)
-- OpenOffice/LibreOffice: Writer (`.odt`), Calc (`.ods`), Impress (`.odp`)
-- Plain text files (`.txt`)
-- Email: Outlook (`.msg`), EML (`.eml`)
-- Markup: Markdown (`.md`), reStructuredText (`.rst`), HTML (`.html`, `.htm`)
-- Rich Text Format (`.rtf`)
-- E-books: EPUB (`.epub`)
-
-**Complete Configuration Example:**
-
-```yaml
-lucene:
-  index:
-    path: /Users/yourname/lucene-index
-  crawler:
-    # Add your document directories here
-    directories:
-      - "/Users/yourname/Documents"
-      - "/Users/yourname/Downloads"
-      - "/Volumes/ExternalDrive/Archive"
-
-    # Include only these file types
-    include-patterns:
-      - "*.pdf"
-      - "*.docx"
-      - "*.xlsx"
-
-    # Exclude these directories
-    exclude-patterns:
-      - "**/node_modules/**"
-      - "**/.git/**"
-
-    # Performance tuning
-    thread-pool-size: 8              # Use more threads for faster indexing
-    batch-size: 200                  # Larger batches for better throughput
-
-    # Auto-start crawler
-    crawl-on-startup: true
-
-    # Real-time monitoring
-    watch-enabled: true
-
-    # No content limit (index full documents)
-    max-content-length: -1
-```
 
 ## Available MCP Tools
 
@@ -1445,6 +1239,210 @@ filters: [{ field: "file_extension", value: "pdf" }]
 3. Apply filters using facet values to narrow results
 4. Iterate to drill down into specific subsets
 
+## Usage Examples
+
+### Example 1: Index Your Documents Folder
+
+1. Edit `application.yaml`:
+```yaml
+lucene:
+  crawler:
+    directories:
+      - "/Users/yourname/Documents"
+    crawl-on-startup: true
+```
+
+2. Start the server:
+```bash
+java -jar target/luceneserver-0.0.1-SNAPSHOT.jar
+```
+
+3. The crawler automatically starts and indexes all supported documents in your Documents folder.
+
+### Example 2: Search with Filtering
+
+Ask Claude:
+```
+Search for "machine learning" in PDF documents only
+```
+
+Claude will use:
+```
+query: "machine learning"
+filters: [{ field: "file_extension", value: "pdf" }]
+```
+
+### Example 3: Find Documents by Author
+
+Ask Claude:
+```
+Find all documents written by John Doe
+```
+
+Claude will use:
+```
+query: "*"
+filters: [{ field: "author", value: "John Doe" }]
+```
+
+### Example 4: Monitor Crawler Progress
+
+Ask Claude:
+```
+Show me the crawler statistics
+```
+
+Claude calls `getCrawlerStats()` and shows:
+- Files processed: 1,234 / 5,000
+- Throughput: 85 files/sec
+- Indexed: 1,200 (98%)
+- Failed: 34 (2%)
+
+### Example 5: Manual Crawl with Full Reindex
+
+Ask Claude:
+```
+Reindex all documents from scratch
+```
+
+Claude calls `startCrawl(fullReindex: true)`, which:
+1. Clears the existing index
+2. Re-crawls all configured directories
+3. Indexes all documents fresh
+
+### Example 6: Language-Specific Search
+
+Ask Claude:
+```
+Find German documents about "Technologie"
+```
+
+Claude uses:
+```
+query: "Technologie"
+filters: [{ field: "language", value: "de" }]
+```
+
+### Example 7: Search with Passages
+
+Search results include a `passages` array with highlighted excerpts and quality metadata:
+
+```json
+{
+  "file_name": "report.pdf",
+  "passages": [
+    {
+      "text": "...discusses the impact of <em>machine learning</em> on modern software development. The study shows...",
+      "score": 1.0,
+      "matchedTerms": ["machine learning"],
+      "termCoverage": 1.0,
+      "position": 0.08
+    },
+    {
+      "text": "...<em>machine learning</em> algorithms were applied to the dataset in Section 4...",
+      "score": 0.75,
+      "matchedTerms": ["machine learning"],
+      "termCoverage": 1.0,
+      "position": 0.45
+    }
+  ]
+}
+```
+
+This allows you to see relevant excerpts without downloading the full document. The metadata fields help LLMs quickly identify the best passage: prefer passages with high `termCoverage` (covers more of the query) and use `position` for document-structure context.
+
+### Example 8: Managing Crawlable Directories at Runtime
+
+Ask Claude to manage directories without editing configuration files:
+
+```
+"What directories are currently being crawled?"
+# Claude calls listCrawlableDirectories()
+# Response: Shows all configured directories and config file location
+
+"Add /Users/yourname/Research as a crawlable directory"
+# Claude calls addCrawlableDirectory(path="/Users/yourname/Research")
+# Directory is added to ~/.mcplucene/config.yaml
+
+"Add /Users/yourname/Projects and start crawling it now"
+# Claude calls addCrawlableDirectory(path="/Users/yourname/Projects", crawlNow=true)
+# Directory is added and crawl starts immediately
+
+"Stop crawling /Users/yourname/Downloads"
+# Claude calls removeCrawlableDirectory(path="/Users/yourname/Downloads")
+# Directory is removed from config (indexed documents remain)
+```
+
+**Configuration Persistence:**
+
+The directories you add via MCP tools are saved to `~/.mcplucene/config.yaml`:
+
+```yaml
+lucene:
+  crawler:
+    directories:
+      - /Users/yourname/Documents
+      - /Users/yourname/Research
+      - /Users/yourname/Projects
+```
+
+This configuration persists across server restarts - no need to reconfigure each time.
+
+**Environment Variable Override:**
+
+If you set the `LUCENE_CRAWLER_DIRECTORIES` environment variable, it takes precedence:
+
+```json
+{
+  "mcpServers": {
+    "lucene-search": {
+      "command": "java",
+      "args": ["-Dspring.profiles.active=deployed", "-jar", "/path/to/jar"],
+      "env": {
+        "LUCENE_CRAWLER_DIRECTORIES": "/path1,/path2"
+      }
+    }
+  }
+}
+```
+
+When this is set, `addCrawlableDirectory` and `removeCrawlableDirectory` will return an error message indicating the environment override is active.
+
+### Example 9: Working with Lexical Search (Synonyms and Variations)
+
+> **Note:** When using this server through Claude or another AI assistant, synonym expansion happens automatically - the AI constructs OR queries for you based on your natural language request. The examples below show the underlying query syntax for reference or direct API usage.
+
+Since the search engine performs **exact lexical matching** without automatic synonym expansion, you need to explicitly include synonyms and word variations in your query:
+
+**❌ Basic search (might miss relevant results):**
+```
+query: "car"
+```
+This will ONLY match documents containing the exact word "car", missing documents with "automobile", "vehicle", etc.
+
+**✅ Better: Include synonyms with OR:**
+```
+query: "(car OR automobile OR vehicle)"
+```
+
+**✅ Best: Combine synonyms with wildcards for variations:**
+```
+query: "(car* OR automobile* OR vehicle*)"
+```
+This matches: car, cars, automobile, automobiles, vehicle, vehicles, etc.
+
+**Real-world example - Finding contracts:**
+```
+query: "(contract* OR agreement* OR deal*) AND (sign* OR execut* OR finali*)"
+filters: [{ field: "file_extension", value: "pdf" }]
+```
+
+This will find documents containing variations like:
+- "contract signed", "agreement executed", "deal finalized"
+- "contracts signing", "agreements execute", "deals finalizing"
+
+**💡 Tip:** Use the `facets` in the search response to discover the exact terms used in your documents, then refine your query accordingly.
+
 ## Document Crawler Features
 
 ### Automatic Crawling
@@ -1694,209 +1692,211 @@ This creates a potential for indirect prompt injection: a maliciously crafted do
 
 This is an inherent characteristic of systems that retrieve and present external content to language models.
 
-## Usage Examples
+## Configuration Options
 
-### Example 1: Index Your Documents Folder
+> **Note:** The [Quick Start](#quick-start) above uses zero-configuration. This section covers advanced customization options.
 
-1. Edit `application.yaml`:
-```yaml
-lucene:
-  crawler:
-    directories:
-      - "/Users/yourname/Documents"
-    crawl-on-startup: true
+The server can be configured via environment variables and `application.yaml`:
+
+### Logging Profiles
+
+The server supports two logging profiles (for backwards compatibility, uses the same system property as Spring Boot):
+
+| Profile | Usage | Logging Output |
+|---------|-------|---------------|
+| **default** | Development in IDE | Console logging enabled |
+| **deployed** | Production/Claude Desktop | File logging only |
+
+**Default profile (no profile specified):**
+- Full logging enabled to console
+- Suitable for debugging and development
+
+**Deployed profile (`-Dspring.profiles.active=deployed`):**
+- Console logging disabled (required for STDIO transport)
+- File logging enabled (`~/.mcplucene/log/mcplucene.log`)
+- Used when running under Claude Desktop or other MCP clients
+
+### Environment Variables
+
+| Environment Variable | Default                                | Description |
+|---------------------|----------------------------------------|-------------|
+| `LUCENE_INDEX_PATH` | `${user.home}/.mcplucene/luceneindex}` | Path to the Lucene index directory |
+| `LUCENE_CRAWLER_DIRECTORIES` | none                                   | Comma-separated list of directories to crawl (overrides config file) |
+| `SPRING_PROFILES_ACTIVE` | none (default)                         | Set to `deployed` for production use |
+
+**Note on `LUCENE_CRAWLER_DIRECTORIES`:**
+When this environment variable is set, it takes precedence over `~/.mcplucene/config.yaml` and `application.yaml`. The MCP configuration tools (`addCrawlableDirectory`, `removeCrawlableDirectory`) will refuse to modify configuration while this override is active. To use runtime configuration, remove this environment variable.
+
+### Document Crawler Configuration
+
+The crawler directories can be configured in three ways, with the following priority (highest to lowest):
+
+1. **Environment Variable**: `LUCENE_CRAWLER_DIRECTORIES` (comma-separated paths)
+2. **Runtime Configuration**: `~/.mcplucene/config.yaml` (managed via MCP tools)
+3. **Application Default**: `src/main/resources/application.yaml`
+
+#### Runtime Configuration via MCP Tools (Recommended)
+
+The server provides MCP tools to manage crawlable directories at runtime without editing configuration files:
+
+**`listCrawlableDirectories`** - List all configured directories
+```
+Ask Claude: "What directories are being crawled?"
 ```
 
-2. Start the server:
-```bash
-java -jar target/luceneserver-0.0.1-SNAPSHOT.jar
+**`addCrawlableDirectory`** - Add a new directory to crawl
+```
+Ask Claude: "Add /Users/yourname/Documents as a crawlable directory"
+Ask Claude: "Add /path/to/folder and start crawling it immediately"
 ```
 
-3. The crawler automatically starts and indexes all supported documents in your Documents folder.
-
-### Example 2: Search with Filtering
-
-Ask Claude:
+**`removeCrawlableDirectory`** - Remove a directory from crawling
 ```
-Search for "machine learning" in PDF documents only
+Ask Claude: "Stop crawling /Users/yourname/Downloads"
 ```
 
-Claude will use:
-```
-query: "machine learning"
-filters: [{ field: "file_extension", value: "pdf" }]
-```
+**Benefits of Runtime Configuration:**
+- No need to rebuild the JAR or restart the server
+- Configuration persists across restarts in `~/.mcplucene/config.yaml`
+- Easy to distribute pre-built JARs
+- Conversational interface via Claude
 
-### Example 3: Find Documents by Author
-
-Ask Claude:
+**Configuration File Location:**
 ```
-Find all documents written by John Doe
+~/.mcplucene/config.yaml
 ```
 
-Claude will use:
-```
-query: "*"
-filters: [{ field: "author", value: "John Doe" }]
-```
-
-### Example 4: Monitor Crawler Progress
-
-Ask Claude:
-```
-Show me the crawler statistics
-```
-
-Claude calls `getCrawlerStats()` and shows:
-- Files processed: 1,234 / 5,000
-- Throughput: 85 files/sec
-- Indexed: 1,200 (98%)
-- Failed: 34 (2%)
-
-### Example 5: Manual Crawl with Full Reindex
-
-Ask Claude:
-```
-Reindex all documents from scratch
-```
-
-Claude calls `startCrawl(fullReindex: true)`, which:
-1. Clears the existing index
-2. Re-crawls all configured directories
-3. Indexes all documents fresh
-
-### Example 6: Language-Specific Search
-
-Ask Claude:
-```
-Find German documents about "Technologie"
-```
-
-Claude uses:
-```
-query: "Technologie"
-filters: [{ field: "language", value: "de" }]
-```
-
-### Example 7: Search with Passages
-
-Search results include a `passages` array with highlighted excerpts and quality metadata:
-
-```json
-{
-  "file_name": "report.pdf",
-  "passages": [
-    {
-      "text": "...discusses the impact of <em>machine learning</em> on modern software development. The study shows...",
-      "score": 1.0,
-      "matchedTerms": ["machine learning"],
-      "termCoverage": 1.0,
-      "position": 0.08
-    },
-    {
-      "text": "...<em>machine learning</em> algorithms were applied to the dataset in Section 4...",
-      "score": 0.75,
-      "matchedTerms": ["machine learning"],
-      "termCoverage": 1.0,
-      "position": 0.45
-    }
-  ]
-}
-```
-
-This allows you to see relevant excerpts without downloading the full document. The metadata fields help LLMs quickly identify the best passage: prefer passages with high `termCoverage` (covers more of the query) and use `position` for document-structure context.
-
-### Example 8: Managing Crawlable Directories at Runtime
-
-Ask Claude to manage directories without editing configuration files:
-
-```
-"What directories are currently being crawled?"
-# Claude calls listCrawlableDirectories()
-# Response: Shows all configured directories and config file location
-
-"Add /Users/yourname/Research as a crawlable directory"
-# Claude calls addCrawlableDirectory(path="/Users/yourname/Research")
-# Directory is added to ~/.mcplucene/config.yaml
-
-"Add /Users/yourname/Projects and start crawling it now"
-# Claude calls addCrawlableDirectory(path="/Users/yourname/Projects", crawlNow=true)
-# Directory is added and crawl starts immediately
-
-"Stop crawling /Users/yourname/Downloads"
-# Claude calls removeCrawlableDirectory(path="/Users/yourname/Downloads")
-# Directory is removed from config (indexed documents remain)
-```
-
-**Configuration Persistence:**
-
-The directories you add via MCP tools are saved to `~/.mcplucene/config.yaml`:
-
+**Example config.yaml:**
 ```yaml
 lucene:
   crawler:
     directories:
       - /Users/yourname/Documents
-      - /Users/yourname/Research
-      - /Users/yourname/Projects
+      - /Users/yourname/Downloads
 ```
 
-This configuration persists across server restarts - no need to reconfigure each time.
+#### Static Configuration via application.yaml
 
-**Environment Variable Override:**
+Configure the document crawler in `src/main/resources/application.yaml`:
 
-If you set the `LUCENE_CRAWLER_DIRECTORIES` environment variable, it takes precedence:
+```yaml
+lucene:
+  index:
+    path: ${LUCENE_INDEX_PATH:./lucene-index}
+  crawler:
+    # Directories to crawl and index
+    directories:
+      - "/path/to/your/documents"
+      - "/another/path/to/index"
 
-```json
-{
-  "mcpServers": {
-    "lucene-search": {
-      "command": "java",
-      "args": ["-Dspring.profiles.active=deployed", "-jar", "/path/to/jar"],
-      "env": {
-        "LUCENE_CRAWLER_DIRECTORIES": "/path1,/path2"
-      }
-    }
-  }
-}
+    # File patterns to include
+    include-patterns:
+      - "*.pdf"
+      - "*.doc"
+      - "*.docx"
+      - "*.odt"
+      - "*.ppt"
+      - "*.pptx"
+      - "*.xls"
+      - "*.xlsx"
+      - "*.ods"
+      - "*.txt"
+      - "*.eml"
+      - "*.msg"
+      - "*.md"
+      - "*.rst"
+      - "*.html"
+      - "*.htm"
+      - "*.rtf"
+      - "*.epub"
+
+    # File patterns to exclude
+    exclude-patterns:
+      - "**/node_modules/**"
+      - "**/.git/**"
+      - "**/target/**"
+      - "**/build/**"
+
+    # Performance settings
+    thread-pool-size: 4                    # Parallel crawling threads
+    batch-size: 100                        # Documents per batch
+    batch-timeout-ms: 5000                 # Batch processing timeout
+
+    # Directory watching
+    watch-enabled: true                    # Monitor directories for changes
+    watch-poll-interval-ms: 2000          # Watch polling interval
+
+    # NRT optimization
+    bulk-index-threshold: 1000            # Files before NRT slowdown
+    slow-nrt-refresh-interval-ms: 5000    # NRT interval during bulk indexing
+
+    # Content extraction
+    max-content-length: -1                 # -1 = unlimited, or max characters
+    extract-metadata: true                 # Extract author, title, etc.
+    detect-language: true                  # Auto-detect document language
+
+    # Auto-crawl
+    crawl-on-startup: true                 # Start crawling on server startup
+
+    # Progress notifications
+    progress-notification-files: 100       # Notify every N files
+    progress-notification-interval-ms: 30000  # Or every N milliseconds
+
+    # Incremental indexing
+    reconciliation-enabled: true           # Skip unchanged files, remove orphans (default: true)
+
+    # Search passages
+    max-passages: 3                        # Max highlighted passages per search result (default: 3)
+    max-passage-char-length: 200           # Max character length per passage; longer ones are truncated (default: 200, 0 = no limit)
 ```
 
-When this is set, `addCrawlableDirectory` and `removeCrawlableDirectory` will return an error message indicating the environment override is active.
+**Supported File Formats:**
+- PDF documents (`.pdf`)
+- Microsoft Office: Word (`.doc`, `.docx`), Excel (`.xls`, `.xlsx`), PowerPoint (`.ppt`, `.pptx`)
+- OpenOffice/LibreOffice: Writer (`.odt`), Calc (`.ods`), Impress (`.odp`)
+- Plain text files (`.txt`)
+- Email: Outlook (`.msg`), EML (`.eml`)
+- Markup: Markdown (`.md`), reStructuredText (`.rst`), HTML (`.html`, `.htm`)
+- Rich Text Format (`.rtf`)
+- E-books: EPUB (`.epub`)
 
-### Example 9: Working with Lexical Search (Synonyms and Variations)
+**Complete Configuration Example:**
 
-> **Note:** When using this server through Claude or another AI assistant, synonym expansion happens automatically - the AI constructs OR queries for you based on your natural language request. The examples below show the underlying query syntax for reference or direct API usage.
+```yaml
+lucene:
+  index:
+    path: /Users/yourname/lucene-index
+  crawler:
+    # Add your document directories here
+    directories:
+      - "/Users/yourname/Documents"
+      - "/Users/yourname/Downloads"
+      - "/Volumes/ExternalDrive/Archive"
 
-Since the search engine performs **exact lexical matching** without automatic synonym expansion, you need to explicitly include synonyms and word variations in your query:
+    # Include only these file types
+    include-patterns:
+      - "*.pdf"
+      - "*.docx"
+      - "*.xlsx"
 
-**❌ Basic search (might miss relevant results):**
+    # Exclude these directories
+    exclude-patterns:
+      - "**/node_modules/**"
+      - "**/.git/**"
+
+    # Performance tuning
+    thread-pool-size: 8              # Use more threads for faster indexing
+    batch-size: 200                  # Larger batches for better throughput
+
+    # Auto-start crawler
+    crawl-on-startup: true
+
+    # Real-time monitoring
+    watch-enabled: true
+
+    # No content limit (index full documents)
+    max-content-length: -1
 ```
-query: "car"
-```
-This will ONLY match documents containing the exact word "car", missing documents with "automobile", "vehicle", etc.
-
-**✅ Better: Include synonyms with OR:**
-```
-query: "(car OR automobile OR vehicle)"
-```
-
-**✅ Best: Combine synonyms with wildcards for variations:**
-```
-query: "(car* OR automobile* OR vehicle*)"
-```
-This matches: car, cars, automobile, automobiles, vehicle, vehicles, etc.
-
-**Real-world example - Finding contracts:**
-```
-query: "(contract* OR agreement* OR deal*) AND (sign* OR execut* OR finali*)"
-filters: [{ field: "file_extension", value: "pdf" }]
-```
-
-This will find documents containing variations like:
-- "contract signed", "agreement executed", "deal finalized"
-- "contracts signing", "agreements execute", "deals finalizing"
-
-**💡 Tip:** Use the `facets` in the search response to discover the exact terms used in your documents, then refine your query accordingly.
 
 ## Development
 
@@ -1960,4 +1960,3 @@ public void addDocument(String title, String content) throws IOException {
 ```
 
 For the full field schema, see the [Index Field Schema](#index-field-schema) section.
-
