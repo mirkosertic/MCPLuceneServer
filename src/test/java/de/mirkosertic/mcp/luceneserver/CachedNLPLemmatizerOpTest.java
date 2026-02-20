@@ -25,7 +25,7 @@ class CachedNLPLemmatizerOpTest {
     @BeforeEach
     void setUp() throws IOException {
         // Load English lemmatizer model from classpath
-        final InputStream modelStream = getClass().getResourceAsStream("/opennlp-en-ud-ewt-lemmas-1.2-2.5.0.bin");
+        final InputStream modelStream = getClass().getResourceAsStream("/opennlp-en-ud-ewt-lemmas-1.3-2.5.4.bin");
         assertThat(modelStream).isNotNull();
 
         model = new LemmatizerModel(modelStream);
