@@ -9,6 +9,7 @@ import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.analysis.core.LowerCaseFilter;
+import org.apache.lucene.analysis.core.TypeTokenFilter;
 import org.apache.lucene.analysis.icu.ICUFoldingFilter;
 import org.apache.lucene.analysis.opennlp.OpenNLPLemmatizerFilter;
 import org.apache.lucene.analysis.opennlp.OpenNLPPOSFilter;
@@ -26,6 +27,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Analyzer that uses OpenNLP for true dictionary-based lemmatization instead of
@@ -36,12 +38,14 @@ import java.util.Map;
  *   <li><b>Sentence-aware (for indexing)</b>: Uses {@code OpenNLPTokenizer} with sentence
  *       detection for accurate POS tagging of long texts.
  *       Chain: {@code OpenNLPTokenizer → OpenNLPPOSFilter → OpenNLPLemmatizerFilter
+ *       → TypeTokenFilter(drop ".", "SYM") → CompoundLemmaSplittingFilter
  *       → LowerCaseFilter → ICUFoldingFilter}</li>
  *   <li><b>Simple (for query time)</b>: Uses {@code StandardTokenizer} without sentence
  *       detection, treating the entire input as a single sentence. This provides better
  *       POS tagging for short queries (1-3 words) where the sentence detector may
  *       misclassify the input, leading to incorrect lemmatization.
  *       Chain: {@code StandardTokenizer → OpenNLPPOSFilter → OpenNLPLemmatizerFilter
+ *       → TypeTokenFilter(drop ".", "SYM") → CompoundLemmaSplittingFilter
  *       → LowerCaseFilter → ICUFoldingFilter}</li>
  * </ul>
  *
@@ -205,6 +209,8 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
             final CachedNLPLemmatizerOp cachedLemmatizer = new CachedNLPLemmatizerOp(
                     baseLemmatizer, lemmatizerModel, cacheStats, sharedLemmatizerCache);
             stream = new OpenNLPLemmatizerFilter(stream, cachedLemmatizer);
+            stream = new TypeTokenFilter(stream, Set.of(".", "SYM"));
+            stream = new CompoundLemmaSplittingFilter(stream);
             stream = new LowerCaseFilter(stream);
             stream = new ICUFoldingFilter(stream);
 

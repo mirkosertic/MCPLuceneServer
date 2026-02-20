@@ -39,8 +39,10 @@ public class DocumentIndexer {
      * Version 5: Removed creator and subject from faceted fields (kept as stored/searchable TextField only).
      * Version 6: Always index BOTH content_lemma_de and content_lemma_en fields for mixed-language support.
      * Version 7: Added content_translit_de field for German umlaut digraph transliteration (ae→ä, oe→ö, ue→ü).
+     * Version 8: Added TypeTokenFilter and CompoundLemmaSplittingFilter to OpenNLPLemmatizingAnalyzer chain
+     *            to filter punctuation tokens and split German compound lemmas (e.g., "in+der" → "in", "der").
      */
-    public static final int SCHEMA_VERSION = 7;
+    public static final int SCHEMA_VERSION = 8;
 
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;

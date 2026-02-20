@@ -675,6 +675,32 @@ public class LuceneSearchTools {
                 .callHandler((exchange, request) -> listIndexedFields())
                 .build());
 
+        // Suggest terms tool
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("suggestTerms")
+                        .description("Suggest index terms matching a prefix. Useful for discovering vocabulary, " +
+                                "finding German compound words (prefix on 'content'), exploring author names, " +
+                                "or auto-completing field values. Returns terms sorted by document frequency. " +
+                                "For analyzed fields (content, title, etc.), the prefix is automatically lowercased to match indexed tokens.")
+                        .inputSchema(SchemaGenerator.generateSchema(SuggestTermsRequest.class))
+                        .build())
+                .callHandler((exchange, request) -> suggestTerms(request.arguments()))
+                .build());
+
+        // Get top terms tool
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("getTopTerms")
+                        .description("Get the most frequent terms in a field. Useful for understanding index vocabulary, " +
+                                "discovering common values (languages, file types, authors), and identifying dominant terms in content. " +
+                                "Returns terms sorted by document frequency. " +
+                                "Warning: On large content fields this enumerates all terms — use suggestTerms with a prefix for targeted exploration.")
+                        .inputSchema(SchemaGenerator.generateSchema(GetTopTermsRequest.class))
+                        .build())
+                .callHandler((exchange, request) -> getTopTerms(request.arguments()))
+                .build());
+
         // Pause crawler tool
         tools.add(McpServerFeatures.SyncToolSpecification.builder()
                 .tool(McpSchema.Tool.builder()
@@ -1036,6 +1062,74 @@ public class LuceneSearchTools {
         } catch (final IOException e) {
             logger.error("Error listing indexed fields", e);
             return ToolResultHelper.createResult(IndexedFieldsResponse.error("Error listing indexed fields: " + e.getMessage()));
+        }
+    }
+
+    private McpSchema.CallToolResult suggestTerms(final Map<String, Object> args) {
+        final SuggestTermsRequest request = SuggestTermsRequest.fromMap(args);
+
+        logger.info("Suggest terms request: field='{}', prefix='{}', limit={}", request.field(), request.prefix(), request.effectiveLimit());
+
+        // Validate field
+        final String fieldError = indexService.validateTermField(request.field());
+        if (fieldError != null) {
+            logger.warn("Invalid field for suggestTerms: {}", fieldError);
+            return ToolResultHelper.createResult(SuggestTermsResponse.error(fieldError));
+        }
+
+        // Validate prefix
+        if (request.prefix() == null || request.prefix().isBlank()) {
+            logger.warn("Prefix is required for suggestTerms");
+            return ToolResultHelper.createResult(SuggestTermsResponse.error("Prefix is required"));
+        }
+
+        try {
+            final LuceneIndexService.TermSuggestionResult result = indexService.suggestTerms(
+                    request.field(), request.prefix(), request.effectiveLimit());
+
+            final List<SuggestTermsResponse.TermFrequency> terms = result.terms().stream()
+                    .map(e -> new SuggestTermsResponse.TermFrequency(e.getKey(), e.getValue()))
+                    .toList();
+
+            logger.info("Suggest terms completed: {} terms returned, {} total matched", terms.size(), result.totalMatched());
+
+            return ToolResultHelper.createResult(SuggestTermsResponse.success(
+                    request.field(), request.prefix(), terms, result.totalMatched()));
+
+        } catch (final IOException e) {
+            logger.error("Error suggesting terms", e);
+            return ToolResultHelper.createResult(SuggestTermsResponse.error("Error suggesting terms: " + e.getMessage()));
+        }
+    }
+
+    private McpSchema.CallToolResult getTopTerms(final Map<String, Object> args) {
+        final GetTopTermsRequest request = GetTopTermsRequest.fromMap(args);
+
+        logger.info("Get top terms request: field='{}', limit={}", request.field(), request.effectiveLimit());
+
+        // Validate field
+        final String fieldError = indexService.validateTermField(request.field());
+        if (fieldError != null) {
+            logger.warn("Invalid field for getTopTerms: {}", fieldError);
+            return ToolResultHelper.createResult(GetTopTermsResponse.error(fieldError));
+        }
+
+        try {
+            final LuceneIndexService.TopTermsResult result = indexService.getTopTerms(
+                    request.field(), request.effectiveLimit());
+
+            final List<GetTopTermsResponse.TermFrequency> terms = result.terms().stream()
+                    .map(e -> new GetTopTermsResponse.TermFrequency(e.getKey(), e.getValue()))
+                    .toList();
+
+            logger.info("Get top terms completed: {} terms returned, {} unique terms in field", terms.size(), result.uniqueTermCount());
+
+            return ToolResultHelper.createResult(GetTopTermsResponse.success(
+                    request.field(), terms, result.uniqueTermCount(), result.warning()));
+
+        } catch (final IOException e) {
+            logger.error("Error getting top terms", e);
+            return ToolResultHelper.createResult(GetTopTermsResponse.error("Error getting top terms: " + e.getMessage()));
         }
     }
 
