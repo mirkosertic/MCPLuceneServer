@@ -475,91 +475,27 @@ No way to export search results, profiling data, or statistics for external use.
 **Priority**: Medium-High
 **Impact**: High (especially for German)
 
-**Baseline measurement**: The precision/recall regression test suite (`SearchPrecisionRecallRegressionTest.java`) establishes the pre-stemming baseline: **P=0.972, R=0.972, F1=0.944** across 72 P/R queries (85 total with scoring + edge cases). Known recall gaps:
-- `Mueller` → `Müller` (ICU folds ü→u, not ue→ü — R=0.0)
-- All morphological queries (Vertrages→Vertrag, houses→house, ran→run, etc.) achieve R=1.0 for the **exact inflected form** but will gain cross-form recall with stemming (e.g., "Vertrag" finding "Verträge")
+**Implemented approach**: Per-language lemma shadow fields using OpenNLP (replaced original Snowball stemming plan). All documents are indexed with both German and English lemma fields (`content_lemma_de`, `content_lemma_en`) regardless of detected language. At query time, weighted OR queries combine exact matching on `content` (boost 2.0) with lemmatized matching on language-specific fields (dynamic boost based on language distribution). Exact matches always rank highest. Highlighting stays on the unstemmed `content` field.
 
-Note: `Vertrag*` with capital V was a known limitation (R=0.0) but is now fixed — `rewriteLeadingWildcards()` lowercases wildcard/prefix terms on analyzed fields.
+See [PIPELINE.md](../../PIPELINE.md) for complete analyzer chain documentation, token examples, and query pipeline details.
 
-Currently no stemming at all. The analyzer chain (`StandardTokenizer → LowerCaseFilter → ICUFoldingFilter`) normalizes Unicode but does not reduce morphological variants. Searching "Vertrag" misses "Verträge", "Vertrags", "Verträgen" — estimated **15–30% recall loss for German**, ~10–15% for English.
-
-**Approach: Per-language stemmed shadow fields** (follows the `content_reversed` pattern):
-
-```
-content              → unstemmed (stored, term vectors, highlighting — unchanged)
-content_stemmed_de   → German Snowball (NOT stored, no term vectors, search only)
-content_stemmed_en   → English Snowball (NOT stored, no term vectors, search only)
-```
-
-At index time, based on Tika's `detectedLanguage`, index into the appropriate stemmed field alongside the existing `content` field. At query time, combine with **weighted OR queries**:
-
-```java
-BooleanQuery.Builder combined = new BooleanQuery.Builder();
-combined.add(new BoostQuery(contentQuery, 2.0f), BooleanClause.Occur.SHOULD);
-combined.add(new BoostQuery(stemmedQueryDe, deBoost), BooleanClause.Occur.SHOULD);
-combined.add(new BoostQuery(stemmedQueryEn, enBoost), BooleanClause.Occur.SHOULD);
-combined.setMinimumNumberShouldMatch(1);
-```
-
-**Scoring behavior**: Exact matches always rank highest (hit both unstemmed + stemmed clauses). Morphological-only matches surface but rank below exact matches. This preserves precision in ranking while improving recall.
-
-**Dynamic boost weights from index language distribution**: Instead of hardcoding stemmed field boosts, derive them from the actual language distribution in the `language` facet field. If 80% of documents are German and 15% are English, the German stemmed field gets a higher boost — reflecting the prior probability that the user's query targets that language.
-
-Scaling options (in order of preference):
-- **Soft scaling**: `boost = BASE + SCALE * (langCount / totalDocs)` (e.g., `0.3 + 0.7 * proportion`) — ensures minority languages always get at least `BASE` boost, majority language gets up to `BASE + SCALE`
-- **Threshold-based**: include stemmed field only if language has > N% presence (e.g., 5%), with a fixed boost — simpler but loses proportional signal
-- **Log-scaled**: `boost = log(1 + langCount) / log(1 + totalDocs)` — dampens majority language dominance
-
-**Override**: If the AI client passes an explicit `language` parameter in the search request, use that directly — boost only the specified language's stemmed field at full weight, skip distribution-based weighting. Falls back to distribution-based when no language hint is provided.
-
-**Caching**: Language distribution should be cached (not recomputed per search). Refresh on NRT searcher refresh or index commit. The `language` field is already a `SortedSetDocValuesFacetField`, so facet counts are cheap to compute.
-
-**Edge cases**:
-- Documents with undetected language (null/empty): not indexed into any stemmed field, still found via unstemmed `content`
-- Single-language corpus: only one stemmed field gets meaningful boost; others effectively become no-ops
-- New language added later: automatically picked up on next cache refresh, no configuration needed
-
-**Highlighting**: Stays on the unstemmed `content` field — completely unaffected. Documents found only via stemmed field get the `withMaxNoHighlightPassages(1)` fallback passage (no `<em>` tags, but content still shown). Acceptable because the AI client doesn't need `<em>` tags to understand relevance.
-
-**Why this fits the architecture**:
-- Same pattern as `content_reversed` — a shadow field optimized for a specific search strategy
-- Filter pipeline completely unaffected (filters operate on the outer BooleanQuery)
-- Leading wildcard rewriting still applies only to the `content` branch
-- Additive change — doesn't modify existing search behavior, only expands recall
-- Language detection already exists (Tika's `OptimaizeLangDetector`)
-
-**Snowball over-stemming risk** (low): Algorithmic stemmers can conflate unrelated terms (e.g., "Universität"/"Universum" → "univers"). In practice this is rare, and BM25 IDF penalizes incidental single-term matches. The weighted OR approach further mitigates this — over-stemmed matches score lower than exact matches.
-
-**Wrong-language stemmer**: Applying German stemmer to English text mostly produces silent no-ops (English suffixes don't match German rules), not false conflations. Safe to always query all stemmed fields.
-
-**Implementation steps**:
-1. Create `SnowballAnalyzer` wrapper(s): `StandardTokenizer → LowerCaseFilter → ICUFoldingFilter → SnowballFilter("German"|"English")`
-2. Register in `PerFieldAnalyzerWrapper`: `content_stemmed_de` → German, `content_stemmed_en` → English
-3. In `DocumentIndexer`: add stemmed field based on `detectedLanguage`
-4. In `LuceneIndexService.search()`: build weighted OR query combining `content` + stemmed fields
-5. Highlight only on `content` (no change)
-6. Bump `SCHEMA_VERSION`
-7. Update P/R regression thresholds in `SearchPrecisionRecallRegressionTest` — raise `minRecall` for morphological queries that now achieve cross-form recall
-8. Update README.md
-
-**Key files**: `DocumentIndexer.java`, `LuceneIndexService.java`, new analyzer class(es), `PerFieldAnalyzerWrapper` setup
-
-**Supersedes**: The previously rejected "Server-Side Stemming" — the multi-field approach avoids the original objections (precision loss from stemming the content field, highlighting breakage, analyzer complexity).
+**Key implementation decisions**:
+- Dynamic boost weights derived from index language distribution: `boost = 0.3 + 0.7 * (langCount / totalDocs)`
+- Language distribution cached and refreshed on NRT searcher refresh
+- If explicit `language eq "xx"` filter present, only that language's lemma field is included at boost 1.0
+- Highlighting unaffected (uses unstemmed `content` field)
+- Documents found only via lemma fields get fallback passages (no bold markers)
 
 #### E1b. OpenNLP Lemmatizer Token Cleanup
 **Status**: Done (SCHEMA_VERSION 8)
 **Effort**: Low
 **Impact**: Medium — eliminates index noise, improves term observability tools
 
-**Problem**: The `OpenNLPTokenizer` (UD-trained) retains punctuation as separate tokens (unlike `StandardTokenizer`). These get indexed as terms in `content_lemma_de`/`content_lemma_en`, polluting term frequency data. Additionally, the German UD-GSD lemmatizer produces compound lemmas for contractions (`im` → `in+der`, `zum` → `zu+der`, `beim` → `bei+der`) which never match any query.
+**Problem**: OpenNLPTokenizer retains punctuation as separate tokens, and German UD-GSD lemmatizer produces compound lemmas for contractions (`im` → `in+der`).
 
-**Solution**: Two filters added to the lemmatizer chain after `OpenNLPLemmatizerFilter`:
-1. `TypeTokenFilter(drop type ".")` — removes all punctuation tokens (OpenNLP POS models assign type `"."` to all punctuation)
-2. `CompoundLemmaSplittingFilter` — splits tokens on `+` into separate sequential tokens (`in+der` → `in`, `der`)
+**Solution**: Added `TypeTokenFilter` (drops punctuation) and `CompoundLemmaSplittingFilter` (splits on `+`) to the lemmatizer chain.
 
-Updated chain: `OpenNLPTokenizer → POS → Lemmatizer → TypeTokenFilter → CompoundLemmaSplitter → LowerCase → ICUFolding`
-
-**Known remaining edge case**: `er/sie` tokenized as single token by German OpenNLPTokenizer (not tagged as punctuation). Rare in real documents, acceptable for now.
+See [PIPELINE.md](../../PIPELINE.md) for complete analyzer chain details and examples.
 
 #### E2. Irregular Verb Stemming (Extends Snowball Stemming)
 **Status**: Superseded — OpenNLP lemmatization handles irregular verbs correctly
@@ -591,9 +527,7 @@ Updated chain: `OpenNLPTokenizer → POS → Lemmatizer → TypeTokenFilter → 
 
 Use Lucene's built-in `HunspellStemFilter` with `.dic`/`.aff` dictionary files. Dictionary-based stemming correctly maps irregular forms to their lemma because it uses lookup tables rather than suffix rules.
 
-*Implementation*: Additional shadow fields `content_hunspell_de` / `content_hunspell_en` alongside the existing Snowball fields, or replace Snowball entirely. Same weighted OR query pattern.
-
-*Analyzer chain*: `StandardTokenizer → LowerCaseFilter → ICUFoldingFilter → HunspellStemFilter(dictionary)`
+*Implementation*: Additional shadow fields using HunspellStemFilter. See [PIPELINE.md](../../PIPELINE.md) for analyzer chain details.
 
 *Pros:*
 - Handles all irregulars via dictionary lookup — no manual maintenance of verb lists
@@ -672,21 +606,13 @@ StandardTokenizer → LowerCaseFilter → ICUFoldingFilter → StemmerOverrideFi
 
 ---
 
-**Approach C: OpenNLP Lemmatizer (Lucene-integrated, Apache 2.0)**
+**Approach C: OpenNLP Lemmatizer (Lucene-integrated, Apache 2.0)** — IMPLEMENTED
 
-Lucene provides [`OpenNLPLemmatizerFilter`](https://lucene.apache.org/core/10_2_2/analysis/opennlp/org/apache/lucene/analysis/opennlp/class-use/OpenNLPLemmatizerFilter.html) in the `lucene-analysis-opennlp` module. This is true lemmatization — mapping surface forms to dictionary headwords — not algorithmic suffix stripping. Handles all irregular forms via trained models or dictionary lookup.
+Lucene's `OpenNLPLemmatizerFilter` provides true lemmatization via trained models. This approach was chosen and implemented.
 
-*Implementation*: Additional shadow fields `content_lemma_de` / `content_lemma_en`, or replace Snowball fields entirely. The OpenNLP pipeline requires multiple components:
+*Implementation*: Shadow fields `content_lemma_de` / `content_lemma_en` using OpenNLP pipeline with sentence detection, POS tagging, and lemmatization. See [PIPELINE.md](../../PIPELINE.md) for complete analyzer chain documentation and token examples.
 
-```
-OpenNLPTokenizer(sentenceModel, tokenizerModel)
-  → OpenNLPPOSFilter(posModel)
-  → LowerCaseFilter
-  → ICUFoldingFilter
-  → OpenNLPLemmatizerFilter(dictionary and/or lemmatizerModel)
-```
-
-**Critical difference from Snowball**: The OpenNLP pipeline replaces Lucene's `StandardTokenizer` with `OpenNLPTokenizer` (which does sentence detection + tokenization) and adds a POS tagging step before lemmatization. This means it cannot simply be inserted into the existing analyzer chain — it requires a separate, complete analyzer.
+**Critical difference from Snowball**: Requires complete analyzer chain with OpenNLPTokenizer (sentence detection + tokenization) + POS tagging before lemmatization.
 
 *Two modes available:*
 1. **Dictionary-only**: `DictionaryLemmatizer` — HashMap lookup from `word[tab]postag[tab]lemma` file. Fast (O(1) per token), but requires POS tags and a comprehensive dictionary file.

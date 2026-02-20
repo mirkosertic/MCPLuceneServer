@@ -477,18 +477,20 @@ When you ask Claude to "find documents about cars", it automatically searches fo
 
 **⚠️ Technical Details (Lexical Matching):**
 
-The index uses a custom `UnicodeNormalizingAnalyzer` built on Lucene's `ICUFoldingFilter`, which provides:
-- ✅ Tokenization and lowercasing
-- ✅ Unicode normalization (NFKC) -- full-width characters are mapped to their standard equivalents
-- ✅ Diacritic folding -- accented characters are mapped to their ASCII base forms (e.g., "ä" → "a", "ö" → "o", "ü" → "u", "ñ" → "n")
-- ✅ Ligature expansion -- PDF ligatures are expanded correctly (e.g., the "fi" ligature → "fi", the "fl" ligature → "fl")
-- ✅ Efficient leading wildcard queries -- a `content_reversed` field stores reversed tokens, so `*vertrag` is internally rewritten as a trailing wildcard on the reversed field (`gartrev*`), avoiding costly full-index scans
-- ✅ Case-insensitive wildcard queries -- wildcard and prefix terms (e.g. `Vertrag*`, `House*`) are automatically lowercased to match the lowercased index tokens, so capitalization does not affect wildcard results
-- ❌ No automatic synonym expansion at the index level
-- ❌ No phonetic matching (e.g., "Smith" won't match "Smyth")
-- ✅ Automatic OpenNLP lemmatization for German and English -- morphological variants are found automatically, including irregular forms (e.g., "ran" matches "run", "ging" matches "gehen", "paid" matches "pay", "analyses" matches "analysis"). Exact matches rank highest.
+The server uses a multi-analyzer indexing pipeline and multi-field weighted query pipeline for comprehensive search:
 
-The AI assistant compensates for the remaining limitations by expanding your queries intelligently.
+- **Unicode normalization** — NFKC normalization, diacritic folding, ligature expansion via ICUFoldingFilter
+- **Leading wildcard optimization** — `content_reversed` field stores reversed tokens for efficient `*vertrag`-style queries
+- **Case-insensitive wildcards** — wildcard/prefix terms are automatically lowercased
+- **OpenNLP lemmatization** — dictionary-based lemmatization for German and English, including irregular forms (ran→run, ging→gehen, paid→pay, analyses→analysis)
+- **Dual-language indexing** — both German and English lemma fields indexed for all documents, enabling mixed-language matching
+- **German umlaut transliteration** — `content_translit_de` shadow field maps digraphs (Mueller→Müller)
+- **Automatic phrase expansion** — exact phrases auto-expand to include proximity matches (see below)
+- **Adaptive prefix scoring** — BM25 scoring for specific prefixes (>= 4 chars)
+
+See [PIPELINE.md](PIPELINE.md) for complete analyzer chain documentation, concrete examples, and query pipeline details.
+
+The AI assistant compensates for remaining limitations (no synonym expansion, no phonetic matching) by expanding queries intelligently.
 
 **💡 Best Practices for Better Results:**
 
@@ -526,108 +528,33 @@ The AI assistant compensates for the remaining limitations by expanding your que
 
 **Automatic Phrase Proximity Expansion:**
 
-When you search for exact phrases, the server **automatically expands** them to include near-matches while keeping exact matches ranked highest.
+Multi-word phrase queries are automatically expanded: `"Domain Design"` becomes `("Domain Design")^2.0 OR ("Domain Design"~3)`. Exact matches rank highest (2.0x boost), while near-matches (within 3 words) also surface at lower scores. Single-word phrases and user-specified slop are not expanded.
 
-**Example:**
-```
-Query:  "Domain Design"
-Expands to:  ("Domain Design")^2.0 OR ("Domain Design"~3)
-```
-
-**What this means:**
-- ✅ **Exact match** "Domain Design" → **Highest score** (2.0x boost)
-- ✅ **Near matches** "Domain-driven Design", "Domain Effective Design" → **Lower score** (within 3 words)
-- ❌ **Too far apart** "Domain is a good Design" → **No match** (exceeds slop)
-
-**When expansion occurs:**
-- Multi-word phrase queries: `"Domain Design"` ✅
-- Not for single words: `"Design"` (no benefit)
-- Not if you specify slop: `"Domain Design"~5` (already set)
-
-**Benefits:**
-- Better recall - finds variations you might miss
-- Maintains precision - exact matches always rank highest
-- No syntax knowledge required - works automatically
+See [PIPELINE.md](PIPELINE.md) for detailed examples and configuration.
 
 **Adaptive Prefix Query Scoring:**
 
-Prefix queries (e.g., `vertrag*`) now use **real BM25 scoring** instead of constant scores when the prefix is specific enough, improving ranking quality while maintaining performance.
+Prefix queries with >= 4 characters (`vertrag*`, `design*`) use real BM25 scoring, ranking shorter/more frequent terms higher than long compounds. Shorter prefixes (`ver*`) use constant scoring for performance. This balances ranking quality with speed automatically.
 
-**How it works:**
-
-```
-Query: vertrag*  (>= 4 characters → scoring enabled)
-
-Results with BM25 scoring:
-1. "vertrag" (short, frequent)        → Score: 2.8 ⭐⭐⭐
-2. "vertrags"                         → Score: 1.9 ⭐⭐
-3. "vertragsklausel" (long, rare)     → Score: 1.2 ⭐
-
-Query: ver*  (< 4 characters → constant score)
-
-Results without adaptive scoring:
-1. "verarbeiten"  → Score: 1.0
-2. "veranlassen"  → Score: 1.0
-3. "vertrag"      → Score: 1.0
-(all equal scores)
-```
-
-**When scoring is enabled:**
-- ✅ Prefix >= 4 characters (`vertrag*`, `design*`, `contract*`)
-- ✅ Top 50 most frequent matching terms are scored
-- ✅ Shorter/more frequent matches rank higher
-- ✅ Better ranking for exact/short matches
-
-**When constant score is used:**
-- Short prefixes (< 4 chars): `ver*`, `de*` - too many matches, performance
-- Leading wildcards: `*vertrag` - uses reversed field optimization
-- Both-sided wildcards: `*vertrag*` - constant score
-
-**Benefits:**
-- **Better ranking** - exact/short matches rank higher than long compounds
-- **Performance safe** - only for specific prefixes (>= 4 chars)
-- **Automatic** - no syntax knowledge required
-- **Smart defaults** - balances quality and speed
-
-**Technical details:**
-- Uses `TopTermsBlendedFreqScoringRewrite` with limit of 50 terms
-- Short prefixes keep constant scoring to avoid performance impact
-- Complements phrase expansion and lemmatization features
+See [PIPELINE.md](PIPELINE.md) for scoring examples and technical details.
 
 **German Compound Word Search:**
 
-German compound words (e.g., "Arbeitsvertrag", "Vertragsbedingungen") can be searched effectively using wildcards:
-- `*vertrag` -- finds words ending in "vertrag" (Arbeitsvertrag, Kaufvertrag, Mietvertrag)
-- `vertrag*` -- finds words starting with "vertrag" (Vertragsbedingungen, Vertragsklausel)
-- `*vertrag*` -- finds words containing "vertrag" anywhere (combines both)
-
-Leading wildcard queries are optimised internally using a reverse token index (`content_reversed` field), so they execute as fast as trailing wildcards.
+Use wildcards for German compounds: `*vertrag` finds Arbeitsvertrag, `vertrag*` finds Vertragsbedingungen. Leading wildcards are optimized via the `content_reversed` field.
 
 **Automatic Lemmatization:**
 
-The search engine applies OpenNLP dictionary-based lemmatization for German and English automatically. Unlike rule-based stemming, lemmatization uses trained language models to correctly reduce words to their dictionary form (lemma), including irregular forms:
-- **German:** "Vertrag" finds "Vertrages"; "Haus" finds "Häuser", "Hauses"; "suchen" finds "gesucht", "suchte"; "gehen" finds "ging"
-- **English:** "contract" finds "contracts", "contracted"; "run" finds "ran", "running"; "pay" finds "paid"; "analysis" finds "analyses"; "go" finds "went"; "see" finds "saw"
-- **Exact matches always rank highest** (boost 2.0) over lemmatized matches
-- **Precision preserved:** "house" and "housing" are kept distinct (not conflated), unlike aggressive stemming approaches
+OpenNLP lemmatization handles morphological variants automatically. German: "Haus" finds "Häuser", "gehen" finds "ging". English: "run" finds "ran", "pay" finds "paid". Exact matches always rank highest.
 
-**Dual-Language Lemmatization (Mixed-Language Support):**
+**Dual-Language Support:**
 
-ALL documents are indexed with BOTH German and English lemmatization fields (`content_lemma_de` and `content_lemma_en`), regardless of detected language. This enables robust mixed-language content matching:
-- **German documents with English technical terms:** A German document containing "Recommendation Engine" will match a search for "Recommendation Engines" (plural) via the English lemmatizer
-- **English documents with German terms:** An English document referencing "Vertrag" will match searches for "Vertrages" (genitive) via the German lemmatizer
-- **Technical vocabulary:** Brand names, product names, and technical terms in mixed-language documents are now searchable with full singular/plural and morphological variant support
-- **Example:** A German product spec mentioning "Machine Learning Models" matches queries for "machine learning model" (singular) automatically
-- **Performance impact:** Minimal, thanks to shared LRU caching across all indexing threads (LemmatizerCacheStats tracks cache efficiency)
+All documents indexed with both German and English lemma fields, enabling mixed-language matching. German docs with English technical terms ("Recommendation Engines") match singular queries ("Recommendation Engine") via the English lemmatizer, and vice versa.
 
-**German Umlaut Digraph Transliteration:**
+**German Umlaut Transliteration:**
 
-A dedicated `content_translit_de` shadow field handles the German convention of writing umlauts as ASCII digraphs:
-- `ae` → `ä` (e.g., "Kaese" matches "Käse")
-- `oe` → `ö` (e.g., "Goethe" matches "Göthe")
-- `ue` → `ü` (e.g., "Mueller" matches "Müller")
+The `content_translit_de` field maps ASCII digraphs to umlauts: "Mueller" matches "Müller", "Kaese" matches "Käse".
 
-This transliteration is applied before standard Unicode normalization, so both the digraph form and the umlaut form produce identical index tokens. The field uses a low boost (0.5) to ensure exact matches on the primary `content` field are always ranked higher.
+See [PIPELINE.md](PIPELINE.md) for complete analyzer chains, concrete token examples, and query pipeline details.
 
 **Returns:**
 - Paginated document results, each containing a `passages` array with highlighted text and quality metadata
