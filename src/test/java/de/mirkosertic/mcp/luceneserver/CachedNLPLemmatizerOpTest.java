@@ -7,6 +7,9 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URL;
+import java.util.Enumeration;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -24,14 +27,47 @@ class CachedNLPLemmatizerOpTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        // Load English lemmatizer model from classpath
-        final InputStream modelStream = getClass().getResourceAsStream("/opennlp-en-ud-ewt-lemmas-1.3-2.5.4.bin");
+        // Load English lemmatizer model from classpath using runtime discovery
+        final InputStream modelStream = loadModelResource("en", "ewt", "lemmas");
         assertThat(modelStream).isNotNull();
 
         model = new LemmatizerModel(modelStream);
         delegate = new NLPLemmatizerOp(null, model);
         stats = new LemmatizerCacheStats();
         cachedLemmatizer = new CachedNLPLemmatizerOp(delegate, model, stats, CachedNLPLemmatizerOp.createSharedCache(200_000, stats));
+    }
+
+    /**
+     * Discovers and loads an OpenNLP model resource from the classpath by reading
+     * model.properties files from OpenNLP model JARs.
+     */
+    private InputStream loadModelResource(final String lang, final String treebank, final String type) throws IOException {
+        final String expectedPrefix = "opennlp-" + lang + "-ud-" + treebank + "-" + type + "-";
+
+        final Enumeration<URL> resources = getClass().getClassLoader().getResources("model.properties");
+
+        while (resources.hasMoreElements()) {
+            final URL url = resources.nextElement();
+
+            try (final InputStream propStream = url.openStream()) {
+                final Properties props = new Properties();
+                props.load(propStream);
+
+                final String modelName = props.getProperty("model.name");
+                if (modelName != null && modelName.startsWith(expectedPrefix) && modelName.endsWith(".bin")) {
+                    final InputStream modelStream = getClass().getResourceAsStream("/" + modelName);
+                    if (modelStream != null) {
+                        return modelStream;
+                    }
+                }
+            } catch (final IOException e) {
+                // Ignore this properties file and continue searching
+            }
+        }
+
+        throw new IllegalStateException(
+                "OpenNLP model not found on classpath with prefix: " + expectedPrefix
+                        + ". Ensure the corresponding opennlp-models-* Maven dependency is present.");
     }
 
     @Test

@@ -26,7 +26,10 @@ import org.apache.lucene.util.AttributeFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.net.URL;
+import java.util.Enumeration;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 
 /**
@@ -71,11 +74,6 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
             "en", "ewt",
             "de", "gsd"
     );
-
-    /**
-     * Model version prefix embedded in the OpenNLP model file names.
-     */
-    private static final String MODEL_VERSION = "1.3-2.5.4";
 
     /**
      * Maximum number of (token, POS tag) → lemma entries in the shared cache per language.
@@ -230,7 +228,12 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
     }
 
     /**
-     * Loads an OpenNLP model resource from the classpath.
+     * Loads an OpenNLP model resource from the classpath by discovering its
+     * filename from {@code model.properties} files in OpenNLP model JARs.
+     *
+     * <p>This method enumerates all {@code model.properties} resources on the classpath,
+     * parses each as a properties file, and matches the {@code model.name} key against
+     * the expected prefix pattern {@code opennlp-{lang}-ud-{treebank}-{type}-}.</p>
      *
      * @param lang     the language code (e.g. "en", "de")
      * @param treebank the UD treebank identifier (e.g. "ewt", "gsd")
@@ -239,14 +242,35 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
      * @throws IllegalStateException if the resource is not found on the classpath
      */
     private InputStream loadModelResource(final String lang, final String treebank, final String type) {
-        final String resourcePath = "/opennlp-" + lang + "-ud-" + treebank + "-" + type
-                + "-" + MODEL_VERSION + ".bin";
-        final InputStream stream = getClass().getResourceAsStream(resourcePath);
-        if (stream == null) {
+        final String expectedPrefix = "opennlp-" + lang + "-ud-" + treebank + "-" + type + "-";
+
+        try {
+            final Enumeration<URL> resources = getClass().getClassLoader().getResources("model.properties");
+
+            while (resources.hasMoreElements()) {
+                final URL url = resources.nextElement();
+
+                try (final InputStream propStream = url.openStream()) {
+                    final Properties props = new Properties();
+                    props.load(propStream);
+
+                    final String modelName = props.getProperty("model.name");
+                    if (modelName != null && modelName.startsWith(expectedPrefix) && modelName.endsWith(".bin")) {
+                        final InputStream modelStream = getClass().getResourceAsStream("/" + modelName);
+                        if (modelStream != null) {
+                            return modelStream;
+                        }
+                    }
+                } catch (final IOException e) {
+                    // Ignore this properties file and continue searching
+                }
+            }
+
             throw new IllegalStateException(
-                    "OpenNLP model not found on classpath: " + resourcePath
+                    "OpenNLP model not found on classpath with prefix: " + expectedPrefix
                             + ". Ensure the corresponding opennlp-models-* Maven dependency is present.");
+        } catch (final IOException e) {
+            throw new UncheckedIOException("Failed to enumerate model.properties resources", e);
         }
-        return stream;
     }
 }
