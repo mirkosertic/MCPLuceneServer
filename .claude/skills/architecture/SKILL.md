@@ -48,22 +48,14 @@ allowed-tools: Read, Glob, Grep
 - No network security concerns
 - **Consequence**: Console logging MUST be disabled in production (`deployed` profile)
 
-### Why UnicodeNormalizingAnalyzer (ICUFoldingFilter)?
-- Replaces the previous `StandardAnalyzer` to handle real-world document text correctly
-- ICUFoldingFilter performs NFKC normalization, diacritic folding, and ligature expansion
-- Critical for PDF content: ligatures (fi, fl) extracted by Tika are invisible Unicode code-points that break exact-match search without folding
-- **Trade-off**: Adds `lucene-analysis-icu` dependency; still no stemming/synonyms -- AI assistants compensate with OR queries
-- See README.md "Lexical Search" section for user guidance
+### Why Multi-Analyzer Pipeline?
+The server uses multiple analyzer chains optimized for different search patterns. Each document is indexed with several shadow fields, each using a different analyzer:
+- `UnicodeNormalizingAnalyzer`: Primary content field with NFKC normalization, diacritic folding, ligature expansion
+- `ReverseUnicodeNormalizingAnalyzer`: Reversed tokens for efficient leading wildcard queries (`*vertrag`)
+- `OpenNLPLemmatizingAnalyzer`: Dictionary-based lemmatization for German and English (handles irregular forms)
+- `GermanTransliteratingAnalyzer`: Maps ASCII digraphs to umlauts (Mueller→Müller)
 
-### Why Reverse Token Field (`content_reversed`)?
-- Enables efficient leading wildcard queries (e.g., `*vertrag` to find German compound words like "Arbeitsvertrag")
-- Without this, Lucene must scan every term in the index for leading wildcards -- extremely slow on large indices
-- Uses `ReverseUnicodeNormalizingAnalyzer` (same chain as `UnicodeNormalizingAnalyzer` + `ReverseStringFilter`)
-- `PerFieldAnalyzerWrapper` routes the `content_reversed` field to the reverse analyzer automatically
-- `rewriteLeadingWildcards()` in `LuceneIndexService` transparently rewrites queries before execution
-- The original (non-rewritten) query is still used for highlighting and term extraction, so `<em>` tags appear correctly
-- **Trade-off**: Doubles the token count in the index (content indexed twice); `Store.NO` minimizes disk overhead
-- **Breaking change**: Requires full reindex -- existing documents lack the `content_reversed` field
+See [PIPELINE.md](../../PIPELINE.md) for complete analyzer chain documentation and query pipeline details.
 
 ## Processing Patterns
 
