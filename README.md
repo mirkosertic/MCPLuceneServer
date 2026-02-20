@@ -355,6 +355,8 @@ lucene:
 - 🗂️ **`indexAdmin`** - Visual UI for index maintenance (optimize, purge, unlock)
 - 📊 **`getIndexStats`** - View index statistics and document count
 - 🚀 **`startCrawl`** - Index documents from configured directories
+- 🔤 **`suggestTerms`** - Discover index vocabulary by prefix (auto-complete for queries)
+- 📈 **`getTopTerms`** - See most frequent terms in any field
 
 ---
 
@@ -997,6 +999,92 @@ List all field names present in the Lucene index.
     "created_date",
     "modified_date"
   ]
+}
+```
+
+### `suggestTerms`
+
+Suggest index terms matching a prefix. Useful for discovering vocabulary, finding German compound words, exploring author names, or auto-completing field values.
+
+**Parameters:**
+- `field` (required): Field name to suggest terms from (e.g. `content`, `author`, `file_extension`)
+- `prefix` (required): Prefix to match terms against (e.g. `ver` to find `vertrag`, `version`)
+- `limit` (optional): Maximum number of terms to return (default: 20, max: 100)
+
+**Notes:**
+- For analyzed fields (`content`, `title`, etc.), the prefix is automatically lowercased to match indexed tokens
+- For StringFields (`file_extension`, `language`), the prefix is used as-is (exact match)
+- Numeric/date fields (`file_size`, `modified_date`, etc.) are not supported — use `getIndexStats` for date ranges
+- Returns terms sorted by document frequency (most common first)
+- Returns empty results for nonexistent fields (not an error)
+
+**Example — discover German compound words:**
+```json
+{
+  "field": "content",
+  "prefix": "vertrag",
+  "limit": 10
+}
+```
+
+**Example response:**
+```json
+{
+  "success": true,
+  "field": "content",
+  "prefix": "vertrag",
+  "terms": [
+    {"term": "vertrag", "docFreq": 45},
+    {"term": "vertrags", "docFreq": 23},
+    {"term": "vertragsklausel", "docFreq": 8},
+    {"term": "vertragsbedingungen", "docFreq": 5}
+  ],
+  "totalTermsMatched": 4
+}
+```
+
+### `getTopTerms`
+
+Get the most frequent terms in a field. Useful for understanding index vocabulary, discovering common values (languages, file types, authors), and identifying dominant terms.
+
+**Parameters:**
+- `field` (required): Field name to get top terms from (e.g. `content`, `author`, `file_extension`)
+- `limit` (optional): Maximum number of terms to return (default: 20, max: 100)
+
+**Notes:**
+- Returns terms sorted by document frequency (most common first)
+- For large content fields (>100K unique terms), a warning is included suggesting `suggestTerms` instead
+- Numeric/date fields are not supported — use `getIndexStats` for date ranges
+- Returns empty results for nonexistent fields (not an error)
+
+**Example — explore file types in index:**
+```json
+{
+  "field": "file_extension",
+  "limit": 10
+}
+```
+
+**Example response:**
+```json
+{
+  "success": true,
+  "field": "file_extension",
+  "terms": [
+    {"term": "pdf", "docFreq": 234},
+    {"term": "docx", "docFreq": 156},
+    {"term": "txt", "docFreq": 89},
+    {"term": "md", "docFreq": 45}
+  ],
+  "uniqueTermCount": 12
+}
+```
+
+**Example — explore content vocabulary:**
+```json
+{
+  "field": "content",
+  "limit": 20
 }
 ```
 
