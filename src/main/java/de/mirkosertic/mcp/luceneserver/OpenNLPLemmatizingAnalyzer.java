@@ -75,7 +75,7 @@ public class OpenNLPLemmatizingAnalyzer extends Analyzer {
     /**
      * Model version prefix embedded in the OpenNLP model file names.
      */
-    private static final String MODEL_VERSION = "1.2-2.5.0";
+    private static final String MODEL_VERSION = "1.3-2.5.4";
 
     /**
      * Maximum number of (token, POS tag) → lemma entries in the shared cache per language.
