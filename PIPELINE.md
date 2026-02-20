@@ -344,6 +344,17 @@ Results by score:
 - `DEFAULT_PROXIMITY_SLOP = 3`
 - `DEFAULT_EXACT_BOOST = 2.0f`
 
+**Important: Phrase slop and term order.** Lucene's `PhraseQuery` with slop > 0 *does* allow out-of-order matching, but reversed terms cost more slop than in-order gaps. The edit distance per consecutive term pair is `|actual_position_diff - expected_position_diff|`. For example, with a query `"Tom and Jerry"`:
+
+| Document text | Edit distance | Matches (slop=3)? |
+|---|---|---|
+| "Tom and Jerry" | 0 | Yes (exact) |
+| "Tom liked and admired Jerry" | 2 | Yes |
+| "Tom Jerry and" | 3 | Yes (borderline) |
+| "Jerry and Tom" (full reversal) | 4 | **No** |
+
+A complete reversal of a 3-term phrase requires slop=4, exceeding the default slop=3. Two-term reversals (slop cost = 2) are within budget. This is acceptable because the AI client can issue non-phrase queries (`Tom AND Jerry`) when term order is irrelevant, and the multi-field weighted OR query provides recall for individual terms regardless of order.
+
 ### 3.4 Adaptive Prefix Query Scoring
 
 Prefix queries use real BM25 scoring when the prefix is specific enough:
