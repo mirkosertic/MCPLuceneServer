@@ -13,7 +13,7 @@ import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.crawler.FileContentExtractor;
 import de.mirkosertic.mcp.luceneserver.crawler.IndexReconciliationService;
 import de.mirkosertic.mcp.luceneserver.mcp.LatestProtocolStdioServerTransportProvider;
-import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper;
+import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpSchema;
