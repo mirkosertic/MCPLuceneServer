@@ -13,6 +13,8 @@ import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.crawler.FileContentExtractor;
 import de.mirkosertic.mcp.luceneserver.crawler.IndexReconciliationService;
 import de.mirkosertic.mcp.luceneserver.mcp.LatestProtocolStdioServerTransportProvider;
+import de.mirkosertic.mcp.luceneserver.transport.TransportFactory;
+import de.mirkosertic.mcp.luceneserver.transport.TransportType;
 import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpSyncServer;
@@ -25,7 +27,7 @@ import java.util.List;
 
 /**
  * Main entry point for the MCP Lucene Server.
- * Initializes all services and starts the MCP server using STDIO transport.
+ * Initializes all services and starts the MCP server using STDIO or HTTP transport.
  */
 public class LuceneserverApplication {
 
@@ -39,7 +41,9 @@ public class LuceneserverApplication {
     private final DirectoryWatcherService watcherService;
     private final DocumentCrawlerService crawlerService;
     private final LuceneSearchTools searchTools;
-    private McpSyncServer mcpServer;
+    private McpSyncServer mcpSyncServer;
+    private McpSyncServer mcpStreamableSyncServer;
+    private TransportFactory.HttpTransportWrapper httpTransport;
 
     public LuceneserverApplication(final ApplicationConfig config) {
         this.config = config;
@@ -115,10 +119,11 @@ public class LuceneserverApplication {
     }
 
     /**
-     * Start the MCP server.
+     * Start the MCP server with the configured transport (STDIO or HTTP).
      */
     public void start() {
-        logger.info("Starting MCP server with STDIO transport...");
+        final TransportType transportType = TransportFactory.getTransportType();
+        logger.info("Starting MCP server with {} transport...", transportType);
 
         // Create server capabilities using builder
         final McpSchema.ServerCapabilities capabilities = McpSchema.ServerCapabilities.builder()
@@ -135,35 +140,89 @@ public class LuceneserverApplication {
         // Create JSON mapper for MCP protocol
         final JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(new ObjectMapper());
 
-        // Create STDIO transport provider with latest protocol version support
+        try {
+            if (transportType == TransportType.HTTP) {
+                startHttpTransport(serverInfo, capabilities, jsonMapper);
+            } else {
+                startStdioTransport(serverInfo, capabilities, jsonMapper);
+            }
+
+            logger.info("MCP server started successfully");
+            notificationService.notify("MCP Lucene Server started", "MCP Lucene Server is now running.");
+
+            // Register shutdown hook
+            Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown, "shutdown-hook"));
+
+            // Block main thread
+            waitForShutdown(transportType);
+
+            logger.info("Main thread finished, shutting down...");
+
+        } catch (final Exception e) {
+            logger.error("Failed to start MCP server", e);
+            throw new RuntimeException("Failed to start MCP server: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Start the MCP server with STDIO transport.
+     */
+    private void startStdioTransport(
+            final McpSchema.Implementation serverInfo,
+            final McpSchema.ServerCapabilities capabilities,
+            final JacksonMcpJsonMapper jsonMapper) {
+
         final LatestProtocolStdioServerTransportProvider transportProvider =
-                new LatestProtocolStdioServerTransportProvider(jsonMapper);
+                TransportFactory.createStdioTransport(jsonMapper);
 
         // Build and start the MCP server
-        mcpServer = McpServer.sync(transportProvider)
+        mcpSyncServer = McpServer.sync(transportProvider)
+                .serverInfo(serverInfo)
+                .capabilities(capabilities)
+                .tools(searchTools.getToolSpecifications())
+                .resources(searchTools.getResourceSpecifications())
+                .build();
+    }
+
+    /**
+     * Start the MCP server with HTTP transport using streamable sync mode.
+     * The MCP SDK's HttpServletStreamableServerTransportProvider handles the
+     * Streamable HTTP protocol (Spec 2025-03-26) internally.
+     */
+    private void startHttpTransport(
+            final McpSchema.Implementation serverInfo,
+            final McpSchema.ServerCapabilities capabilities,
+            final JacksonMcpJsonMapper jsonMapper) throws Exception {
+
+        // Create HTTP transport with embedded Jetty server
+        httpTransport = TransportFactory.createHttpTransport(jsonMapper);
+
+        // Build sync MCP server for HTTP using streamable transport
+        // The transport provider handles async HTTP internally while we use sync handlers
+        mcpStreamableSyncServer = McpServer.sync(httpTransport.transportProvider())
                 .serverInfo(serverInfo)
                 .capabilities(capabilities)
                 .tools(searchTools.getToolSpecifications())
                 .resources(searchTools.getResourceSpecifications())
                 .build();
 
-        logger.info("MCP server started successfully");
+        // Start the HTTP server
+        httpTransport.start();
 
-        notificationService.notify("MCP Lucene Server started", "MCP Lucene Server is now running.");
+        logger.info("HTTP endpoint available at: {}", httpTransport.config().getUrl());
+    }
 
-        // Register shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown, "shutdown-hook"));
-
-        // Block main thread - the STDIO transport handles communication
-        try {
-            // Keep the application running
+    /**
+     * Block the main thread until shutdown.
+     */
+    private void waitForShutdown(final TransportType transportType) throws InterruptedException {
+        if (transportType == TransportType.HTTP) {
+            // For HTTP, join the Jetty server thread
+            httpTransport.join();
+        } else {
+            // For STDIO, keep the application running
             Thread.currentThread().join();
-        } catch (final InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.info("Main thread interrupted, shutting down...");
         }
-
-        logger.info("Main thread finished, shutting down...");
     }
 
     /**
@@ -174,11 +233,27 @@ public class LuceneserverApplication {
 
         // Shutdown in reverse order of initialization
         try {
-            if (mcpServer != null) {
-                mcpServer.close();
+            if (httpTransport != null) {
+                httpTransport.stop();
             }
         } catch (final Exception e) {
-            logger.error("Error closing MCP server", e);
+            logger.error("Error stopping HTTP transport", e);
+        }
+
+        try {
+            if (mcpSyncServer != null) {
+                mcpSyncServer.close();
+            }
+        } catch (final Exception e) {
+            logger.error("Error closing MCP sync server", e);
+        }
+
+        try {
+            if (mcpStreamableSyncServer != null) {
+                mcpStreamableSyncServer.close();
+            }
+        } catch (final Exception e) {
+            logger.error("Error closing MCP streamable sync server", e);
         }
 
         try {
