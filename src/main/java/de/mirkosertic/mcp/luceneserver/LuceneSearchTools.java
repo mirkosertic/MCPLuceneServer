@@ -1489,4 +1489,5 @@ public class LuceneSearchTools {
             return ToolResultHelper.createResult(IndexAdminStatusResponse.error("Error getting status: " + e.getMessage()));
         }
     }
+
 }
