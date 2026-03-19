@@ -2,7 +2,7 @@
 
 [![Build and Release](https://github.com/mirkosertic/MCPLuceneServer/actions/workflows/build.yml/badge.svg)](https://github.com/mirkosertic/MCPLuceneServer/actions/workflows/build.yml)
 
-A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search capabilities with automatic document crawling and indexing. This server uses STDIO transport for communication and can be integrated with Claude Desktop or any other MCP-compatible client.
+A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search capabilities with automatic document crawling and indexing. This server supports both STDIO transport (for Claude Desktop integration) and HTTP transport (for web-based clients and remote access).
 
 ## Features
 
@@ -45,9 +45,11 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - Progress notifications during bulk operations
 
 🔧 **Easy Integration**
-- STDIO transport for seamless MCP client integration
+- Dual transport support: STDIO (default) and HTTP
+- STDIO transport for seamless Claude Desktop integration
+- HTTP transport for web-based clients and remote access
 - Comprehensive MCP tools for search and crawler control
-- Flexible configuration via YAML
+- Flexible configuration via YAML and system properties
 - Cross-platform notifications (macOS Notification Center, Windows Toast, Linux notify-send)
 
 ## Table of Contents
@@ -1715,6 +1717,83 @@ The server supports two logging profiles (for backwards compatibility, uses the 
 - Console logging disabled (required for STDIO transport)
 - File logging enabled (`~/.mcplucene/log/mcplucene.log`)
 - Used when running under Claude Desktop or other MCP clients
+
+### Transport Configuration
+
+The server supports two transport types: **STDIO** (default) and **HTTP**. The transport is selected via the `mcp.transport` system property.
+
+#### STDIO Transport (Default)
+
+STDIO transport is the default and recommended mode for Claude Desktop integration. No additional configuration is required.
+
+**Claude Desktop Configuration:**
+```json
+{
+  "mcpServers": {
+    "lucene-search": {
+      "command": "java",
+      "args": [
+        "--enable-native-access=ALL-UNNAMED",
+        "-Xmx2g",
+        "-Dspring.profiles.active=deployed",
+        "-jar",
+        "/absolute/path/to/luceneserver-0.0.1-SNAPSHOT.jar"
+      ]
+    }
+  }
+}
+```
+
+#### HTTP Transport
+
+HTTP transport enables remote access and integration with web-based MCP clients using the **MCP Streamable HTTP protocol (Spec 2025-03-26)**. To enable HTTP transport, set the `mcp.transport` system property to `http`.
+
+**Starting with HTTP Transport:**
+```bash
+# Minimal HTTP configuration (uses defaults: 0.0.0.0:8080/mcp/message)
+java --enable-native-access=ALL-UNNAMED \
+  -Xmx2g \
+  -Dmcp.transport=http \
+  -jar luceneserver-0.0.1-SNAPSHOT.jar
+```
+
+**Custom HTTP configuration:**
+```bash
+java --enable-native-access=ALL-UNNAMED \
+  -Xmx2g \
+  -Dmcp.transport=http \
+  -Dmcp.http.port=9000 \
+  -Dmcp.http.host=localhost \
+  -jar luceneserver-0.0.1-SNAPSHOT.jar
+```
+
+**HTTP Configuration Properties:**
+
+| System Property | Default | Description |
+|----------------|---------|-------------|
+| `mcp.transport` | `stdio` | Transport type: `stdio` or `http` |
+| `mcp.http.host` | `0.0.0.0` | HTTP server bind address (HTTP mode only) |
+| `mcp.http.port` | `8080` | HTTP server port (HTTP mode only) |
+| `mcp.http.endpoint` | `/mcp/message` | MCP message endpoint path (HTTP mode only)* |
+
+*The default `/mcp/message` is the standard MCP endpoint and typically does not need to be changed.
+
+**Important Notes:**
+- HTTP transport uses the **MCP Streamable HTTP protocol** with stateless async mode
+- STDIO transport uses **stateful sync** mode (suitable for persistent connections)
+- HTTP mode does **not** support HTTPS/TLS - use a reverse proxy (nginx, Caddy) for encryption
+- For production use with HTTP, always place the server behind a reverse proxy with proper authentication
+- The `deployed` profile is optional with HTTP (console logging won't interfere)
+
+**Example: Running on a different port**
+```bash
+java -Dmcp.transport=http -Dmcp.http.port=9090 -jar luceneserver-0.0.1-SNAPSHOT.jar
+```
+
+**Example: Localhost only (more secure)**
+```bash
+java -Dmcp.transport=http -Dmcp.http.host=127.0.0.1 -jar luceneserver-0.0.1-SNAPSHOT.jar
+```
 
 ### Environment Variables
 
