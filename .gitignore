@@ -40,3 +40,5 @@ build/
 
 node_modules
 dist
+
+lucene-data-dir
