@@ -96,6 +96,19 @@ For tagged releases, you can also download from the [Releases page](https://gith
 
 This creates an executable JAR at `target/luceneserver-0.0.1-SNAPSHOT.jar`.
 
+**Option C: Use Docker (Only HTTP-Transport is available)**
+
+```bash
+docker run -v ./lucene-data-dir:/userdata -p 9000:9000 -it mirkosertic42/mcpluceneserver:main
+```
+
+This starts a Docker container with the server listening on port 9000. All configuration data including the
+index files is stored in the `./lucene-data-dir` directory on the host machine. Please note that the Lucene
+indexer can only access files that are visible to the Docker container, so all files must be placed in the
+`./lucene-data-dir` directory or a subdirectory of it. JVM settings can be adjusted by the `JAVA_OPTS` 
+environment variable, which can be modified using the Docker CLI or a Docker Compose file. The default
+maximum JVM Heap size(-Xmx) is 2GB.
+
 ### Step 2: Configure Claude Desktop
 
 Locate your Claude Desktop configuration file:
