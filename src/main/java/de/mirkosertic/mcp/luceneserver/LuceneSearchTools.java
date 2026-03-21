@@ -37,16 +37,30 @@ public class LuceneSearchTools {
     private static final Logger logger = LoggerFactory.getLogger(LuceneSearchTools.class);
 
     private static final String SEARCH_DESCRIPTION =
-            "Search documents using Lucene query syntax with automatic Snowball stemming for German and English. " +
-            "Stemming finds morphological variants (e.g. 'Vertrag' matches 'Verträge'/'Vertrages', 'contract' matches 'contracts'/'contracting'). " +
-            "Exact matches always rank highest. " +
-            "Supports: wildcards (*, ?), boolean operators (AND/OR/NOT), phrase queries, fuzzy search, field-specific queries. " +
-            "Use 'filters' array for metadata filtering (file type, date range, language, etc.). " +
-            "Results can be sorted by relevance score (default), modified_date, created_date, or file_size. " +
-            "IMPORTANT: For synonym expansion, use OR queries: '(contract OR agreement)'. " +
-            "For German compound words, use *vertrag (leading wildcard). " +
-            "Returns paginated results with highlighted passages, scores, facets. " +
-            "See lucene://docs/query-syntax for complete syntax guide.";
+            "Search documents using Lucene query syntax with Snowball stemming for German and English " +
+            "(morphological variants found automatically, e.g. 'Vertrag' matches 'Verträge'/'Vertrages'). Exact matches rank highest.\n\n" +
+            "SYNTAX:\n" +
+            "- Terms: 'hello world' → AND (implicit); phrases: \"exact phrase\"\n" +
+            "- Boolean: AND, OR, NOT, grouping with ()\n" +
+            "- Wildcards: word* (suffix, BM25 if >=4 chars prefix), ? (single char), *word (leading, fast via reversed field), *word* (contains, constant score)\n" +
+            "- Fuzzy: term~2; Proximity: \"phrase\"~5\n" +
+            "- Multi-word phrases auto-expanded: \"Domain Design\" → exact(2x boost) OR near(slop=3)\n" +
+            "- Field-specific: field:value\n\n" +
+            "FILTERS (metadata, use 'filters' array):\n" +
+            "- operators: eq (default), in, not, not_in, range\n" +
+            "- faceted fields (DrillSideways, OR within same field): language, file_extension, file_type, author\n" +
+            "- string fields (exact match): file_path, content_hash\n" +
+            "- numeric/date fields (range supported): file_size, created_date, modified_date, indexed_date\n" +
+            "- dates: ISO-8601 (2024-01-15 / 2024-01-15T10:30:00 / 2024-01-15T10:30:00Z)\n" +
+            "- logic: different fields=AND, same faceted field=OR, not/not_in=MUST_NOT\n\n" +
+            "SORT: sortBy=_score (default), modified_date, created_date, file_size; sortOrder=desc (default), asc\n\n" +
+            "BEST PRACTICES:\n" +
+            "- Synonyms: use OR — (contract OR agreement), not automatic\n" +
+            "- German compounds: use *vertrag (finds Arbeitsvertrag, Mietvertrag, etc.)\n" +
+            "- Multilingual: (contract OR Vertrag OR contrat)\n" +
+            "- ICU folding active: Müller≈Muller, café≈cafe\n" +
+            "- Irregular verbs: use OR — (run OR running OR ran)\n\n" +
+            "NOT SUPPORTED: automatic synonyms, phonetic matching, semantic search, stemming for non-DE/EN languages";
 
     private static final String ADMIN_APP_RESOURCE_ID = "ui://indexadmin/index.html";
 
@@ -76,27 +90,6 @@ public class LuceneSearchTools {
                 this::indexAdminResource
         ));
 
-        // Query Syntax Guide
-        resources.add(new McpServerFeatures.SyncResourceSpecification(
-                McpSchema.Resource.builder()
-                        .uri("lucene://docs/query-syntax")
-                        .name("Lucene Query Syntax Guide")
-                        .description("Complete guide to search query syntax, filters, wildcards, and best practices")
-                        .mimeType("text/markdown")
-                        .build(),
-                this::querySyntaxGuide
-        ));
-
-        // Profiling Guide
-        resources.add(new McpServerFeatures.SyncResourceSpecification(
-                McpSchema.Resource.builder()
-                        .uri("lucene://docs/profiling-guide")
-                        .name("Query Profiling Guide")
-                        .description("Detailed guide to query profiling, analysis levels, and optimization techniques")
-                        .mimeType("text/markdown")
-                        .build(),
-                this::profilingGuide
-        ));
 
         return resources;
     }
@@ -121,472 +114,6 @@ public class LuceneSearchTools {
         }
     }
 
-    private McpSchema.ReadResourceResult querySyntaxGuide(
-            final McpSyncServerExchange exchange,
-            final McpSchema.ReadResourceRequest request) {
-
-        final String markdown = """
-            # Lucene Query Syntax - Complete Guide
-
-            ## Overview
-
-            The search tool uses **lexical matching with automatic stemming** for German and English. Stemming finds morphological variants (e.g. "Vertrag" also matches "Verträge"/"Vertrages"). Exact matches always rank highest. No automatic synonym expansion.
-
-            ## Basic Syntax
-
-            ### Simple Terms
-            ```
-            hello world
-            ```
-            Finds documents containing both "hello" AND "world" (implicit AND).
-
-            ### Phrases
-            ```
-            "exact phrase"
-            ```
-            Finds the exact phrase in that order.
-
-            ### Boolean Operators
-            ```
-            contract AND signed
-            contract OR agreement
-            NOT confidential
-            (contract OR agreement) AND signed
-            ```
-
-            ## Wildcards
-
-            | Pattern | Matches | Example | Scoring |
-            |---------|---------|---------|---------|
-            | `word*` | Suffix wildcard | `vertrag*` → vertrag, vertrags, vertragsklausel | BM25 (>= 4 chars) or constant (< 4 chars) |
-            | `?` | Single character | `te?t` → test, text | BM25 |
-            | `*word` | Leading wildcard | `*vertrag` → Arbeitsvertrag, Mietvertrag | Constant (optimized) |
-            | `*word*` | Contains | `*vertrag*` → Arbeitsvertrag, Vertragsbedingungen | Constant |
-
-            **Adaptive Prefix Scoring:**
-            - ✅ **Specific prefixes (>= 4 chars):** `vertrag*`, `contract*` get **BM25 scoring**
-              - Shorter/frequent matches rank higher (e.g., "vertrag" > "vertragsklausel")
-              - Top 50 most frequent terms are scored
-            - ✅ **Broad prefixes (< 4 chars):** `ver*`, `de*` use **constant scoring**
-              - Avoids performance impact with very broad matches
-              - All results have equal score
-            - 🚀 **Leading wildcards:** `*vertrag` use reversed field optimization (fast!)
-            - 📊 **Both-sided:** `*vertrag*` use constant scoring
-
-            **German Compound Words:** Use leading wildcards `*vertrag` to find:
-            - Arbeitsvertrag, Mietvertrag, Kaufvertrag, etc.
-
-            ## Advanced Features
-
-            ### Fuzzy Search
-            ```
-            contract~2
-            ```
-            Finds terms within Levenshtein distance 2: contract, contracts, contrct
-
-            ### Proximity Search
-            ```
-            "signed contract"~5
-            ```
-            Finds "signed" and "contract" within 5 words of each other.
-
-            ### Automatic Phrase Proximity Expansion
-
-            **Multi-word phrase queries are automatically expanded for better recall while maintaining precision:**
-
-            ```
-            Query:  "Domain Design"
-            Expands to:  ("Domain Design")^2.0 OR ("Domain Design"~3)
-            ```
-
-            **What this means:**
-            - ✅ **Exact match** "Domain Design" → **Highest score** (2.0x boost)
-            - ✅ **Near matches** "Domain-driven Design", "Domain Effective Design" → **Lower score** (within 3 words)
-            - ❌ **Too far apart** "Domain is a good Design" → **No match** (exceeds slop=3)
-
-            **When expansion occurs:**
-            - Multi-word phrase queries: `"Domain Design"` ✅
-            - Not for single words: `"Design"` (no benefit)
-            - Not if you specify slop: `"Domain Design"~5` (already set - your slop is honored)
-
-            **Benefits:**
-            - Better recall - finds variations you might miss (hyphenated, words in between)
-            - Maintains precision - exact matches always rank highest
-            - No syntax knowledge required - works automatically
-
-            ### Field-Specific Search
-            ```
-            title:report
-            content:quarterly AND author:Smith
-            ```
-
-            ## Structured Filters
-
-            Use the `filters` array for precise metadata filtering.
-
-            ### Operators
-
-            | Operator | Description | Example |
-            |----------|-------------|---------|
-            | `eq` | Exact match (default) | `{field: "language", value: "en"}` |
-            | `in` | Match any value | `{field: "file_extension", operator: "in", values: ["pdf", "docx"]}` |
-            | `not` | Exclude | `{field: "language", operator: "not", value: "unknown"}` |
-            | `not_in` | Exclude multiple | `{field: "language", operator: "not_in", values: ["unknown", ""]}` |
-            | `range` | Numeric/date range | `{field: "modified_date", operator: "range", from: "2024-01-01", to: "2024-12-31"}` |
-
-            ### Filterable Fields
-
-            **Faceted (DrillSideways):**
-            - `language`, `file_extension`, `file_type`
-            - `author`
-
-            **String (exact match):**
-            - `file_path`, `content_hash`
-
-            **Numeric/Date (range support):**
-            - `file_size`, `created_date`, `modified_date`, `indexed_date`
-
-            ### Date Format
-
-            ISO-8601 format:
-            - `2024-01-15` (date only)
-            - `2024-01-15T10:30:00` (date + time, UTC assumed)
-            - `2024-01-15T10:30:00Z` (date + time + timezone)
-
-            ### Filter Logic
-
-            - Filters on **different fields**: AND logic
-            - Filters on **same faceted field**: OR logic (DrillSideways)
-            - `not`/`not_in` filters: MUST_NOT clauses
-
-            ## Best Practices
-
-            ### 1. Synonym Expansion
-
-            ❌ Don't expect automatic synonyms:
-            ```
-            contract
-            ```
-
-            ✅ Use OR to combine synonyms:
-            ```
-            (contract OR agreement OR deal)
-            ```
-
-            ### 2. Inflections & Word Forms
-
-            ✅ Automatic stemming handles most inflections for German and English:
-            ```
-            contract
-            ```
-            Matches "contracts", "contracted", "contracting" automatically.
-
-            ⚠️ Irregular forms may not be unified (e.g. "ran" ≠ "run"). Use OR for irregulars:
-            ```
-            (run OR running OR ran)
-            ```
-
-            ### 3. Multilingual Search
-
-            ❌ Don't search in just one language:
-            ```
-            contract
-            ```
-
-            ✅ Combine terms from multiple languages:
-            ```
-            (contract OR Vertrag OR contrat)
-            ```
-
-            ### 4. German Compound Words
-
-            ❌ Won't find compounds:
-            ```
-            vertrag
-            ```
-
-            ✅ Use leading wildcard:
-            ```
-            *vertrag
-            ```
-            Finds: Arbeitsvertrag, Mietvertrag, Kaufvertrag
-
-            ### 5. Combine Query + Filters
-
-            ✅ Use query for content, filters for metadata:
-            ```json
-            {
-              "query": "(contract OR agreement) AND signed",
-              "filters": [
-                {"field": "language", "value": "en"},
-                {"field": "file_extension", "operator": "in", "values": ["pdf", "docx"]},
-                {"field": "modified_date", "operator": "range", "from": "2024-01-01"}
-              ]
-            }
-            ```
-
-            ## Unicode Normalization
-
-            The analyzer applies ICU folding:
-            - ✅ Diacritics folded: `Müller` matches `Muller`, `café` matches `cafe`
-            - ✅ Full-width characters normalized
-            - ✅ Ligatures expanded: PDF "fi" ligature → "fi"
-
-            ## What's NOT Supported
-
-            - ❌ Stemming for languages other than German and English
-            - ❌ Irregular verb unification (ran ≠ run — use OR queries)
-            - ❌ Automatic synonyms (contract ≠ agreement)
-            - ❌ Phonetic matching (Smith ≠ Smyth)
-            - ❌ Semantic search (use explicit OR queries)
-
-            ## Examples
-
-            ### Find contracts signed in 2024
-            ```json
-            {
-              "query": "(contract OR agreement) AND signed",
-              "filters": [
-                {"field": "modified_date", "operator": "range", "from": "2024-01-01", "to": "2024-12-31"}
-              ]
-            }
-            ```
-
-            ### Find German documents about "Vertrag"
-            ```json
-            {
-              "query": "*vertrag*",
-              "filters": [
-                {"field": "language", "value": "de"}
-              ]
-            }
-            ```
-
-            ### Find PDFs or Word docs, exclude drafts
-            ```json
-            {
-              "query": "report NOT draft",
-              "filters": [
-                {"field": "file_extension", "operator": "in", "values": ["pdf", "docx"]}
-              ]
-            }
-            ```
-
-            ### Filter-only search (all PDFs)
-            ```json
-            {
-              "query": null,
-              "filters": [
-                {"field": "file_extension", "value": "pdf"}
-              ]
-            }
-            ```
-
-            ## Sorting Results
-
-            Results can be sorted by relevance score (default) or metadata fields.
-
-            ### Available Sort Fields
-
-            | Sort Field | Description | Default Order |
-            |------------|-------------|---------------|
-            | `_score` | Relevance score (default) | Descending (best match first) |
-            | `modified_date` | Last modified date | Descending (most recent first) |
-            | `created_date` | Creation date | Descending (most recent first) |
-            | `file_size` | File size in bytes | Descending (largest first) |
-
-            ### Sort Orders
-
-            - `desc` - Descending (default for all fields)
-            - `asc` - Ascending
-
-            ### Sort Examples
-
-            **Most recently modified documents:**
-            ```json
-            {
-              "query": "contract",
-              "sortBy": "modified_date",
-              "sortOrder": "desc"
-            }
-            ```
-
-            **Oldest documents first:**
-            ```json
-            {
-              "query": "contract",
-              "sortBy": "created_date",
-              "sortOrder": "asc"
-            }
-            ```
-
-            **Smallest files (for quick review):**
-            ```json
-            {
-              "query": "summary",
-              "sortBy": "file_size",
-              "sortOrder": "asc"
-            }
-            ```
-
-            **Combine sorting with filters:**
-            ```json
-            {
-              "query": "*",
-              "sortBy": "modified_date",
-              "sortOrder": "desc",
-              "filters": [
-                {"field": "file_extension", "value": "pdf"},
-                {"field": "modified_date", "operator": "range", "from": "2024-01-01"}
-              ]
-            }
-            ```
-
-            **Note:** When sorting by metadata fields, relevance scores are still computed and used as a secondary sort criterion for tie-breaking.
-            """;
-
-        return new McpSchema.ReadResourceResult(
-                List.of(new McpSchema.TextResourceContents(
-                        "lucene://docs/query-syntax",
-                        "text/markdown",
-                        markdown
-                ))
-        );
-    }
-
-    private McpSchema.ReadResourceResult profilingGuide(
-            final McpSyncServerExchange exchange,
-            final McpSchema.ReadResourceRequest request) {
-
-        final String markdown = """
-            # Query Profiling Guide
-
-            ## Overview
-
-            The `profileQuery` tool helps you understand and optimize search queries by providing detailed analysis of:
-            - Query structure and rewrites
-            - Term statistics and discriminative power
-            - Filter impact and selectivity
-            - Document scoring breakdown (BM25)
-            - Performance characteristics
-
-            ## Analysis Levels
-
-            ### Level 1: Fast Analysis (Always Included, ~5-10ms)
-
-            **Automatically provided:**
-            - Query structure breakdown (BooleanQuery, TermQuery, WildcardQuery, etc.)
-            - Query rewrites (e.g., `*vertrag` → `content_reversed:gartrev*`)
-            - Term statistics (document frequency, IDF, rarity)
-            - Search metrics (total hits, filter reduction)
-            - Cost estimates per query component
-
-            ### Level 2: Filter Impact Analysis (Opt-in, ~50-200ms)
-
-            **Enable with:** `analyzeFilterImpact: true`
-
-            **Provides:**
-            - How each filter affects result count
-            - Selectivity classification (low/medium/high/very high)
-            - Execution time per filter
-
-            **Performance cost:** Requires N+1 queries (N = number of filters)
-
-            ### Level 3: Document Scoring Explanations (Opt-in, ~100-300ms)
-
-            **Enable with:** `analyzeDocumentScoring: true`
-
-            **Provides:**
-            - Detailed BM25 score breakdown for top-ranked documents
-            - Term contribution percentages
-            - Human-readable scoring summaries
-
-            **Limit:** Use `maxDocExplanations: 5` (default) or up to 10
-
-            ### Level 4: Facet Cost Analysis (Opt-in, ~20-50ms)
-
-            **Enable with:** `analyzeFacetCost: true`
-
-            **Provides:**
-            - Faceting computation overhead
-            - Cost per facet dimension
-
-            ## Performance Guidelines
-
-            | Analysis Level | Time | Queries | When to Use |
-            |---------------|------|---------|-------------|
-            | Level 1 (default) | 5-10ms | 1 | Always - minimal overhead |
-            | + Filter Impact | 50-200ms | N+1 | Debugging filter issues |
-            | + Doc Scoring | 100-300ms | 1 | Understanding ranking |
-            | + Facet Cost | 20-50ms | 2 | Performance tuning |
-            | **All levels** | **200-500ms** | **N+4** | Deep debugging only |
-
-            ## Example Usage
-
-            ### Basic: Quick performance check
-            ```json
-            {
-              "query": "contract AND signed",
-              "filters": [{"field": "language", "value": "en"}]
-            }
-            ```
-
-            ### Debug: Filter effectiveness
-            ```json
-            {
-              "query": "contract",
-              "filters": [
-                {"field": "language", "value": "en"},
-                {"field": "file_type", "value": "pdf"}
-              ],
-              "analyzeFilterImpact": true
-            }
-            ```
-
-            ### Debug: Ranking issues
-            ```json
-            {
-              "query": "(contract OR agreement) AND signed",
-              "analyzeDocumentScoring": true,
-              "maxDocExplanations": 3
-            }
-            ```
-
-            ### Full analysis
-            ```json
-            {
-              "query": "*vertrag* OR *contract*",
-              "filters": [...],
-              "analyzeFilterImpact": true,
-              "analyzeDocumentScoring": true,
-              "analyzeFacetCost": true,
-              "maxDocExplanations": 5
-            }
-            ```
-
-            ## Known Limitations
-
-            1. **Cannot explain non-matches:** Only explains documents that matched
-            2. **Automaton internals opaque:** Can't trace exact wildcard substring matches
-            3. **No passage-level scoring:** Shows document scores but not passage selection
-
-            ## Tips
-
-            1. Start with Level 1 - it's fast and often sufficient
-            2. Use Level 2 for filter tuning with many filters
-            3. Use Level 3 for ranking issues
-            4. Don't enable all levels by default - use only when debugging
-            5. Read recommendations - the tool provides actionable suggestions
-            """;
-
-        return new McpSchema.ReadResourceResult(
-                List.of(new McpSchema.TextResourceContents(
-                        "lucene://docs/profiling-guide",
-                        "text/markdown",
-                        markdown
-                ))
-        );
-    }
 
     /**
      * Returns all MCP tool specifications for registration with the MCP server.
@@ -620,11 +147,16 @@ public class LuceneSearchTools {
         tools.add(McpServerFeatures.SyncToolSpecification.builder()
                 .tool(McpSchema.Tool.builder()
                         .name("profileQuery")
-                        .description("Debug and optimize search queries. Analyzes query structure, scoring, filter impact, and performance. " +
-                                "Fast basic analysis shows term statistics and cost estimates. " +
-                                "Opt-in deep analysis (analyzeFilterImpact, analyzeDocumentScoring, analyzeFacetCost) provides detailed breakdowns but is expensive. " +
-                                "Returns LLM-optimized structured output with actionable recommendations. " +
-                                "See lucene://docs/profiling-guide for analysis level details.")
+                        .description("Debug and optimize search queries. Analyzes query structure, scoring, filter impact, and performance.\n\n" +
+                                "ANALYSIS LEVELS (cumulative):\n" +
+                                "- Level 1 (always, ~5-10ms): query structure, rewrites (e.g. *vertrag→reversed field), term stats (df/IDF/rarity), search metrics, cost estimates per clause\n" +
+                                "- Level 2 (analyzeFilterImpact=true, ~50-200ms): per-filter selectivity (low/medium/high/very high) and timing; costs N+1 queries\n" +
+                                "- Level 3 (analyzeDocumentScoring=true, ~100-300ms): BM25 breakdown per top doc, term contribution%; maxDocExplanations default=5 (max 10)\n" +
+                                "- Level 4 (analyzeFacetCost=true, ~20-50ms): facet computation overhead per dimension; costs 2 queries\n" +
+                                "- All levels combined: ~200-500ms\n\n" +
+                                "Returns structured output with actionable recommendations. " +
+                                "Start with Level 1 (fast, often sufficient). Enable deeper levels only for specific debugging: Level 2 for filter tuning, Level 3 for ranking issues.\n\n" +
+                                "LIMITATIONS: explains only matched documents; wildcard internals opaque; no passage-level scoring")
                         .inputSchema(SchemaGenerator.generateSchema(ProfileQueryRequest.class))
                         .build())
                 .callHandler((exchange, request) -> profileQuery(request.arguments()))
