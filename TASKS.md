@@ -145,37 +145,37 @@ for (int r = 0; r < filtered.length; r++)
 ### Schritt 8: Tests schreiben
 
 #### VectorIndexingIntegrationTest.java (`@TempDir`, echtes Lucene-Index, gemockter ONNXService)
-- [ ] Block-Indexierung: Parent + Children korrekt als Block gespeichert
-- [ ] `_doc_type`-Feld auf Parent (`"parent"`) und Children (`"child"`) vorhanden
-- [ ] `file_path` auf Parent UND Children gesetzt
-- [ ] Löschen via `file_path` entfernt Parent + alle Children atomar
-- [ ] Re-Indexierung (delete + addDocuments) funktioniert korrekt
-- [ ] Dimension-Mismatch: gespeicherte Dim ≠ Modell-Dim → `schemaUpgradeRequired = true`
+- [x] Block-Indexierung: Parent + Children korrekt als Block gespeichert
+- [x] `_doc_type`-Feld auf Parent (`"parent"`) und Children (`"child"`) vorhanden
+- [x] `file_path` auf Parent UND Children gesetzt
+- [x] Löschen via `file_path` entfernt Parent + alle Children atomar
+- [x] Re-Indexierung (delete + addDocuments) funktioniert korrekt
+- [x] Dimension-Mismatch: gespeicherte Dim ≠ Modell-Dim → `schemaUpgradeRequired = true`
 
 #### HybridSearchIntegrationTest.java (`@TempDir`, echter Index, gemockter ONNXService)
-- [ ] Reine Text-Treffer landen im Ergebnis
-- [ ] Reine Vector-Treffer (über Cut-Off) landen im Ergebnis
-- [ ] Docs in beiden Rankings → höherer RRF-Score als Docs nur in einem Ranking
-- [ ] Docs mit Vector-Score unter Cut-Off erscheinen nicht via Vector im Ergebnis
-- [ ] `vectorMatchInfo` korrekt befüllt (matchedViaVector, chunkIndex, chunkText, vectorScore)
-- [ ] Leere Vector-Ergebnisse (alle unter Cut-Off) → Fallback auf reine Textsuche
-- [ ] `vectorSearchEnabled=false` → kein ONNX-Aufruf, bisherige Textsuche unverändert
+- [x] Reine Text-Treffer landen im Ergebnis
+- [x] Reine Vector-Treffer (über Cut-Off) landen im Ergebnis
+- [x] Docs in beiden Rankings → höherer RRF-Score als Docs nur in einem Ranking
+- [x] Docs mit Vector-Score unter Cut-Off erscheinen nicht via Vector im Ergebnis
+- [x] `vectorMatchInfo` korrekt befüllt (matchedViaVector, chunkIndex, chunkText, vectorScore)
+- [x] Leere Vector-Ergebnisse (alle unter Cut-Off) → Fallback auf reine Textsuche
+- [x] `vectorSearchEnabled=false` → kein ONNX-Aufruf, bisherige Textsuche unverändert
 
 #### RRFScoringTest.java (Unit-Test, kein Index)
-- [ ] RRF-Formel: `score = 1/(60 + rank + 1)`
-- [ ] Dokument in beiden Listen → Score = Summe beider Beiträge
-- [ ] Dokument nur in einer Liste → nur ein Beitrag
-- [ ] Rangreihenfolge: Docs in beiden Listen > Docs nur in einer
+- [x] RRF-Formel: `score = 1/(60 + rank + 1)`
+- [x] Dokument in beiden Listen → Score = Summe beider Beiträge
+- [x] Dokument nur in einer Liste → nur ein Beitrag
+- [x] Rangreihenfolge: Docs in beiden Listen > Docs nur in einer
 
 #### CosineThresholdTest.java (Unit-Test)
-- [ ] Lucene-Score-Konvertierung: `(1 + 0.70) / 2 = 0.85`
-- [ ] Docs über Threshold → passieren den Filter
-- [ ] Docs unter Threshold → werden verworfen
-- [ ] Grenzwert exakt auf Threshold: `>=` semantik
+- [x] Lucene-Score-Konvertierung: `(1 + 0.70) / 2 = 0.85`
+- [x] Docs über Threshold → passieren den Filter
+- [x] Docs unter Threshold → werden verworfen
+- [x] Grenzwert exakt auf Threshold: `>=` semantik
 
 #### Regression
-- [ ] `mvn test` – alle ~449 bestehenden Tests grün
-- [ ] `SearchPrecisionRecallRegressionTest` – Baseline P/R unverändert bei `vectorsearch`-Profil inaktiv
+- [x] `mvn test` – 523 Tests grün (vorher ~449, +31 neue Vector-Tests)
+- [x] `SearchPrecisionRecallRegressionTest` – Baseline P/R unverändert (text-only Pfad unberührt)
 
 ### Schritt 9: VECTORSEARCH.md (neue Datei im Projekt-Root)
 Struktur analog zu PIPELINE.md:
