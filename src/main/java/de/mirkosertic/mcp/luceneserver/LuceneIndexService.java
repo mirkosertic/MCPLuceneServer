@@ -4,6 +4,7 @@ import de.mirkosertic.mcp.luceneserver.ProximityExpandingQueryParser;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
+import de.mirkosertic.mcp.luceneserver.onnx.ONNXService;
 import de.mirkosertic.mcp.luceneserver.util.TextCleaner;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ActiveFilter;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.DocumentScoringExplanation;
@@ -45,6 +46,8 @@ import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.PointValues;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.search.join.QueryBitSetProducer;
+import org.apache.lucene.search.KnnFloatVectorQuery;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.index.Term;
@@ -154,6 +157,16 @@ public class LuceneIndexService {
     private final String indexPath;
     private volatile long nrtRefreshIntervalMs;
 
+    /** Nullable: non-null only when vector search is enabled. */
+    private final ONNXService onnxService;
+
+    /**
+     * BitSet producer used for block-join parent filtering.
+     * Identifies parent documents (those with _doc_type = "parent") within each segment.
+     */
+    private final QueryBitSetProducer parentFilter = new QueryBitSetProducer(
+            new TermQuery(new Term(DocumentIndexer.DOC_TYPE_FIELD, DocumentIndexer.DOC_TYPE_PARENT)));
+
     private Directory directory;
     private IndexWriter indexWriter;
     private SearcherManager searcherManager;
@@ -189,9 +202,17 @@ public class LuceneIndexService {
         return t;
     });
 
+    /** Convenience constructor without vector search (onnxService = null). */
     public LuceneIndexService(final ApplicationConfig config,
                               final DocumentIndexer documentIndexer) {
+        this(config, documentIndexer, null);
+    }
+
+    public LuceneIndexService(final ApplicationConfig config,
+                              final DocumentIndexer documentIndexer,
+                              final ONNXService onnxService) {
         this.config = config;
+        this.onnxService = onnxService;
         final Analyzer defaultAnalyzer = new UnicodeNormalizingAnalyzer();
         this.deLemmatizer = new OpenNLPLemmatizingAnalyzer("de", true);
         this.enLemmatizer = new OpenNLPLemmatizingAnalyzer("en", true);
@@ -230,6 +251,7 @@ public class LuceneIndexService {
 
         // Check if index exists and read schema version
         int storedSchemaVersion = -1;
+        int storedEmbeddingDimension = 0;
         boolean indexExists = false;
         if (DirectoryReader.indexExists(directory)) {
             indexExists = true;
@@ -242,6 +264,11 @@ public class LuceneIndexService {
                 } else {
                     logger.warn("Existing index has no schema version (legacy index)");
                 }
+                final String embDimStr = userData.get("embedding_dimension");
+                if (embDimStr != null) {
+                    storedEmbeddingDimension = Integer.parseInt(embDimStr);
+                    logger.info("Existing index has embedding_dimension: {}", storedEmbeddingDimension);
+                }
             }
         }
 
@@ -250,11 +277,16 @@ public class LuceneIndexService {
         config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
         indexWriter = new IndexWriter(directory, config);
 
-        // Set commit user data with current schema version and software version
-        indexWriter.setLiveCommitData(Map.of(
-                "schema_version", String.valueOf(DocumentIndexer.SCHEMA_VERSION),
-                "software_version", BuildInfo.getVersion()
-        ).entrySet());
+        // Build commit metadata map: schema_version + software_version + optional embedding_dimension
+        final Map<String, String> commitData = new java.util.LinkedHashMap<>();
+        commitData.put("schema_version", String.valueOf(DocumentIndexer.SCHEMA_VERSION));
+        commitData.put("software_version", BuildInfo.getVersion());
+        if (onnxService != null) {
+            commitData.put("embedding_dimension", String.valueOf(onnxService.getHiddenSize()));
+        }
+
+        // Set commit user data with current schema version, software version, and embedding dimension
+        indexWriter.setLiveCommitData(commitData.entrySet());
 
         // Commit to ensure index files and metadata are created
         indexWriter.commit();
@@ -271,6 +303,14 @@ public class LuceneIndexService {
                         storedSchemaVersion, DocumentIndexer.SCHEMA_VERSION);
             } else {
                 logger.info("Schema version matches: {}", storedSchemaVersion);
+            }
+
+            // Check embedding dimension mismatch when vector search is enabled
+            if (onnxService != null && storedEmbeddingDimension > 0
+                    && storedEmbeddingDimension != onnxService.getHiddenSize()) {
+                schemaUpgradeRequired = true;
+                logger.warn("Schema upgrade required: embedding dimension mismatch " +
+                        "(stored={}, current={})", storedEmbeddingDimension, onnxService.getHiddenSize());
             }
         } else {
             logger.info("New index created with schema version: {}", DocumentIndexer.SCHEMA_VERSION);
@@ -350,6 +390,93 @@ public class LuceneIndexService {
 
     public IndexWriter getIndexWriter() {
         return indexWriter;
+    }
+
+    /**
+     * Index a single document, optionally with block-join child chunk documents when
+     * vector search is enabled.
+     *
+     * <p>When {@code onnxService} is non-null and the document has content, the content
+     * is embedded with late chunking and the resulting child chunk documents are prepended
+     * to the parent in a block-join block (children first, parent last) so that
+     * {@link KnnFloatVectorQuery} with a ToParentBlockJoinQuery can find the parent
+     * document by its nearest-neighbour chunk.</p>
+     *
+     * <p>When {@code onnxService} is null (vector search disabled) or the content is
+     * blank, falls back to the standard single-document indexing path.</p>
+     *
+     * @param filePath  the file path of the document (used as the unique key)
+     * @param parentDoc the parent {@link Document} created by {@link de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer#createDocument}
+     * @param content   the raw text content of the document (may be null or blank)
+     * @throws IOException if writing to the index fails
+     */
+    public void indexDocument(final java.nio.file.Path filePath,
+                              final Document parentDoc,
+                              final String content) throws IOException {
+        if (onnxService != null && content != null && !content.isBlank()) {
+            try {
+                final List<float[]> embeddings = onnxService.embedWithLateChunking(
+                        content, ONNXService.PASSAGE_PREFIX, ONNXService.DEFAULT_BATCH_SIZE);
+
+                if (!embeddings.isEmpty()) {
+                    // Build approximate chunk texts by splitting content into equal character parts
+                    final List<String> chunkTexts = splitContentIntoChunks(content, embeddings.size());
+
+                    // Build faceted parent document first
+                    final Document facetedParent = documentIndexer.getFacetsConfig().build(parentDoc);
+
+                    // Create child documents
+                    final List<Document> children = documentIndexer.createChildDocuments(
+                            filePath.toString(), embeddings, chunkTexts);
+
+                    // Block join: children first, parent last
+                    final List<Document> block = new ArrayList<>(children.size() + 1);
+                    block.addAll(children);
+                    block.add(facetedParent);
+
+                    // Delete old block (parent + its children) before inserting new block
+                    indexWriter.deleteDocuments(new Term("file_path", filePath.toString()));
+                    indexWriter.addDocuments(block);
+                    return;
+                }
+            } catch (final Exception e) {
+                logger.warn("Embedding failed for '{}', falling back to standard indexing: {}",
+                        filePath, e.getMessage());
+            }
+        }
+
+        // Fallback: standard single-document path (no vector embeddings)
+        documentIndexer.indexDocument(indexWriter, parentDoc);
+    }
+
+    /**
+     * Split content into approximately equal character-length chunks.
+     *
+     * @param content    the full document content
+     * @param numChunks  number of chunks to produce (must be &gt; 0)
+     * @return list of chunk strings, size == numChunks
+     */
+    private static List<String> splitContentIntoChunks(final String content, final int numChunks) {
+        if (numChunks <= 1) {
+            return List.of(content);
+        }
+        final int len = content.length();
+        final int chunkSize = Math.max(1, len / numChunks);
+        final List<String> chunks = new ArrayList<>(numChunks);
+        int start = 0;
+        for (int i = 0; i < numChunks; i++) {
+            final int end = (i == numChunks - 1) ? len : Math.min(start + chunkSize, len);
+            chunks.add(content.substring(start, end));
+            start = end;
+            if (start >= len) {
+                // Fill remaining slots with empty string placeholder if content is exhausted
+                while (chunks.size() < numChunks) {
+                    chunks.add("");
+                }
+                break;
+            }
+        }
+        return chunks;
     }
 
     /**
@@ -589,9 +716,18 @@ public class LuceneIndexService {
             );
             final Set<String> queryTerms = extractQueryTerms(highlightQuery);
 
-            // 8. Collect results for the requested page
+            // 8. Optional hybrid search: merge text results with vector results via RRF
+            final ScoreDoc[] mergedScoreDocs;
+            if (onnxService != null && queryString != null && !queryString.isBlank()) {
+                mergedScoreDocs = mergeWithVectorResults(
+                        queryString, topDocs.scoreDocs, searcher, pageSize);
+            } else {
+                mergedScoreDocs = topDocs.scoreDocs;
+            }
+
+            // 9. Collect results for the requested page
             final List<SearchDocument> results = new ArrayList<>();
-            final ScoreDoc[] scoreDocs = topDocs.scoreDocs;
+            final ScoreDoc[] scoreDocs = mergedScoreDocs;
 
             for (int i = startIndex; i < scoreDocs.length && i < maxResults; i++) {
                 final Document doc = searcher.storedFields().document(scoreDocs[i].doc);
@@ -622,13 +758,109 @@ public class LuceneIndexService {
                 results.add(searchDoc);
             }
 
-            // 8. Compute active filters
+            // 10. Compute active filters
             final List<ActiveFilter> activeFilters = computeActiveFilters(filters, facets);
 
             return new SearchResult(results, totalHits, page, pageSize, facets, activeFilters,
                     facetBuildResult.perFieldDurationMicros(), facetBuildResult.totalDurationMicros());
         } finally {
             searcherManager.release(searcher);
+        }
+    }
+
+    /**
+     * Merge text search results with vector (KNN) results using Reciprocal Rank Fusion (RRF).
+     *
+     * <p>For each child document returned by the KNN query, retrieves its parent document
+     * via a term query on the {@code file_path} field, then merges the text rank and vector
+     * rank using the RRF formula {@code 1 / (60 + rank + 1)}.  Returns the top {@code pageSize}
+     * merged results as a new {@link ScoreDoc} array.</p>
+     *
+     * @param queryString  the raw query string used to derive the query embedding
+     * @param textDocs     the text-search ScoreDoc array (ranked by BM25/stemmed score)
+     * @param searcher     the current IndexSearcher
+     * @param pageSize     maximum number of results to return
+     * @return merged and re-ranked ScoreDoc array
+     */
+    private ScoreDoc[] mergeWithVectorResults(final String queryString,
+                                              final ScoreDoc[] textDocs,
+                                              final IndexSearcher searcher,
+                                              final int pageSize) {
+        try {
+            final float[] queryVector = onnxService.embed(queryString, ONNXService.QUERY_PREFIX);
+            final int vectorK = 50;
+            final KnnFloatVectorQuery knnQuery = new KnnFloatVectorQuery("embedding", queryVector, vectorK);
+            final TopDocs vectorTopDocs = searcher.search(knnQuery, vectorK);
+
+            final float cosineCutoff = 0.70f;
+            // DOT_PRODUCT similarity in Lucene returns a score in (0, 1] for normalized vectors.
+            // Convert cosine threshold: score = (1 + cosine) / 2
+            final float luceneThreshold = (1f + cosineCutoff) / 2f;
+
+            // Build map: textDocId → textRank (0-based)
+            final Map<Integer, Integer> textRankByDocId = new HashMap<>();
+            for (int i = 0; i < textDocs.length; i++) {
+                textRankByDocId.put(textDocs[i].doc, i);
+            }
+
+            // Resolve vector child doc IDs → parent doc IDs via file_path field
+            final Map<Integer, Integer> parentDocIdByVectorRank = new LinkedHashMap<>();
+            for (int vRank = 0; vRank < vectorTopDocs.scoreDocs.length; vRank++) {
+                final ScoreDoc childScoreDoc = vectorTopDocs.scoreDocs[vRank];
+                // Apply cosine similarity threshold
+                if (childScoreDoc.score < luceneThreshold) {
+                    continue;
+                }
+                try {
+                    final Document childDoc = searcher.storedFields().document(childScoreDoc.doc);
+                    final String filePath = childDoc.get("file_path");
+                    if (filePath == null) {
+                        continue;
+                    }
+                    // Find the parent document with this file_path that is a parent doc type
+                    final Query parentQuery = new BooleanQuery.Builder()
+                            .add(new TermQuery(new Term("file_path", filePath)), BooleanClause.Occur.MUST)
+                            .add(new TermQuery(new Term(DocumentIndexer.DOC_TYPE_FIELD,
+                                    DocumentIndexer.DOC_TYPE_PARENT)), BooleanClause.Occur.MUST)
+                            .build();
+                    final TopDocs parentHits = searcher.search(parentQuery, 1);
+                    if (parentHits.totalHits.value() > 0) {
+                        final int parentDocId = parentHits.scoreDocs[0].doc;
+                        // Record first (best-ranked) child hit per parent
+                        parentDocIdByVectorRank.putIfAbsent(parentDocId, vRank);
+                    }
+                } catch (final IOException e) {
+                    logger.debug("Error resolving parent for vector child doc {}", childScoreDoc.doc);
+                }
+            }
+
+            // RRF merge: combine text rank and vector rank
+            // Score = 1/(60+rank+1) for each list; sum scores
+            final Map<Integer, Float> rrfScores = new HashMap<>();
+
+            // Text results contribute to RRF
+            for (int tRank = 0; tRank < textDocs.length; tRank++) {
+                final int docId = textDocs[tRank].doc;
+                rrfScores.merge(docId, 1.0f / (60 + tRank + 1), Float::sum);
+            }
+
+            // Vector results contribute to RRF (parent doc IDs)
+            for (final Map.Entry<Integer, Integer> entry : parentDocIdByVectorRank.entrySet()) {
+                final int parentDocId = entry.getKey();
+                final int vRank = entry.getValue();
+                rrfScores.merge(parentDocId, 1.0f / (60 + vRank + 1), Float::sum);
+            }
+
+            // Sort by RRF score descending and return top pageSize results
+            return rrfScores.entrySet().stream()
+                    .sorted(Map.Entry.<Integer, Float>comparingByValue(Comparator.reverseOrder()))
+                    .limit(pageSize)
+                    .map(e -> new ScoreDoc(e.getKey(), e.getValue()))
+                    .toArray(ScoreDoc[]::new);
+
+        } catch (final Exception e) {
+            logger.warn("Vector search failed, falling back to text-only: {}", e.getMessage());
+            return textDocs;
         }
     }
 
@@ -1360,11 +1592,16 @@ public class LuceneIndexService {
         config.setOpenMode(IndexWriterConfig.OpenMode.CREATE);
         indexWriter = new IndexWriter(directory, config);
 
-        // Set commit user data with current schema version and software version
-        indexWriter.setLiveCommitData(Map.of(
-                "schema_version", String.valueOf(DocumentIndexer.SCHEMA_VERSION),
-                "software_version", BuildInfo.getVersion()
-        ).entrySet());
+        // Build commit metadata map: schema_version + software_version + optional embedding_dimension
+        final Map<String, String> reinitCommitData = new java.util.LinkedHashMap<>();
+        reinitCommitData.put("schema_version", String.valueOf(DocumentIndexer.SCHEMA_VERSION));
+        reinitCommitData.put("software_version", BuildInfo.getVersion());
+        if (onnxService != null) {
+            reinitCommitData.put("embedding_dimension", String.valueOf(onnxService.getHiddenSize()));
+        }
+
+        // Set commit user data with current schema version, software version, and embedding dimension
+        indexWriter.setLiveCommitData(reinitCommitData.entrySet());
 
         indexWriter.commit();
         searcherManager = new SearcherManager(indexWriter, null);

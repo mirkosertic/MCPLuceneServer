@@ -54,9 +54,26 @@ public class LuceneserverApplication {
         // DocumentIndexer must be created first as LuceneIndexService depends on it
         final DocumentIndexer documentIndexer = new DocumentIndexer();
 
+        // Initialize ONNXService here so its hidden_size is available to LuceneIndexService
+        // for embedding dimension checks during index initialization.
+        if (config.isVectorSearchEnabled()) {
+            final String modelName = System.getProperty("vector.model", "e5-base");
+            logger.info("Vector search enabled — loading ONNX model '{}'", modelName);
+            try {
+                onnxService = new ONNXService(modelName);
+                logger.info("Vector search active: model='{}' hidden_size={}", modelName, onnxService.getHiddenSize());
+            } catch (final Exception e) {
+                throw new RuntimeException("Failed to initialize ONNXService for vector search", e);
+            }
+        } else {
+            onnxService = null;
+            logger.info("Vector search not active (vectorsearch profile not set)");
+        }
+
         this.indexService = new LuceneIndexService(
                 config,
-                documentIndexer
+                documentIndexer,
+                onnxService
         );
 
         this.notificationService = new NotificationService();
@@ -115,21 +132,6 @@ public class LuceneserverApplication {
         if (indexService.isSchemaUpgradeRequired()) {
             logger.warn("Schema version changed — triggering full reindex");
             crawlerService.startCrawl(true);
-        }
-
-        // Initialize ONNX / vector search if the vectorsearch profile is active
-        if (config.isVectorSearchEnabled()) {
-            final String modelName = System.getProperty("vector.model", "e5-base");
-            logger.info("Vector search enabled — loading ONNX model '{}'", modelName);
-            try {
-                onnxService = new ONNXService(modelName);
-                logger.info("Vector search active: model='{}' hidden_size={}", modelName, onnxService.getHiddenSize());
-            } catch (final Exception e) {
-                throw new IOException("Failed to initialize ONNXService for vector search", e);
-            }
-        } else {
-            onnxService = null;
-            logger.info("Vector search not active (vectorsearch profile not set)");
         }
 
         logger.info("All services initialized successfully");
