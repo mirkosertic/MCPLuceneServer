@@ -83,11 +83,11 @@ for (int r = 0; r < filtered.length; r++)
 - [x] `lucene-join` Dependency hinzufügen (Lucene 10.4.0, für `ToParentBlockJoinQuery`, `QueryBitSetProducer`)
 
 ### Schritt 2: ApplicationConfig.java
-- [ ] Profil-Property `-Dspring.profiles.active` als **komma-separierte Liste** parsen
+- [x] Profil-Property `-Dspring.profiles.active` als **komma-separierte Liste** parsen
   - `"deployed".equalsIgnoreCase(profile)` → `profiles.contains("deployed")`
   - Neues Flag: `vectorSearchEnabled = profiles.contains("vectorsearch")`
   - Getter `isVectorSearchEnabled()` hinzufügen
-- [ ] Bestehende `deployedMode`-Logik bleibt unverändert
+- [x] Bestehende `deployedMode`-Logik bleibt unverändert
 
 ### Schritt 3: LuceneserverApplication.java
 - [ ] Logging-Configurator-Aufruf auf Listen-Parsing umstellen (analog ApplicationConfig)

@@ -71,6 +71,7 @@ public class ApplicationConfig {
 
     // Profile settings
     private boolean deployedMode = false;
+    private boolean vectorSearchEnabled = false;
 
     private ApplicationConfig() {
     }
@@ -93,8 +94,8 @@ public class ApplicationConfig {
         // Step 4: Determine profile/mode
         config.determineProfile();
 
-        logger.info("Configuration loaded: indexPath={}, directories={}, deployedMode={}",
-                config.indexPath, config.directories.size(), config.deployedMode);
+        logger.info("Configuration loaded: indexPath={}, directories={}, deployedMode={}, vectorSearchEnabled={}",
+                config.indexPath, config.directories.size(), config.deployedMode, config.vectorSearchEnabled);
 
         return config;
     }
@@ -262,9 +263,17 @@ public class ApplicationConfig {
 
     private void determineProfile() {
         // Check system property for profile (supports both old Spring-style and new style)
-        final String profile = System.getProperty(PROP_PROFILES_ACTIVE,
+        final String profilesRaw = System.getProperty(PROP_PROFILES_ACTIVE,
                 System.getProperty("profile", "default"));
-        this.deployedMode = "deployed".equalsIgnoreCase(profile);
+        final List<String> profiles = new ArrayList<>();
+        for (final String p : profilesRaw.split(",")) {
+            final String trimmed = p.trim().toLowerCase();
+            if (!trimmed.isEmpty()) {
+                profiles.add(trimmed);
+            }
+        }
+        this.deployedMode = profiles.contains("deployed");
+        this.vectorSearchEnabled = profiles.contains("vectorsearch");
     }
 
     /**
@@ -397,6 +406,10 @@ public class ApplicationConfig {
 
     public boolean isDeployedMode() {
         return deployedMode;
+    }
+
+    public boolean isVectorSearchEnabled() {
+        return vectorSearchEnabled;
     }
 
     public boolean isReconciliationEnabled() {
