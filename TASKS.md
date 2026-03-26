@@ -103,9 +103,9 @@ for (int r = 0; r < filtered.length; r++)
 - [x] Methode `getHiddenSize()` sicherstellen (für Dimension-Mismatch-Check)
 
 ### Schritt 5: DocumentIndexer.java (SCHEMA_VERSION 8 → 9)
-- [ ] `SCHEMA_VERSION` von 8 auf **9** bumpen
-- [ ] `_doc_type` StringField auf Parent-Docs: `"parent"`
-- [ ] Neue Methode `createChildDocuments(String filePath, List<float[]> embeddings, List<String> chunkTexts)`:
+- [x] `SCHEMA_VERSION` von 8 auf **9** bumpen
+- [x] `_doc_type` StringField auf Parent-Docs: `"parent"`
+- [x] Neue Methode `createChildDocuments(String filePath, List<float[]> embeddings, List<String> chunkTexts)`:
   - Jedes Child-Doc enthält:
     - `_doc_type` = `"child"` (StringField, stored)
     - `file_path` (StringField, stored) – für atomares Löschen

@@ -3,6 +3,7 @@ package de.mirkosertic.mcp.luceneserver.crawler;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
+import org.apache.lucene.document.KnnFloatVectorField;
 import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
@@ -11,6 +12,7 @@ import org.apache.lucene.facet.FacetsConfig;
 import org.apache.lucene.facet.sortedset.SortedSetDocValuesFacetField;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.Term;
+import org.apache.lucene.index.VectorSimilarityFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,6 +23,8 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -41,8 +45,18 @@ public class DocumentIndexer {
      * Version 7: Added content_translit_de field for German umlaut digraph transliteration (ae→ä, oe→ö, ue→ü).
      * Version 8: Added TypeTokenFilter and CompoundLemmaSplittingFilter to OpenNLPLemmatizingAnalyzer chain
      *            to filter punctuation tokens and split German compound lemmas (e.g., "in+der" → "in", "der").
+     * Version 9: Added _doc_type field to parent documents and child document support with KNN vector embeddings.
      */
-    public static final int SCHEMA_VERSION = 8;
+    public static final int SCHEMA_VERSION = 9;
+
+    /** Field name used to distinguish parent documents from child (chunk) documents. */
+    public static final String DOC_TYPE_FIELD = "_doc_type";
+
+    /** Value stored in {@link #DOC_TYPE_FIELD} for full parent documents. */
+    public static final String DOC_TYPE_PARENT = "parent";
+
+    /** Value stored in {@link #DOC_TYPE_FIELD} for embedding child chunk documents. */
+    public static final String DOC_TYPE_CHILD = "child";
 
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;
@@ -59,6 +73,9 @@ public class DocumentIndexer {
 
     public Document createDocument(final Path filePath, final ExtractedDocument extracted) {
         final Document doc = new Document();
+
+        // _doc_type - marks this as a parent document
+        doc.add(new StringField(DOC_TYPE_FIELD, DOC_TYPE_PARENT, Field.Store.YES));
 
         // file_path - unique ID (not analyzed, stored)
         doc.add(new StringField("file_path", filePath.toString(), Field.Store.YES));
@@ -194,6 +211,28 @@ public class DocumentIndexer {
         }
 
         return doc;
+    }
+
+    /**
+     * Creates child documents for a parent file, each holding one text chunk and its embedding vector.
+     *
+     * @param filePath   the file path of the parent document (used to join child back to parent)
+     * @param embeddings list of embedding vectors, one per chunk
+     * @param chunkTexts list of chunk text strings, parallel to {@code embeddings}
+     * @return list of Lucene documents ready to be added to the index
+     */
+    public List<Document> createChildDocuments(final String filePath, final List<float[]> embeddings, final List<String> chunkTexts) {
+        final List<Document> children = new ArrayList<>(embeddings.size());
+        for (int i = 0; i < embeddings.size(); i++) {
+            final Document child = new Document();
+            child.add(new StringField(DOC_TYPE_FIELD, DOC_TYPE_CHILD, Field.Store.YES));
+            child.add(new StringField("file_path", filePath, Field.Store.YES));
+            child.add(new StoredField("chunk_index", i));
+            child.add(new StoredField("chunk_text", chunkTexts.get(i)));
+            child.add(new KnnFloatVectorField("embedding", embeddings.get(i), VectorSimilarityFunction.DOT_PRODUCT));
+            children.add(child);
+        }
+        return children;
     }
 
     public void indexDocument(final IndexWriter writer, final Document document) throws IOException {
