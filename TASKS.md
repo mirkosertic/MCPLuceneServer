@@ -90,11 +90,11 @@ for (int r = 0; r < filtered.length; r++)
 - [x] Bestehende `deployedMode`-Logik bleibt unverändert
 
 ### Schritt 3: LuceneserverApplication.java
-- [ ] Logging-Configurator-Aufruf auf Listen-Parsing umstellen (analog ApplicationConfig)
-- [ ] `ONNXService` nur instantiieren wenn `config.isVectorSearchEnabled()`
-- [ ] Model-Auswahl: `System.getProperty("vector.model", "e5-base")` → `/onnxmodels/{model}/`
-- [ ] `ONNXService`-Konstruktor empfängt Modellpfad-Prefix als Parameter
-- [ ] Startup-Log: gewähltes Modell + detektierte Dimension wenn `vectorsearch` aktiv
+- [x] Logging-Configurator-Aufruf auf Listen-Parsing umstellen (analog ApplicationConfig)
+- [x] `ONNXService` nur instantiieren wenn `config.isVectorSearchEnabled()`
+- [x] Model-Auswahl: `System.getProperty("vector.model", "e5-base")` → `/onnxmodels/{model}/`
+- [ ] `ONNXService`-Konstruktor empfängt Modellpfad-Prefix als Parameter (TODO in Schritt 4)
+- [x] Startup-Log: gewähltes Modell + detektierte Dimension wenn `vectorsearch` aktiv
 
 ### Schritt 4: ONNXService.java
 - [ ] Konstruktor parametrisieren: `ONNXService(String modelName)` statt hardcoded e5-large

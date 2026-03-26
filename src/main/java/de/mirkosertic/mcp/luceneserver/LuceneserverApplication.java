@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.config.LoggingConfigurator;
+import de.mirkosertic.mcp.luceneserver.onnx.ONNXService;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlExecutorService;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlStatisticsTracker;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlerConfigurationManager;
@@ -41,6 +42,7 @@ public class LuceneserverApplication {
     private final DirectoryWatcherService watcherService;
     private final DocumentCrawlerService crawlerService;
     private final LuceneSearchTools searchTools;
+    private ONNXService onnxService;
     private McpSyncServer mcpSyncServer;
     private McpSyncServer mcpStreamableSyncServer;
     private TransportFactory.HttpTransportWrapper httpTransport;
@@ -113,6 +115,23 @@ public class LuceneserverApplication {
         if (indexService.isSchemaUpgradeRequired()) {
             logger.warn("Schema version changed — triggering full reindex");
             crawlerService.startCrawl(true);
+        }
+
+        // Initialize ONNX / vector search if the vectorsearch profile is active
+        if (config.isVectorSearchEnabled()) {
+            // TODO (Schritt 4): ONNXService currently hardcodes e5-large; pass model name once
+            // the constructor accepts a modelName parameter.
+            final String modelName = System.getProperty("vector.model", "e5-base");
+            logger.info("Vector search enabled — loading ONNX model '{}' (note: model selection via constructor not yet supported, using hardcoded e5-large)", modelName);
+            try {
+                onnxService = new ONNXService();
+                logger.info("Vector search active: model='{}' (ONNX session ready)", modelName);
+            } catch (final Exception e) {
+                throw new IOException("Failed to initialize ONNXService for vector search", e);
+            }
+        } else {
+            onnxService = null;
+            logger.info("Vector search not active (vectorsearch profile not set)");
         }
 
         logger.info("All services initialized successfully");
@@ -275,6 +294,14 @@ public class LuceneserverApplication {
         }
 
         try {
+            if (onnxService != null) {
+                onnxService.close();
+            }
+        } catch (final Exception e) {
+            logger.error("Error closing ONNX service", e);
+        }
+
+        try {
             indexService.close();
         } catch (final Exception e) {
             logger.error("Error closing index service", e);
@@ -285,15 +312,19 @@ public class LuceneserverApplication {
 
     public static void main(final String[] args) {
         try {
-            // Configure logging FIRST, before any other code that might log
-            // Check system property directly to avoid logging during config load
-            final boolean deployedMode = "deployed".equals(System.getProperty("spring.profiles.active"));
-            LoggingConfigurator.configure(deployedMode);
-
-            // Now load configuration (its logging will go to the right place)
+            // Load configuration first so that profile parsing (deployed, vectorsearch, ...)
+            // is done in one place via ApplicationConfig.determineProfile().
+            // Note: ApplicationConfig.load() may emit a few log lines before the logging
+            // configurator runs; those go to the SLF4J default destination which is
+            // acceptable because they are informational only.
             final ApplicationConfig config = ApplicationConfig.load();
 
-            if (!deployedMode) {
+            // Configure logging based on the already-parsed profile flags.
+            // Using config.isDeployedMode() correctly handles comma-separated profiles
+            // such as "deployed,vectorsearch" without a second manual parse.
+            LoggingConfigurator.configure(config.isDeployedMode());
+
+            if (!config.isDeployedMode()) {
                 logger.info("Running in development mode (console logging enabled)");
                 logger.info("Index path: {}", config.getIndexPath());
                 logger.info("Configured directories: {}", config.getDirectories());
