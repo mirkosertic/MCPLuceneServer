@@ -179,14 +179,14 @@ for (int r = 0; r < filtered.length; r++)
 
 ### Schritt 9: VECTORSEARCH.md (neue Datei im Projekt-Root)
 Struktur analog zu PIPELINE.md:
-- [ ] **1. Overview** – Warum Hybrid Search? Grenzen reiner Volltextsuche, semantische Lücke
-- [ ] **2. Konzept: Late Chunking** – Was ist Late Chunking, Unterschied zu naivem Chunking, Kontextualisierung durch Modell
-- [ ] **3. Indexierungspipeline** – Parent-Doc (bestehend) + Child-Docs (Chunks + Embedding), Block-Join-Struktur, `_doc_type`-Feld, Dimension-Mismatch-Erkennung
-- [ ] **4. Suchanfrage-Pipeline** – Query-Embedding, `KnnFloatVectorQuery`, Cosine Cut-Off, Child→Parent-Promotion, RRF-Merge
-- [ ] **5. Scoring & Ranking** – RRF-Formel (`1/(60+rank)`), warum RRF statt Boost-Faktor, `vectorMatchInfo` im Response
-- [ ] **6. Aktivierung & Konfiguration** – Profil `vectorsearch`, System Property `vector.model`, Cut-Off-Wert, k-Parameter
-- [ ] **7. Modelle** – e5-base vs. e5-large (Dimensionen, Performance), Link auf [ONNX.md](ONNX.md)
-- [ ] **8. Technische Hinweise** – Bekannte Einschränkungen (DrillSideways, Score-Skalen), Mixed-Index-Zustand bei Profil-Wechsel
+- [x] **1. Overview** – Warum Hybrid Search? Grenzen reiner Volltextsuche, semantische Lücke
+- [x] **2. Konzept: Late Chunking** – Was ist Late Chunking, Unterschied zu naivem Chunking, Kontextualisierung durch Modell
+- [x] **3. Indexierungspipeline** – Parent-Doc (bestehend) + Child-Docs (Chunks + Embedding), Block-Join-Struktur, `_doc_type`-Feld, Dimension-Mismatch-Erkennung
+- [x] **4. Suchanfrage-Pipeline** – Query-Embedding, `KnnFloatVectorQuery`, Cosine Cut-Off, Child→Parent-Promotion, RRF-Merge
+- [x] **5. Scoring & Ranking** – RRF-Formel (`1/(60+rank)`), warum RRF statt Boost-Faktor, `vectorMatchInfo` im Response
+- [x] **6. Aktivierung & Konfiguration** – Profil `vectorsearch`, System Property `vector.model`, Cut-Off-Wert, k-Parameter
+- [x] **7. Modelle** – e5-base vs. e5-large (Dimensionen, Performance), Link auf [ONNX.md](ONNX.md)
+- [x] **8. Technische Hinweise** – Bekannte Einschränkungen (DrillSideways, Score-Skalen), Mixed-Index-Zustand bei Profil-Wechsel
 
 ### Schritt 10: README.md aktualisieren
 - [ ] Neue Sektion **"Semantic / Hybrid Search"** mit Kurzübersicht + Link auf `VECTORSEARCH.md`
