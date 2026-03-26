@@ -52,8 +52,12 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - Flexible configuration via YAML and system properties
 - Cross-platform notifications (macOS Notification Center, Windows Toast, Linux notify-send)
 
+🧠 **Semantic / Hybrid Search**
+- Optional vector search using multilingual-e5 embeddings with Late Chunking, combined with BM25 via Reciprocal Rank Fusion (RRF). See [VECTORSEARCH.md](VECTORSEARCH.md) for details.
+
 ## Table of Contents
 
+- [Documentation](#documentation)
 - [Quick Start](#quick-start)
 - [Available MCP Tools](#available-mcp-tools)
 - [Index Field Schema](#index-field-schema)
@@ -67,6 +71,14 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
   - [Running for Development](#running-for-development)
   - [Debugging with MCP Inspector](#debugging-with-mcp-inspector)
   - [Adding Documents to the Index](#adding-documents-to-the-index)
+
+## Documentation
+
+Additional technical documentation:
+
+- [PIPELINE.md](PIPELINE.md) — Analyzer chains, query pipeline, and tokenization details
+- [VECTORSEARCH.md](VECTORSEARCH.md) — Hybrid search architecture: Late Chunking, Block Join indexing, RRF scoring, and configuration
+- [ONNX.md](ONNX.md) — ONNX model export, optimization and INT8 quantization guide for e5-base and e5-large
 
 ## Quick Start
 
@@ -1807,6 +1819,26 @@ java -Dmcp.transport=http -Dmcp.http.port=9090 -jar luceneserver-0.0.1-SNAPSHOT.
 ```bash
 java -Dmcp.transport=http -Dmcp.http.host=127.0.0.1 -jar luceneserver-0.0.1-SNAPSHOT.jar
 ```
+
+### Vector / Hybrid Search Configuration
+
+Semantic vector search is an optional feature activated by including `vectorsearch` in the active profiles.
+
+**Enabling vector search:**
+```bash
+java --enable-native-access=ALL-UNNAMED \
+  -Xmx4g \
+  -Dspring.profiles.active=deployed,vectorsearch \
+  -Dvector.model=e5-base \
+  -jar luceneserver-0.0.1-SNAPSHOT.jar
+```
+
+| JVM Property | Default | Description |
+|--------------------------------------------------|-----------|-------------|
+| `spring.profiles.active` includes `vectorsearch` | —         | Enables semantic vector indexing and hybrid search |
+| `vector.model`                                   | `e5-base` | Embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality) |
+
+See [VECTORSEARCH.md](VECTORSEARCH.md) for full architecture details, tuning guidance, and RRF scoring configuration.
 
 ### Environment Variables
 

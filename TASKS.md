@@ -189,9 +189,9 @@ Struktur analog zu PIPELINE.md:
 - [x] **8. Technische Hinweise** – Bekannte Einschränkungen (DrillSideways, Score-Skalen), Mixed-Index-Zustand bei Profil-Wechsel
 
 ### Schritt 10: README.md aktualisieren
-- [ ] Neue Sektion **"Semantic / Hybrid Search"** mit Kurzübersicht + Link auf `VECTORSEARCH.md`
-- [ ] Link auf `ONNX.md` mit Kurzbeschreibung (Modell-Export & Quantisierung)
-- [ ] Konfigurations-Sektion: neue Profile (`vectorsearch`) und System Property (`vector.model`) dokumentieren
+- [x] Neue Sektion **"Semantic / Hybrid Search"** mit Kurzübersicht + Link auf `VECTORSEARCH.md`
+- [x] Link auf `ONNX.md` mit Kurzbeschreibung (Modell-Export & Quantisierung)
+- [x] Konfigurations-Sektion: neue Profile (`vectorsearch`) und System Property (`vector.model`) dokumentieren
 
 ---
 
