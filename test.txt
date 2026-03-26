@@ -1,0 +1,13 @@
+e5-base:
+
+Cosine-Ähnlichkeit (ähnlich): 0,8615
+Cosine-Ähnlichkeit (unähnlich): 0,7206
+Load test...
+Laufzeit: 3093 ms / 100 Embeddings / 30,930000 avg ms
+
+e5-large:
+
+Cosine-Ähnlichkeit (ähnlich): 0,8825
+Cosine-Ähnlichkeit (unähnlich): 0,7233
+Load test...
+Laufzeit: 9514 ms / 100 Embeddings / 95,140000 avg ms
