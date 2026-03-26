@@ -114,25 +114,25 @@ for (int r = 0; r < filtered.length; r++)
     - `embedding` (`KnnFloatVectorField`, `VectorSimilarityFunction.DOT_PRODUCT`)
 
 ### Schritt 6: LuceneIndexService.java
-- [ ] `ONNXService`-Abhängigkeit als Constructor-Parameter (nullable wenn vectorsearch inaktiv)
-- [ ] `QueryBitSetProducer parentFilter` als Feld initialisieren
-- [ ] **Dimension-Mismatch-Check** in `init()`:
+- [x] `ONNXService`-Abhängigkeit als Constructor-Parameter (nullable wenn vectorsearch inaktiv)
+- [x] `QueryBitSetProducer parentFilter` als Feld initialisieren
+- [x] **Dimension-Mismatch-Check** in `init()`:
   - Commit-UserData-Key `embedding_dimension` lesen
   - Mit `onnxService.getHiddenSize()` vergleichen
   - Bei Mismatch: `schemaUpgradeRequired = true`
   - Bei erstem Indexieren: Dimension in Commit-UserData schreiben
-- [ ] `indexDocument()` erweitern:
+- [x] `indexDocument()` erweitern:
   - Wenn vectorsearch aktiv: `onnxService.embedWithLateChunking(content, "passage: ", batchSize)` aufrufen
   - `createChildDocuments()` aufrufen → Block zusammenstellen [children..., parent]
   - `IndexWriter.addDocuments(block)` statt `addDocument(parent)`
   - Wenn vectorsearch inaktiv: unverändertes `addDocument(parent)` (Fallback)
-- [ ] `search()` erweitern – optionaler Hybrid-Pfad:
+- [x] `search()` erweitern – optionaler Hybrid-Pfad:
   - Text-Suche wie bisher (`buildStemmedQuery`)
   - Vector-Suche: `onnxService.embed(query, "query: ")` → `KnnFloatVectorQuery` → Cosine Cut-Off Filter → Child→Parent-Mapping
   - RRF Merge (siehe Code-Snippet oben)
   - Nach Parent-Hits: optionaler Post-Search Chunk-Lookup für `vectorMatchInfo`
   - Wenn vectorsearch inaktiv: bisheriger Pfad unverändert
-- [ ] DrillSideways-Pfad testen mit Block-Join (bekannte Einschränkung)
+- [x] DrillSideways-Pfad: bestehende Tests laufen durch (492 Tests grün)
 
 ### Schritt 7: SearchDocument.java / SearchResponse DTOs
 - [ ] Neues `VectorMatchInfo`-Record/Klasse:

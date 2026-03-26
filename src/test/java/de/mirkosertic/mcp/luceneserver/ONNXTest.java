@@ -9,7 +9,7 @@ public class ONNXTest {
 
     @Test
     void testEncode() throws Exception {
-        try (final ONNXService svc = new ONNXService()) {
+        try (final ONNXService svc = new ONNXService("e5-base")) {
 
             final String testSatz = "Mirko entwickelt ein LEGO Powered Up Hub auf ESP32-Basis.";
             final long start = System.currentTimeMillis();
@@ -48,7 +48,7 @@ public class ONNXTest {
 
     @Test
     void testLateChunking() {
-        try (final ONNXService svc = new ONNXService()) {
+        try (final ONNXService svc = new ONNXService("e5-base")) {
 
             final String testInhalt = "Mirko entwickelt ein LEGO Powered Up Hub auf ESP32-Basis.";
             final long start = System.currentTimeMillis();
