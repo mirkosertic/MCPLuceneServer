@@ -1729,10 +1729,10 @@ The server can be configured via environment variables and `application.yaml`:
 
 The server supports two logging profiles (for backwards compatibility, uses the same system property as Spring Boot):
 
-| Profile | Usage | Logging Output |
-|---------|-------|---------------|
-| **default** | Development in IDE | Console logging enabled |
-| **deployed** | Production/Claude Desktop | File logging only |
+| Profile      | Usage                     | Logging Output          |
+|--------------|---------------------------|-------------------------|
+| **default**  | Development in IDE        | Console logging enabled |
+| **deployed** | Production/Claude Desktop | File logging only       |
 
 **Default profile (no profile specified):**
 - Full logging enabled to console
@@ -1794,11 +1794,11 @@ java --enable-native-access=ALL-UNNAMED \
 
 **HTTP Configuration Properties:**
 
-| System Property | Default | Description |
-|----------------|---------|-------------|
-| `mcp.transport` | `stdio` | Transport type: `stdio` or `http` |
-| `mcp.http.host` | `0.0.0.0` | HTTP server bind address (HTTP mode only) |
-| `mcp.http.port` | `8080` | HTTP server port (HTTP mode only) |
+| System Property     | Default        | Description                                 |
+|---------------------|----------------|---------------------------------------------|
+| `mcp.transport`     | `stdio`        | Transport type: `stdio` or `http`           |
+| `mcp.http.host`     | `0.0.0.0`      | HTTP server bind address (HTTP mode only)   |
+| `mcp.http.port`     | `8080`         | HTTP server port (HTTP mode only)           |
 | `mcp.http.endpoint` | `/mcp/message` | MCP message endpoint path (HTTP mode only)* |
 
 *The default `/mcp/message` is the standard MCP endpoint and typically does not need to be changed.
@@ -1833,9 +1833,9 @@ java --enable-native-access=ALL-UNNAMED \
   -jar luceneserver-0.0.1-SNAPSHOT.jar
 ```
 
-| JVM Property | Default | Description |
-|--------------------------------------------------|-----------|-------------|
-| `spring.profiles.active` includes `vectorsearch` | —         | Enables semantic vector indexing and hybrid search |
+| JVM Property                                     | Default   | Description                                                                             |
+|--------------------------------------------------|-----------|-----------------------------------------------------------------------------------------|
+| `spring.profiles.active` includes `vectorsearch` | —         | Enables semantic vector indexing and hybrid search                                      |
 | `vector.model`                                   | `e5-base` | Embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality) |
 
 See [VECTORSEARCH.md](VECTORSEARCH.md) for full architecture details, tuning guidance, and RRF scoring configuration.
