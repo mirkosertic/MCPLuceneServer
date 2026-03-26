@@ -121,6 +121,11 @@
 			<artifactId>lucene-analysis-opennlp</artifactId>
 			<version>${lucene.version}</version>
 		</dependency>
+		<dependency>
+			<groupId>org.apache.lucene</groupId>
+			<artifactId>lucene-join</artifactId>
+			<version>${lucene.version}</version>
+		</dependency>
 
 		<!-- Apache OpenNLP -->
 		<dependency>
@@ -248,6 +253,20 @@
 			<groupId>io.projectreactor</groupId>
 			<artifactId>reactor-core</artifactId>
 			<version>3.7.3</version>
+		</dependency>
+
+		<!-- Microsoft Onnx Runtime -->
+		<dependency>
+			<groupId>com.microsoft.onnxruntime</groupId>
+			<artifactId>onnxruntime</artifactId>
+			<version>1.24.3</version>
+		</dependency>
+
+		<!-- Tokenizer -->
+		<dependency>
+			<groupId>ai.djl.huggingface</groupId>
+			<artifactId>tokenizers</artifactId>
+			<version>0.36.0</version>
 		</dependency>
 
 		<!-- Testing -->
