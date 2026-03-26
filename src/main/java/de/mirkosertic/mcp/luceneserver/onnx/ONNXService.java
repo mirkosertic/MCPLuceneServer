@@ -52,7 +52,7 @@ public class ONNXService implements AutoCloseable {
     private final int hiddenSize;
     private final Set<String> inputNames;
 
-    public ONNXService() throws Exception {
+    public ONNXService(final String modelName) throws Exception {
         env = OrtEnvironment.getEnvironment();
 
         final OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
@@ -68,7 +68,7 @@ public class ONNXService implements AutoCloseable {
 
         opts.setMemoryPatternOptimization(true);
 
-        final String modelResource = "/onnxmodels/e5-large/model_quantized.onnx";
+        final String modelResource = "/onnxmodels/" + modelName + "/model_quantized.onnx";
         try (final var stream = ONNXService.class
                 .getResourceAsStream(modelResource)) {
             if (stream == null) {
@@ -85,7 +85,7 @@ public class ONNXService implements AutoCloseable {
         logger.info("Model inputs: {}", this.inputNames);
 
         // Load tokenizer
-        final String tokenizerResource = "/onnxmodels/e5-large/tokenizer.json";
+        final String tokenizerResource = "/onnxmodels/" + modelName + "/tokenizer.json";
         try (final var tokenizerConfig = ONNXService.class.getResourceAsStream(tokenizerResource)) {
             if (tokenizerConfig == null) {
                 throw new RuntimeException("Tokenizer not found in classpath: " + tokenizerResource);
@@ -162,6 +162,13 @@ public class ONNXService implements AutoCloseable {
                 return hidden[0][0].length;
             }
         }
+    }
+
+    /**
+     * Returns the hidden size (embedding dimension) of the loaded model.
+     */
+    public int getHiddenSize() {
+        return hiddenSize;
     }
 
     /**

@@ -97,10 +97,10 @@ for (int r = 0; r < filtered.length; r++)
 - [x] Startup-Log: gewähltes Modell + detektierte Dimension wenn `vectorsearch` aktiv
 
 ### Schritt 4: ONNXService.java
-- [ ] Konstruktor parametrisieren: `ONNXService(String modelName)` statt hardcoded e5-large
+- [x] Konstruktor parametrisieren: `ONNXService(String modelName)` statt hardcoded e5-large
   - Modellpfad: `/onnxmodels/{modelName}/model_quantized.onnx`
   - Tokenizer: `/onnxmodels/{modelName}/tokenizer.json`
-- [ ] Methode `getHiddenSize()` sicherstellen (für Dimension-Mismatch-Check)
+- [x] Methode `getHiddenSize()` sicherstellen (für Dimension-Mismatch-Check)
 
 ### Schritt 5: DocumentIndexer.java (SCHEMA_VERSION 8 → 9)
 - [ ] `SCHEMA_VERSION` von 8 auf **9** bumpen

@@ -119,13 +119,11 @@ public class LuceneserverApplication {
 
         // Initialize ONNX / vector search if the vectorsearch profile is active
         if (config.isVectorSearchEnabled()) {
-            // TODO (Schritt 4): ONNXService currently hardcodes e5-large; pass model name once
-            // the constructor accepts a modelName parameter.
             final String modelName = System.getProperty("vector.model", "e5-base");
-            logger.info("Vector search enabled — loading ONNX model '{}' (note: model selection via constructor not yet supported, using hardcoded e5-large)", modelName);
+            logger.info("Vector search enabled — loading ONNX model '{}'", modelName);
             try {
-                onnxService = new ONNXService();
-                logger.info("Vector search active: model='{}' (ONNX session ready)", modelName);
+                onnxService = new ONNXService(modelName);
+                logger.info("Vector search active: model='{}' hidden_size={}", modelName, onnxService.getHiddenSize());
             } catch (final Exception e) {
                 throw new IOException("Failed to initialize ONNXService for vector search", e);
             }
