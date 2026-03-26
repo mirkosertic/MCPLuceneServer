@@ -22,6 +22,7 @@ import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreComponent;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreDetails;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoringBreakdown;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorMatchInfo;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchMetrics;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.TermStatistics;
@@ -718,11 +719,15 @@ public class LuceneIndexService {
 
             // 8. Optional hybrid search: merge text results with vector results via RRF
             final ScoreDoc[] mergedScoreDocs;
+            final Map<Integer, VectorMatchInfo> vectorMatchInfoByDocId;
             if (onnxService != null && queryString != null && !queryString.isBlank()) {
-                mergedScoreDocs = mergeWithVectorResults(
+                final VectorMergeResult mergeResult = mergeWithVectorResults(
                         queryString, topDocs.scoreDocs, searcher, pageSize);
+                mergedScoreDocs = mergeResult.scoreDocs();
+                vectorMatchInfoByDocId = mergeResult.vectorMatchInfoByDocId();
             } else {
                 mergedScoreDocs = topDocs.scoreDocs;
+                vectorMatchInfoByDocId = Map.of();
             }
 
             // 9. Collect results for the requested page
@@ -753,6 +758,7 @@ public class LuceneIndexService {
                         .modifiedDate(doc.get("modified_date"))
                         .indexedDate(doc.get("indexed_date"))
                         .passages(passages)
+                        .vectorMatchInfo(vectorMatchInfoByDocId.get(scoreDocs[i].doc))
                         .build();
 
                 results.add(searchDoc);
@@ -769,23 +775,30 @@ public class LuceneIndexService {
     }
 
     /**
+     * Carries the outcome of a hybrid RRF merge: the re-ranked score docs together with
+     * a per-parent-doc map of {@link VectorMatchInfo} for building the search response.
+     */
+    private record VectorMergeResult(ScoreDoc[] scoreDocs, Map<Integer, VectorMatchInfo> vectorMatchInfoByDocId) {}
+
+    /**
      * Merge text search results with vector (KNN) results using Reciprocal Rank Fusion (RRF).
      *
      * <p>For each child document returned by the KNN query, retrieves its parent document
      * via a term query on the {@code file_path} field, then merges the text rank and vector
      * rank using the RRF formula {@code 1 / (60 + rank + 1)}.  Returns the top {@code pageSize}
-     * merged results as a new {@link ScoreDoc} array.</p>
+     * merged results together with a map that associates each matched parent doc ID with its
+     * {@link VectorMatchInfo}.</p>
      *
      * @param queryString  the raw query string used to derive the query embedding
      * @param textDocs     the text-search ScoreDoc array (ranked by BM25/stemmed score)
      * @param searcher     the current IndexSearcher
      * @param pageSize     maximum number of results to return
-     * @return merged and re-ranked ScoreDoc array
+     * @return merged and re-ranked result including vector match metadata
      */
-    private ScoreDoc[] mergeWithVectorResults(final String queryString,
-                                              final ScoreDoc[] textDocs,
-                                              final IndexSearcher searcher,
-                                              final int pageSize) {
+    private VectorMergeResult mergeWithVectorResults(final String queryString,
+                                                     final ScoreDoc[] textDocs,
+                                                     final IndexSearcher searcher,
+                                                     final int pageSize) {
         try {
             final float[] queryVector = onnxService.embed(queryString, ONNXService.QUERY_PREFIX);
             final int vectorK = 50;
@@ -803,8 +816,10 @@ public class LuceneIndexService {
                 textRankByDocId.put(textDocs[i].doc, i);
             }
 
-            // Resolve vector child doc IDs → parent doc IDs via file_path field
+            // Resolve vector child doc IDs → parent doc IDs via file_path field.
+            // Also collect VectorMatchInfo (chunk index, chunk text, vector score) for each parent.
             final Map<Integer, Integer> parentDocIdByVectorRank = new LinkedHashMap<>();
+            final Map<Integer, VectorMatchInfo> vectorMatchInfoByParentDocId = new HashMap<>();
             for (int vRank = 0; vRank < vectorTopDocs.scoreDocs.length; vRank++) {
                 final ScoreDoc childScoreDoc = vectorTopDocs.scoreDocs[vRank];
                 // Apply cosine similarity threshold
@@ -827,7 +842,16 @@ public class LuceneIndexService {
                     if (parentHits.totalHits.value() > 0) {
                         final int parentDocId = parentHits.scoreDocs[0].doc;
                         // Record first (best-ranked) child hit per parent
-                        parentDocIdByVectorRank.putIfAbsent(parentDocId, vRank);
+                        if (parentDocIdByVectorRank.putIfAbsent(parentDocId, vRank) == null) {
+                            // This is the first (highest-ranked) child for this parent — capture details.
+                            // chunk_index is stored as a numeric StoredField (int), not a string field.
+                            final org.apache.lucene.index.IndexableField chunkIndexField = childDoc.getField("chunk_index");
+                            final int chunkIndex = chunkIndexField != null && chunkIndexField.numericValue() != null
+                                    ? chunkIndexField.numericValue().intValue() : -1;
+                            final String chunkText = childDoc.get("chunk_text");
+                            vectorMatchInfoByParentDocId.put(parentDocId,
+                                    VectorMatchInfo.matched(chunkIndex, chunkText, childScoreDoc.score));
+                        }
                     }
                 } catch (final IOException e) {
                     logger.debug("Error resolving parent for vector child doc {}", childScoreDoc.doc);
@@ -852,15 +876,17 @@ public class LuceneIndexService {
             }
 
             // Sort by RRF score descending and return top pageSize results
-            return rrfScores.entrySet().stream()
+            final ScoreDoc[] mergedDocs = rrfScores.entrySet().stream()
                     .sorted(Map.Entry.<Integer, Float>comparingByValue(Comparator.reverseOrder()))
                     .limit(pageSize)
                     .map(e -> new ScoreDoc(e.getKey(), e.getValue()))
                     .toArray(ScoreDoc[]::new);
 
+            return new VectorMergeResult(mergedDocs, vectorMatchInfoByParentDocId);
+
         } catch (final Exception e) {
             logger.warn("Vector search failed, falling back to text-only: {}", e.getMessage());
-            return textDocs;
+            return new VectorMergeResult(textDocs, Map.of());
         }
     }
 
