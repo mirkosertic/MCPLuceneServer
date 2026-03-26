@@ -55,7 +55,10 @@ public record SearchDocument(
     Long indexedDate,
 
     @Description("Highlighted passages from the document content with quality metadata")
-    List<Passage> passages
+    List<Passage> passages,
+
+    @Description("Vector (semantic) match details when the document was retrieved or boosted via KNN search; null for pure text-match results")
+    VectorMatchInfo vectorMatchInfo
 ) {
     /**
      * Builder for SearchDocument to simplify construction from Lucene Document.
@@ -80,6 +83,7 @@ public record SearchDocument(
         private Long modifiedDate;
         private Long indexedDate;
         private List<Passage> passages = List.of();
+        private VectorMatchInfo vectorMatchInfo;
 
         public Builder score(double score) { this.score = score; return this; }
         public Builder filePath(String filePath) { this.filePath = filePath; return this; }
@@ -112,11 +116,12 @@ public record SearchDocument(
             return this;
         }
         public Builder passages(List<Passage> passages) { this.passages = passages; return this; }
+        public Builder vectorMatchInfo(VectorMatchInfo vectorMatchInfo) { this.vectorMatchInfo = vectorMatchInfo; return this; }
 
         public SearchDocument build() {
             return new SearchDocument(score, filePath, fileName, title, author, creator,
                 subject, language, fileExtension, fileType, fileSize, createdDate,
-                modifiedDate, indexedDate, passages);
+                modifiedDate, indexedDate, passages, vectorMatchInfo);
         }
     }
 }

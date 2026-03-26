@@ -135,12 +135,12 @@ for (int r = 0; r < filtered.length; r++)
 - [x] DrillSideways-Pfad: bestehende Tests laufen durch (492 Tests grün)
 
 ### Schritt 7: SearchDocument.java / SearchResponse DTOs
-- [ ] Neues `VectorMatchInfo`-Record/Klasse:
+- [x] Neues `VectorMatchInfo`-Record/Klasse:
   ```java
   record VectorMatchInfo(boolean matchedViaVector, int matchedChunkIndex,
                          String matchedChunkText, float vectorScore) {}
   ```
-- [ ] `vectorMatchInfo` (nullable) zu `SearchDocument` hinzufügen
+- [x] `vectorMatchInfo` (nullable) zu `SearchDocument` hinzufügen
 
 ### Schritt 8: Tests schreiben
 
