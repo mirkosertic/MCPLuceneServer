@@ -123,13 +123,13 @@ last document in the block.
 
 ### Child Document Fields
 
-| Field | Type | Stored | Purpose |
-|-------|------|--------|---------|
-| `_doc_type` | StringField | Yes | Value `"child"` — distinguishes from parent |
-| `file_path` | StringField | Yes | Links to the parent document |
-| `chunk_index` | StoredField (int) | Yes | Position of the chunk within the document |
-| `chunk_text` | StoredField | Yes | Approximate text representation of the chunk |
-| `embedding` | KnnFloatVectorField | No (vector index only) | L2-normalized embedding vector |
+| Field         | Type                | Stored                 | Purpose                                      |
+|---------------|---------------------|------------------------|----------------------------------------------|
+| `_doc_type`   | StringField         | Yes                    | Value `"child"` — distinguishes from parent  |
+| `file_path`   | StringField         | Yes                    | Links to the parent document                 |
+| `chunk_index` | StoredField (int)   | Yes                    | Position of the chunk within the document    |
+| `chunk_text`  | StoredField         | Yes                    | Approximate text representation of the chunk |
+| `embedding`   | KnnFloatVectorField | No (vector index only) | L2-normalized embedding vector               |
 
 The `embedding` vector uses `VectorSimilarityFunction.DOT_PRODUCT`. Since the embeddings are
 L2-normalized, the dot product is equivalent to cosine similarity.
@@ -276,12 +276,12 @@ in the final ranking.
 
 Each search result optionally contains a `vectorMatchInfo` structure:
 
-| Field | Description |
-|-------|-------------|
-| `matchedViaVector` | `true` if this document was found via vector search |
+| Field               | Description                                          |
+|---------------------|------------------------------------------------------|
+| `matchedViaVector`  | `true` if this document was found via vector search  |
 | `matchedChunkIndex` | Index of the best matching chunk within the document |
-| `matchedChunkText` | Approximate text of the matching chunk |
-| `vectorScore` | Lucene DOT_PRODUCT score of the best chunk |
+| `matchedChunkText`  | Approximate text of the matching chunk               |
+| `vectorScore`       | Lucene DOT_PRODUCT score of the best chunk           |
 
 ---
 
@@ -316,10 +316,10 @@ java -Dspring.profiles.active=deployed,vectorsearch \
 
 ### Configuration Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `spring.profiles.active` includes `vectorsearch` | off | Enables vector indexing and search |
-| `-Dvector.model` | `e5-base` | ONNX model (`e5-base` or `e5-large`) |
+| Parameter                                        | Default   | Description                          |
+|--------------------------------------------------|-----------|--------------------------------------|
+| `spring.profiles.active` includes `vectorsearch` | off       | Enables vector indexing and search   |
+| `-Dvector.model`                                 | `e5-base` | ONNX model (`e5-base` or `e5-large`) |
 
 ### Behavior on First Start With Profile Enabled
 
@@ -337,10 +337,10 @@ already exists, a full re-crawl is required. The server detects this automatical
 
 ### Available Models
 
-| Model | Embedding Dim | Latency (M4 Pro, single) | Latency (batch 8) | Size | Recommendation |
-|-------|--------------|--------------------------|-------------------|------|----------------|
-| `e5-base` | 768 | ~31 ms/doc | ~5–8 ms/text | ~280 MB | Default |
-| `e5-large` | 1024 | ~95 ms/doc | ~15–20 ms/text | ~580 MB | Higher quality |
+| Model      | Embedding Dim | Latency (M4 Pro, single) | Latency (batch 8) | Size    | Recommendation |
+|------------|---------------|--------------------------|-------------------|---------|----------------|
+| `e5-base`  | 768           | ~31 ms/doc               | ~5–8 ms/text      | ~280 MB | Default        |
+| `e5-large` | 1024          | ~95 ms/doc               | ~15–20 ms/text    | ~580 MB | Higher quality |
 
 Both models are based on `intfloat/multilingual-e5-base` and `intfloat/multilingual-e5-large`
 from HuggingFace and natively support **German and English** (as well as 100+ other languages).
@@ -434,10 +434,10 @@ in the range 0.01–0.04 and has no intuitive meaning beyond the ranking order.
 
 For planning index size:
 
-| Model | Bytes/Chunk | 1,000 docs (avg. 5 chunks) | 10,000 docs |
-|-------|-------------|----------------------------|-------------|
-| e5-base (768-dim) | ~3 KB | ~15 MB | ~150 MB |
-| e5-large (1024-dim) | ~4 KB | ~20 MB | ~200 MB |
+| Model               | Bytes/Chunk | 1,000 docs (avg. 5 chunks) | 10,000 docs |
+|---------------------|-------------|----------------------------|-------------|
+| e5-base (768-dim)   | ~3 KB       | ~15 MB                     | ~150 MB     |
+| e5-large (1024-dim) | ~4 KB       | ~20 MB                     | ~200 MB     |
 
 Add to this the regular BM25 index (text, term vectors, facets).
 
@@ -445,12 +445,12 @@ Add to this the regular BM25 index (text, term vectors, facets).
 
 `ONNXService` automatically selects the best available execution provider:
 
-| Platform | Provider | Acceleration |
-|----------|----------|--------------|
-| macOS / Apple Silicon | CoreML | GPU + Neural Engine |
-| Windows | DirectML | DirectX GPU |
-| Linux | CUDA | NVIDIA GPU |
-| Fallback | CPU | all platforms |
+| Platform              | Provider | Acceleration        |
+|-----------------------|----------|---------------------|
+| macOS / Apple Silicon | CoreML   | GPU + Neural Engine |
+| Windows               | DirectML | DirectX GPU         |
+| Linux                 | CUDA     | NVIDIA GPU          |
+| Fallback              | CPU      | all platforms       |
 
 If no accelerated provider is available, the system falls back to CPU without error.
 

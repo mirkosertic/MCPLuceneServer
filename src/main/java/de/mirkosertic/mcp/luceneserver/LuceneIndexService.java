@@ -23,6 +23,7 @@ import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreDetails;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoringBreakdown;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorMatchInfo;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorSearchDebug;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchMetrics;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.TermStatistics;
@@ -509,6 +510,7 @@ public class LuceneIndexService {
 
     /**
      * Search the index with structured multi-filters and DrillSideways faceting.
+     * Backward-compatible overload that defaults to {@code useVectorSearch=true}.
      *
      * @param queryString the user query (null or blank = MatchAllDocsQuery)
      * @param filters     list of structured filters (may be empty)
@@ -521,6 +523,26 @@ public class LuceneIndexService {
     public SearchResult search(final String queryString, final List<SearchFilter> filters,
                                final int page, final int pageSize,
                                final String sortBy, final String sortOrder) throws IOException, ParseException {
+        return search(queryString, filters, page, pageSize, sortBy, sortOrder, true);
+    }
+
+    /**
+     * Search the index with structured multi-filters and DrillSideways faceting.
+     *
+     * @param queryString    the user query (null or blank = MatchAllDocsQuery)
+     * @param filters        list of structured filters (may be empty)
+     * @param page           0-based page number
+     * @param pageSize       results per page
+     * @param sortBy         the field to sort by
+     * @param sortOrder      the sort order
+     * @param useVectorSearch when {@code true} (and vectorsearch profile is active), enables hybrid RRF search;
+     *                        when {@code false}, uses BM25 text search only
+     * @return search results with documents, facets, and active filters
+     */
+    public SearchResult search(final String queryString, final List<SearchFilter> filters,
+                               final int page, final int pageSize,
+                               final String sortBy, final String sortOrder,
+                               final boolean useVectorSearch) throws IOException, ParseException {
 
         // Validate all filters first
         for (final SearchFilter filter : filters) {
@@ -720,7 +742,7 @@ public class LuceneIndexService {
             // 8. Optional hybrid search: merge text results with vector results via RRF
             final ScoreDoc[] mergedScoreDocs;
             final Map<Integer, VectorMatchInfo> vectorMatchInfoByDocId;
-            if (onnxService != null && queryString != null && !queryString.isBlank()) {
+            if (useVectorSearch && onnxService != null && queryString != null && !queryString.isBlank()) {
                 final VectorMergeResult mergeResult = mergeWithVectorResults(
                         queryString, topDocs.scoreDocs, searcher, pageSize);
                 mergedScoreDocs = mergeResult.scoreDocs();
@@ -947,16 +969,101 @@ public class LuceneIndexService {
                 facetCost = analyzeFacetCost(mainQuery, request.effectiveFilters(), searcher);
             }
 
+            // Level 5: Vector search debug (automatic when useVectorSearch=true and onnxService present)
+            final VectorSearchDebug vectorSearchDebug = buildVectorSearchDebug(
+                    request, searcher);
+
             // Generate recommendations
             final List<String> recommendations = generateRecommendations(
                     queryAnalysis, searchMetrics, filterImpact, docExplanations);
 
             return ProfileQueryResponse.success(
                     queryAnalysis, searchMetrics, filterImpact,
-                    docExplanations, facetCost, recommendations);
+                    docExplanations, facetCost, recommendations, vectorSearchDebug);
 
         } finally {
             searcherManager.release(searcher);
+        }
+    }
+
+    /**
+     * Build vector search debug information for the profileQuery Level 5 analysis.
+     *
+     * <p>When {@code useVectorSearch} is true and {@code onnxService} is non-null and the query
+     * is non-blank, runs a KNN search to collect raw candidate counts, threshold-filtered counts,
+     * and top-candidate details.  Otherwise returns a debug object indicating availability/enabled
+     * state only.</p>
+     */
+    private VectorSearchDebug buildVectorSearchDebug(final ProfileQueryRequest request,
+                                                     final IndexSearcher searcher) {
+        final boolean available = onnxService != null;
+        final boolean enabled = available && request.effectiveUseVectorSearch();
+
+        if (!enabled || request.effectiveQuery() == null || request.effectiveQuery().isBlank()) {
+            return new VectorSearchDebug(available, enabled, 0, 0, 0, 0.70f, null);
+        }
+
+        try {
+            final long embeddingStart = System.currentTimeMillis();
+            final float[] queryVector = onnxService.embed(request.effectiveQuery(), ONNXService.QUERY_PREFIX);
+            final long embeddingDurationMs = System.currentTimeMillis() - embeddingStart;
+
+            final int vectorK = 50;
+            final KnnFloatVectorQuery knnQuery = new KnnFloatVectorQuery("embedding", queryVector, vectorK);
+            final TopDocs vectorTopDocs = searcher.search(knnQuery, vectorK);
+
+            final float cosineCutoff = 0.70f;
+            final float luceneThreshold = (1f + cosineCutoff) / 2f;
+
+            final int rawCandidateCount = vectorTopDocs.scoreDocs.length;
+
+            final List<VectorSearchDebug.VectorCandidateInfo> topCandidates = new ArrayList<>();
+            int filteredCount = 0;
+
+            for (int vRank = 0; vRank < rawCandidateCount; vRank++) {
+                final ScoreDoc childScoreDoc = vectorTopDocs.scoreDocs[vRank];
+                final boolean passed = childScoreDoc.score >= luceneThreshold;
+                if (passed) {
+                    filteredCount++;
+                }
+                if (topCandidates.size() < 10) {
+                    try {
+                        final Document childDoc = searcher.storedFields().document(childScoreDoc.doc);
+                        final String filePath = childDoc.get("file_path");
+                        final org.apache.lucene.index.IndexableField chunkIndexField =
+                                childDoc.getField("chunk_index");
+                        final int chunkIndex = chunkIndexField != null && chunkIndexField.numericValue() != null
+                                ? chunkIndexField.numericValue().intValue() : -1;
+                        final String chunkText = childDoc.get("chunk_text");
+                        final float cosineScore = childScoreDoc.score * 2f - 1f;
+                        final float rrfContribution = 1f / (60 + vRank + 1);
+                        topCandidates.add(new VectorSearchDebug.VectorCandidateInfo(
+                                filePath != null ? filePath : "",
+                                chunkIndex,
+                                chunkText,
+                                childScoreDoc.score,
+                                cosineScore,
+                                passed,
+                                vRank,
+                                rrfContribution));
+                    } catch (final IOException e) {
+                        logger.debug("Error reading candidate doc {} for vector debug", childScoreDoc.doc);
+                    }
+                }
+            }
+
+            return new VectorSearchDebug(
+                    true,
+                    true,
+                    embeddingDurationMs,
+                    rawCandidateCount,
+                    filteredCount,
+                    cosineCutoff,
+                    topCandidates.isEmpty() ? null : topCandidates);
+
+        } catch (final Exception e) {
+            logger.warn("Vector search debug failed: {}", e.getMessage());
+            return new VectorSearchDebug(true, true, 0, 0, 0, 0.70f, null);
         }
     }
 
