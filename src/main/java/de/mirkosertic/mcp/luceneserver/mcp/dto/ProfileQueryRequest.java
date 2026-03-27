@@ -41,7 +41,11 @@ public record ProfileQueryRequest(
 
         @Nullable
         @Description("Max documents to explain when analyzeDocumentScoring=true (default: 5, max: 10)")
-        Integer maxDocExplanations
+        Integer maxDocExplanations,
+
+        @Nullable
+        @Description("Enable vector (semantic) search combined with BM25 via RRF. Only effective when the vectorsearch profile is active. Default: true")
+        Boolean useVectorSearch
 ) {
     /**
      * Create a ProfileQueryRequest from a Map of arguments.
@@ -68,8 +72,16 @@ public record ProfileQueryRequest(
                 (Boolean) args.get("analyzeFilterImpact"),
                 (Boolean) args.get("analyzeDocumentScoring"),
                 (Boolean) args.get("analyzeFacetCost"),
-                args.get("maxDocExplanations") != null ? ((Number) args.get("maxDocExplanations")).intValue() : null
+                args.get("maxDocExplanations") != null ? ((Number) args.get("maxDocExplanations")).intValue() : null,
+                (Boolean) args.get("useVectorSearch")
         );
+    }
+
+    /**
+     * Whether vector search should be used. Defaults to true when not specified.
+     */
+    public boolean effectiveUseVectorSearch() {
+        return useVectorSearch == null || useVectorSearch;
     }
 
     /**

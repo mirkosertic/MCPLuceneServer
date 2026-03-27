@@ -193,6 +193,13 @@ Struktur analog zu PIPELINE.md:
 - [x] Link auf `ONNX.md` mit Kurzbeschreibung (Modell-Export & Quantisierung)
 - [x] Konfigurations-Sektion: neue Profile (`vectorsearch`) und System Property (`vector.model`) dokumentieren
 
+### Schritt 11: Weitere Features
+- [x] Zur Query-Zeit soll die Vector-Suche auch ausschaltbar sein. Standardmäßig ist sie eingeschaltet. Denn Sie ausgeschaltet ist, wird eine normale Lucene Inverted Index Query gemacht
+- [x] Das Search MCP Tool wird mit einem Toggle für die deaktivierung der Vector-Suche erweitert. Standartmäßig ist sie aktiv.
+- [x] Das ProfileQuery MCP Tool wird um das Debuggen der Vector-Suche erweitert. Das Tool bekommt den gleichen, neuen Feature Toggle zur deaktivierung der Suche die das Suche MCP Tool.
+- [x] Die Dokumentationen der MCP Tools in der README.md werden aktualisiert. Das Problem des Semantic-Gaps und der Vector Suche
+  in Verbindung mit einem LLM soll hier nochmals kritisch beleuchtet werden.
+- 
 ---
 
 ## Aktivierungsbeispiele

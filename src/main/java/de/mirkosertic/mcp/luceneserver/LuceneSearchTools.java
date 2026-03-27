@@ -402,7 +402,8 @@ public class LuceneSearchTools {
                     request.effectivePage(),
                     request.effectivePageSize(),
                     request.effectiveSortBy(),
-                    request.effectiveSortOrder());
+                    request.effectiveSortOrder(),
+                    request.effectiveUseVectorSearch());
             final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
             queryRuntimeStats.recordQuery(durationMs, result.totalHits(),
                     result.facetTotalDurationMicros(), result.facetFieldDurationMicros());

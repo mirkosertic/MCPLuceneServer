@@ -15,6 +15,7 @@ public record ProfileQueryResponse(
         @Nullable List<DocumentScoringExplanation> documentExplanations,
         @Nullable FacetCostAnalysis facetCost,
         @Nullable List<String> recommendations,
+        @Nullable VectorSearchDebug vectorSearchDebug,
         @Nullable String error
 ) {
     /**
@@ -26,10 +27,11 @@ public record ProfileQueryResponse(
             final @Nullable FilterImpactAnalysis filterImpact,
             final @Nullable List<DocumentScoringExplanation> documentExplanations,
             final @Nullable FacetCostAnalysis facetCost,
-            final List<String> recommendations) {
+            final List<String> recommendations,
+            final @Nullable VectorSearchDebug vectorSearchDebug) {
         return new ProfileQueryResponse(
                 true, queryAnalysis, searchMetrics, filterImpact,
-                documentExplanations, facetCost, recommendations, null
+                documentExplanations, facetCost, recommendations, vectorSearchDebug, null
         );
     }
 
@@ -38,7 +40,7 @@ public record ProfileQueryResponse(
      */
     public static ProfileQueryResponse error(final String errorMessage) {
         return new ProfileQueryResponse(
-                false, null, null, null, null, null, null, errorMessage
+                false, null, null, null, null, null, null, null, errorMessage
         );
     }
 }

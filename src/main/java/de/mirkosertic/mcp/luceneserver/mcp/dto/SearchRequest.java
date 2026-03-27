@@ -34,7 +34,11 @@ public record SearchRequest(
 
         @Nullable
         @Description("Sort order: asc or desc (default: desc)")
-        String sortOrder
+        String sortOrder,
+
+        @Nullable
+        @Description("Enable vector (semantic) search combined with BM25 via RRF. Only effective when the vectorsearch profile is active. Default: true")
+        Boolean useVectorSearch
 ) {
     /**
      * Create a SearchRequest from a Map of arguments.
@@ -59,8 +63,16 @@ public record SearchRequest(
                 args.get("page") != null ? ((Number) args.get("page")).intValue() : null,
                 args.get("pageSize") != null ? ((Number) args.get("pageSize")).intValue() : null,
                 (String) args.get("sortBy"),
-                (String) args.get("sortOrder")
+                (String) args.get("sortOrder"),
+                (Boolean) args.get("useVectorSearch")
         );
+    }
+
+    /**
+     * Whether vector search should be used. Defaults to true when not specified.
+     */
+    public boolean effectiveUseVectorSearch() {
+        return useVectorSearch == null || useVectorSearch;
     }
 
     /**

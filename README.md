@@ -211,6 +211,7 @@ Search the Lucene fulltext index using **lexical matching** (exact word forms on
 - `pageSize` (optional): Results per page (default: 10, max: 100)
 - `sortBy` (optional): Sort field - `_score` (default), `modified_date`, `created_date`, or `file_size`
 - `sortOrder` (optional): Sort order - `asc` or `desc` (default: `desc`)
+- `useVectorSearch` (optional): If `false`, disables semantic vector search and uses pure BM25/inverted-index search. Only effective when the `vectorsearch` profile is active. Default: `true`
 
 **Sorting Results:**
 
@@ -427,6 +428,7 @@ Analyze and profile a search query to understand its behavior, performance, and 
 - `analyzeDocumentScoring` (optional): If `true`, provides detailed scoring explanations for top documents using Lucene's Explanation API. **WARNING:** Expensive operation. Default: `false`
 - `analyzeFacetCost` (optional): If `true`, measures faceting computation overhead. **WARNING:** Expensive operation. Default: `false`
 - `maxDocExplanations` (optional): Maximum number of documents to explain when `analyzeDocumentScoring=true` (default: 5, max: 10)
+- `useVectorSearch` (optional): If `false`, disables vector search in the profile analysis. Default: `true`
 
 **Analysis Levels:**
 
@@ -453,6 +455,14 @@ Analyze and profile a search query to understand its behavior, performance, and 
 - Measures faceting computation overhead
 - Shows cost per facet dimension
 - Helps decide if faceting should be disabled for performance
+
+**Level 5: Vector Search Debug (Automatically included when vectorsearch profile is active)**
+- Shows whether vector search is available and enabled
+- Embedding duration for the query
+- Number of raw KNN candidates returned
+- Number of candidates that passed the cosine similarity threshold
+- Top candidate chunks with file path, chunk index, chunk text, Lucene score, cosine score, threshold pass/fail
+- RRF contribution per candidate
 
 **Returns:**
 
@@ -544,7 +554,25 @@ A structured analysis object containing:
       }
     }
   },
-  recommendations: string[]      // Actionable optimization suggestions
+  recommendations: string[],     // Actionable optimization suggestions
+  vectorSearchDebug?: {          // Only when vectorsearch profile is active
+    vectorSearchAvailable: boolean,
+    vectorSearchEnabled: boolean,
+    embeddingDurationMs: number,
+    rawCandidateCount: number,
+    filteredCandidateCount: number,
+    cosineCutoff: number,
+    topCandidates?: [{
+      filePath: string,
+      chunkIndex: number,
+      chunkText: string,
+      luceneScore: number,
+      cosineScore: number,
+      passedThreshold: boolean,
+      vectorRank: number,
+      rrfContribution: number
+    }]
+  }
 }
 ```
 
@@ -1839,6 +1867,33 @@ java --enable-native-access=ALL-UNNAMED \
 | `vector.model`                                   | `e5-base` | Embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality) |
 
 See [VECTORSEARCH.md](VECTORSEARCH.md) for full architecture details, tuning guidance, and RRF scoring configuration.
+
+### Critical Note: Vector Search and the Semantic Gap
+
+Vector search is designed to close the **semantic gap**: finding documents about "automobile" when the user searches for "car", because the embedding model maps both concepts to nearby points in vector space. This is something pure BM25/inverted-index search cannot do.
+
+**However, when using this server with an LLM (Claude, GPT, etc.), the situation changes fundamentally.**
+
+An LLM already bridges the semantic gap as part of its reasoning process. Before calling the `search` tool, a well-prompted LLM can rewrite "find documents about cars" into an explicit OR query: `(car OR automobile OR vehicle OR sedan)`. This means the LLM handles synonym expansion and query reformulation — exactly the problem vector search is designed to solve.
+
+**When vector search adds genuine value:**
+- Direct user-facing search UIs with no LLM in the loop
+- Batch or automated pipelines without LLM query reformulation
+- Queries involving domain-specific jargon where synonyms are not obvious
+- Conceptual queries where the exact wording of relevant documents is unknown
+
+**When vector search adds marginal value (LLM-based use cases):**
+- The LLM client expands queries with synonyms before calling the tool
+- The LLM reformulates vague queries into precise Lucene expressions
+- The search corpus uses consistent terminology that BM25 handles well
+
+**Trade-offs to consider:**
+- Embedding computation adds latency (~31ms/doc during indexing, ~5ms/query for e5-base)
+- ONNX models require ~100-200MB of disk space and additional RAM
+- Index complexity doubles (parent documents + child chunk documents via Block Join)
+- RRF score merging can sometimes promote weaker semantic matches over strong lexical matches
+
+**Recommendation:** When the LLM is handling query expansion and reformulation (the typical MCP use case), consider disabling vector search with `useVectorSearch=false` for lower latency and simpler results. Enable vector search for direct search scenarios or when the query pipeline does not include an LLM step.
 
 ### Environment Variables
 
