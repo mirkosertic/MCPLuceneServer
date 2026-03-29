@@ -117,9 +117,25 @@ docker run -v ./lucene-data-dir:/userdata -p 9000:9000 -it mirkosertic42/mcpluce
 This starts a Docker container with the server listening on port 9000. All configuration data including the
 index files is stored in the `./lucene-data-dir` directory on the host machine. Please note that the Lucene
 indexer can only access files that are visible to the Docker container, so all files must be placed in the
-`./lucene-data-dir` directory or a subdirectory of it. JVM settings can be adjusted by the `JAVA_OPTS` 
+`./lucene-data-dir` directory or a subdirectory of it. JVM settings can be adjusted by the `JAVA_OPTS`
 environment variable, which can be modified using the Docker CLI or a Docker Compose file. The default
 maximum JVM Heap size(-Xmx) is 2GB.
+
+To enable the **vectorsearch** profile (hybrid semantic search), set the `SPRING_PROFILES_ACTIVE` environment variable:
+
+```bash
+docker run -v ./lucene-data-dir:/userdata -p 9000:9000 \
+  -e SPRING_PROFILES_ACTIVE=deployed,vectorsearch \
+  -e VECTOR_MODEL=e5-base \
+  -e JAVA_OPTS="-Xmx4g" \
+  -it mirkosertic42/mcpluceneserver:main
+```
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `SPRING_PROFILES_ACTIVE` | `deployed` | Active Spring profiles. Add `vectorsearch` to enable hybrid semantic search. |
+| `VECTOR_MODEL` | `e5-base` | ONNX embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality). Only relevant when `vectorsearch` profile is active. |
+| `JAVA_OPTS` | `-Xmx2g` | JVM options. Increase to `-Xmx4g` or higher when using vector search. |
 
 ### Step 2: Configure Claude Desktop
 
