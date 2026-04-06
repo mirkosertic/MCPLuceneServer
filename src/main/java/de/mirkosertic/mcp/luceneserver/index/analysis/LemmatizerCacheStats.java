@@ -1,4 +1,4 @@
-package de.mirkosertic.mcp.luceneserver;
+package de.mirkosertic.mcp.luceneserver.index.analysis;
 
 import java.util.concurrent.atomic.AtomicLong;
 

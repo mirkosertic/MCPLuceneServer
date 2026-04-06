@@ -1,5 +1,11 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.index.analysis.CachedNLPLemmatizerOp;
+import de.mirkosertic.mcp.luceneserver.index.analysis.GermanTransliteratingAnalyzer;
+import de.mirkosertic.mcp.luceneserver.index.analysis.LemmatizerCacheStats;
+import de.mirkosertic.mcp.luceneserver.index.analysis.OpenNLPLemmatizingAnalyzer;
+import de.mirkosertic.mcp.luceneserver.index.analysis.ReverseUnicodeNormalizingAnalyzer;
+import de.mirkosertic.mcp.luceneserver.index.analysis.UnicodeNormalizingAnalyzer;
 import de.mirkosertic.mcp.luceneserver.ProximityExpandingQueryParser;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
@@ -407,14 +413,15 @@ public class LuceneIndexService {
      * <p>When {@code onnxService} is null (vector search disabled) or the content is
      * blank, falls back to the standard single-document indexing path.</p>
      *
-     * @param filePath  the file path of the document (used as the unique key)
      * @param parentDoc the parent {@link Document} created by {@link de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer#createDocument}
      * @param content   the raw text content of the document (may be null or blank)
      * @throws IOException if writing to the index fails
      */
-    public void indexDocument(final java.nio.file.Path filePath,
-                              final Document parentDoc,
+    public void indexDocument(final Document parentDoc,
                               final String content) throws IOException {
+
+        final String filePath = parentDoc.get("file_path");
+
         if (onnxService != null && content != null && !content.isBlank()) {
             try {
                 final List<float[]> embeddings = onnxService.embedWithLateChunking(
@@ -447,8 +454,12 @@ public class LuceneIndexService {
             }
         }
 
-        // Fallback: standard single-document path (no vector embeddings)
-        documentIndexer.indexDocument(indexWriter, parentDoc);
+        if (filePath != null) {
+            // Update or insert document (using file_path as unique identifier)
+            indexWriter.updateDocument(new Term("file_path", filePath), parentDoc);
+        } else {
+            indexWriter.addDocument(parentDoc);
+        }
     }
 
     /**
@@ -761,8 +772,10 @@ public class LuceneIndexService {
 
                 logger.debug("Query for highlighting: {}", highlightQuery);
                 final String content = doc.get("content");
+                //alsdkaskdjask
+                final VectorMatchInfo vectorMatchInfo = vectorMatchInfoByDocId.get(scoreDocs[i].doc);
                 final List<Passage> passages = createPassages(
-                        content, highlightQuery, highlighter, maxPassages, maxPassageCharLength, queryTerms, scoreDocs[i]);
+                        content, highlightQuery, highlighter, maxPassages, maxPassageCharLength, queryTerms, scoreDocs[i], vectorMatchInfo);
 
                 final SearchDocument searchDoc = SearchDocument.builder()
                         .score(scoreDocs[i].score)
@@ -780,7 +793,7 @@ public class LuceneIndexService {
                         .modifiedDate(doc.get("modified_date"))
                         .indexedDate(doc.get("indexed_date"))
                         .passages(passages)
-                        .vectorMatchInfo(vectorMatchInfoByDocId.get(scoreDocs[i].doc))
+                        .vectorMatchInfo(vectorMatchInfo)
                         .build();
 
                 results.add(searchDoc);
@@ -822,11 +835,13 @@ public class LuceneIndexService {
                                                      final IndexSearcher searcher,
                                                      final int pageSize) {
         try {
+            logger.info("Merging text search results with vector results for hybrid search");
             final float[] queryVector = onnxService.embed(queryString, ONNXService.QUERY_PREFIX);
             final int vectorK = 50;
             final KnnFloatVectorQuery knnQuery = new KnnFloatVectorQuery("embedding", queryVector, vectorK);
             final TopDocs vectorTopDocs = searcher.search(knnQuery, vectorK);
 
+            logger.info("Vector search for search query: {} returned {} hits", queryString, vectorTopDocs.scoreDocs.length);
             final float cosineCutoff = 0.70f;
             // DOT_PRODUCT similarity in Lucene returns a score in (0, 1] for normalized vectors.
             // Convert cosine threshold: score = (1 + cosine) / 2
@@ -846,6 +861,7 @@ public class LuceneIndexService {
                 final ScoreDoc childScoreDoc = vectorTopDocs.scoreDocs[vRank];
                 // Apply cosine similarity threshold
                 if (childScoreDoc.score < luceneThreshold) {
+                    logger.info("Ignoring search result with low vector score: {}, threshold is {}", childScoreDoc.score, luceneThreshold);
                     continue;
                 }
                 try {
@@ -904,6 +920,7 @@ public class LuceneIndexService {
                     .map(e -> new ScoreDoc(e.getKey(), e.getValue()))
                     .toArray(ScoreDoc[]::new);
 
+            logger.info("Returning {} merged results", mergedDocs.length);
             return new VectorMergeResult(mergedDocs, vectorMatchInfoByParentDocId);
 
         } catch (final Exception e) {
@@ -1807,7 +1824,8 @@ public class LuceneIndexService {
                                          final int maxPassages,
                                          final int maxPassageCharLength,
                                          final Set<String> queryTerms,
-                                         final ScoreDoc scoreDoc) {
+                                         final ScoreDoc scoreDoc,
+                                         final VectorMatchInfo vectorMatchInfo) {
         // Null or empty content -- nothing to extract
         if (content == null || content.isEmpty()) {
             return List.of();
@@ -1825,9 +1843,25 @@ public class LuceneIndexService {
             logger.warn("Highlighting failed for doc {}; synthesising fallback passage", scoreDoc.doc, e);
         }
 
-        // Fallback: synthesise a single passage from the start of the content
+        // Fallback: synthesise a single passage from the start of the content,
+        // or from the best-matching vector chunk if available (more relevant for semantic hits)
         if (formattedPassages == null || formattedPassages.isEmpty()) {
+            if (hasUsableChunkText(vectorMatchInfo)) {
+                return List.of(createSemanticPassage(
+                        vectorMatchInfo.matchedChunkText(), queryTerms,
+                        vectorMatchInfo.vectorScore(), maxPassageCharLength));
+            }
             return List.of(createFallbackPassage(content));
+        }
+
+        // If the highlighter returned passages but none had actual term matches, the document was
+        // found via vector similarity only. Prefer the matched chunk text as a semantic passage
+        // since it is more relevant than an arbitrary sentence from the document.
+        final boolean noTermMatchesAtAll = formattedPassages.stream().allMatch(fp -> fp.numMatches() == 0);
+        if (noTermMatchesAtAll && hasUsableChunkText(vectorMatchInfo)) {
+            return List.of(createSemanticPassage(
+                    vectorMatchInfo.matchedChunkText(), queryTerms,
+                    vectorMatchInfo.vectorScore(), maxPassageCharLength));
         }
 
         // Find the maximum passage score for normalisation to [0, 1]
@@ -1867,11 +1901,16 @@ public class LuceneIndexService {
             // (content is guaranteed non-empty by the early return at the top of this method)
             final double position = Math.round((double) fp.startOffset() / content.length() * 100.0) / 100.0;
 
-            passages.add(new Passage(cleanedPassageText, normalizedScore, matchedTerms, termCoverage, position));
+            passages.add(new Passage(cleanedPassageText, normalizedScore, matchedTerms, termCoverage, position, "keyword"));
         }
 
         // If all passages were blank (unlikely but defensive), return a fallback
         if (passages.isEmpty()) {
+            if (hasUsableChunkText(vectorMatchInfo)) {
+                return List.of(createSemanticPassage(
+                        vectorMatchInfo.matchedChunkText(), queryTerms,
+                        vectorMatchInfo.vectorScore(), maxPassageCharLength));
+            }
             return List.of(createFallbackPassage(content));
         }
 
@@ -1888,7 +1927,83 @@ public class LuceneIndexService {
                 (content.length() > fallbackLength ? "..." : ""));
         // Remove broken/invalid characters from fallback passage
         final String cleanedFallbackText = TextCleaner.clean(fallbackText);
-        return new Passage(cleanedFallbackText, 0.0, List.of(), 0.0, 0.0);
+        return new Passage(cleanedFallbackText, 0.0, List.of(), 0.0, 0.0, "keyword");
+    }
+
+    /**
+     * Create a passage from the best-matching vector chunk when the BM25 highlighter
+     * found no term matches.  Query terms are highlighted by simple case-insensitive
+     * string scanning, mirroring the fallback in {@link #extractMatchedTerms}.
+     *
+     * @param chunkText          the stored chunk_text for the best-matching child document (non-null)
+     * @param queryTerms         query terms to scan for and bold
+     * @param vectorScore        raw Lucene dot-product similarity score (0.0–1.0)
+     * @param maxPassageCharLength maximum allowed passage length in characters
+     * @return a single Passage with source="semantic"
+     */
+    private static Passage createSemanticPassage(final String chunkText,
+                                                  final Set<String> queryTerms,
+                                                  final float vectorScore,
+                                                  final int maxPassageCharLength) {
+        // Apply simple term bolding via string scan (no term vectors needed)
+        final String bolded = applySimpleTermBolding(chunkText, queryTerms);
+        final String cleaned = TextCleaner.clean(cleanPassageText(bolded));
+        if (cleaned == null || cleaned.isBlank()) {
+            // Extreme edge case: return chunk text as-is with sentinel values
+            return new Passage(chunkText, 0.0, List.of(), 0.0, 0.0, "semantic");
+        }
+        final String truncated = truncatePassage(cleaned, maxPassageCharLength);
+        final List<String> matchedTerms = extractMatchedTerms(truncated, queryTerms);
+        final double termCoverage = calculateTermCoverage(matchedTerms, queryTerms);
+        // Normalize vector score to 2 decimal places for consistency with keyword path
+        final double normalizedScore = Math.round((double) vectorScore * 100.0) / 100.0;
+        // position=0.0 is a sentinel: chunk offset within parent document is not stored
+        return new Passage(truncated, normalizedScore, matchedTerms, termCoverage, 0.0, "semantic");
+    }
+
+    /**
+     * Returns true when the given {@link VectorMatchInfo} contains usable chunk text
+     * that can serve as a semantic passage fallback.
+     */
+    private static boolean hasUsableChunkText(final VectorMatchInfo vmi) {
+        return vmi != null && vmi.matchedViaVector()
+                && vmi.matchedChunkText() != null
+                && !vmi.matchedChunkText().isBlank();
+    }
+
+    /**
+     * Scan {@code text} for occurrences of each query term (case-insensitive, unicode-aware)
+     * and wrap the first occurrence of each term in {@code **markdown bold**} markers.
+     * This is used for semantic passages where Lucene's term-vector-based highlighter
+     * could not find matches.
+     *
+     * @param text       the raw chunk text
+     * @param queryTerms terms to highlight (may be empty or null)
+     * @return text with first occurrence of each matched query term wrapped in {@code **...**};
+     *         original text unchanged if no terms or no matches found
+     */
+    private static String applySimpleTermBolding(final String text, final Set<String> queryTerms) {
+        if (text == null || queryTerms == null || queryTerms.isEmpty()) {
+            return text;
+        }
+        String result = text;
+        for (final String qt : queryTerms) {
+            if (qt == null || qt.length() < 2) {
+                continue;
+            }
+            final java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                    java.util.regex.Pattern.quote(qt),
+                    java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
+            final java.util.regex.Matcher matcher = pattern.matcher(result);
+            if (matcher.find()) {
+                result = result.substring(0, matcher.start())
+                        + "**"
+                        + result.substring(matcher.start(), matcher.end())
+                        + "**"
+                        + result.substring(matcher.end());
+            }
+        }
+        return result;
     }
 
     /**

@@ -1,5 +1,7 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.index.analysis.CachedNLPLemmatizerOp;
+import de.mirkosertic.mcp.luceneserver.index.analysis.LemmatizerCacheStats;
 import opennlp.tools.lemmatizer.LemmatizerModel;
 import org.apache.lucene.analysis.opennlp.tools.NLPLemmatizerOp;
 import org.junit.jupiter.api.BeforeEach;
