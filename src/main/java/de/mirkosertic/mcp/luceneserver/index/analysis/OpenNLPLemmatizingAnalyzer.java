@@ -1,4 +1,4 @@
-package de.mirkosertic.mcp.luceneserver;
+package de.mirkosertic.mcp.luceneserver.index.analysis;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import opennlp.tools.lemmatizer.LemmatizerModel;

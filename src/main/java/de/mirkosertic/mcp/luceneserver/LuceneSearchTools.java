@@ -2,6 +2,7 @@ package de.mirkosertic.mcp.luceneserver;
 
 import com.google.common.io.Resources;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
+import de.mirkosertic.mcp.luceneserver.index.analysis.LemmatizerCacheStats;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlStatistics;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlerConfigurationManager;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentCrawlerService;

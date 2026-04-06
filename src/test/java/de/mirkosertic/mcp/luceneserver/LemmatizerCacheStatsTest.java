@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.index.analysis.LemmatizerCacheStats;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CountDownLatch;
