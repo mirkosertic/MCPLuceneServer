@@ -1,6 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
-import de.mirkosertic.mcp.luceneserver.NotificationService;
+import de.mirkosertic.mcp.luceneserver.util.NotificationService;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

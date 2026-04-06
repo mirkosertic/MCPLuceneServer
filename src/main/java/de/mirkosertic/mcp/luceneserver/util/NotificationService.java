@@ -1,4 +1,4 @@
-package de.mirkosertic.mcp.luceneserver;
+package de.mirkosertic.mcp.luceneserver.util;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

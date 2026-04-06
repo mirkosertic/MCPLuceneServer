@@ -5,6 +5,7 @@ import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.config.LoggingConfigurator;
 import de.mirkosertic.mcp.luceneserver.onnx.ONNXService;
+import de.mirkosertic.mcp.luceneserver.util.NotificationService;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlExecutorService;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlStatisticsTracker;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlerConfigurationManager;
