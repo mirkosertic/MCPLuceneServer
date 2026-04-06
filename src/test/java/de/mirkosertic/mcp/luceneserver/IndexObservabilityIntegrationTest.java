@@ -77,7 +77,7 @@ class IndexObservabilityIntegrationTest {
                 content, metadata, language, "text/plain", testFile.toFile().length());
 
         final var luceneDoc = documentIndexer.createDocument(testFile, extracted);
-        documentIndexer.indexDocument(indexService.getIndexWriter(), luceneDoc);
+        documentIndexer.indexDocument(luceneDoc, extracted.content(), indexService);
         indexService.commit();
         indexService.refreshSearcher();
     }

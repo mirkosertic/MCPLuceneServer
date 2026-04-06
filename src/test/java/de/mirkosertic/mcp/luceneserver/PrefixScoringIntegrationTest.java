@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.index.query.ProximityExpandingQueryParser;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;

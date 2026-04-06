@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
+import de.mirkosertic.mcp.luceneserver.LuceneIndexService;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
@@ -235,17 +236,11 @@ public class DocumentIndexer {
         return children;
     }
 
-    public void indexDocument(final IndexWriter writer, final Document document) throws IOException {
+    public void indexDocument(final Document document, final String rawContent, final LuceneIndexService luceneIndexService) throws IOException {
         // Build the document with facets config
         final Document facetedDoc = facetsConfig.build(document);
 
-        final String filePath = document.get("file_path");
-        if (filePath != null) {
-            // Update or insert document (using file_path as unique identifier)
-            writer.updateDocument(new Term("file_path", filePath), facetedDoc);
-        } else {
-            writer.addDocument(facetedDoc);
-        }
+        luceneIndexService.indexDocument(facetedDoc, rawContent);
     }
 
     public void deleteDocument(final IndexWriter writer, final String filePath) throws IOException {

@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.index.query.IndividualPassageFormatter;
 import org.apache.lucene.search.uhighlight.Passage;
 import org.apache.lucene.util.BytesRef;
 import org.junit.jupiter.api.DisplayName;

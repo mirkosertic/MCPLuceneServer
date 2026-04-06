@@ -135,7 +135,7 @@ class HybridSearchIntegrationTest {
         final ExtractedDocument extracted = new ExtractedDocument(
                 content, null, null, "text/plain", content.length());
         final Document parentDoc = documentIndexer.createDocument(file, extracted);
-        svc.indexDocument(file, parentDoc, content);
+        svc.indexDocument(parentDoc, content);
         svc.commit();
         svc.refreshSearcher();
     }
@@ -198,7 +198,7 @@ class HybridSearchIntegrationTest {
             final Path p = Path.of(pair[0]);
             final ExtractedDocument ex = new ExtractedDocument(
                     pair[1], null, null, "text/plain", pair[1].length());
-            di2.indexDocument(indexServiceNoVector.getIndexWriter(), di2.createDocument(p, ex));
+            di2.indexDocument(di2.createDocument(p, ex), ex.content(), indexServiceNoVector);
         }
         indexServiceNoVector.commit();
         indexServiceNoVector.refreshSearcher();
@@ -315,5 +315,71 @@ class HybridSearchIntegrationTest {
         // during the no-vector search (wrong service — nothing to verify, but no NPE occurred).
         // The important assertion: the text-only service returned a valid result.
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("Passage source is 'keyword' when BM25 highlighter finds term matches in content")
+    void testKeywordPassageSourceForTextMatch() throws Exception {
+        // Searching for "Vertrag" which IS present in CONTENT_A — the highlighter should
+        // find term matches and produce keyword passages.
+        final LuceneIndexService.SearchResult result =
+                indexServiceNoVector.search("Vertrag", List.of(), 0, 10, "_score", "desc");
+
+        final java.util.Optional<SearchDocument> docA = result.documents().stream()
+                .filter(d -> d.filePath() != null && d.filePath().contains("doc_a_vertrag"))
+                .findFirst();
+
+        assertThat(docA)
+                .as("doc_a should appear in text-only results for 'Vertrag'")
+                .isPresent();
+
+        assertThat(docA.get().passages())
+                .as("doc_a should have at least one passage")
+                .isNotEmpty();
+
+        assertThat(docA.get().passages().getFirst().source())
+                .as("Passage source should be 'keyword' when BM25 highlighter found term matches")
+                .isEqualTo("keyword");
+    }
+
+    @Test
+    @DisplayName("Semantic passage used when query terms do not appear in document content")
+    void testSemanticPassageUsedWhenHighlighterFindsNoMatch() throws Exception {
+        // Query "contract" is English but CONTENT_A is German ("Vertrag") — the BM25 highlighter
+        // will find no keyword matches. However the mock always returns queryVector for any query
+        // string, and embeddingA matches perfectly, so doc_a gets a vector hit with chunk text.
+        // We expect a semantic passage (source="semantic") containing the chunk text.
+        final LuceneIndexService.SearchResult result =
+                indexServiceWithVector.search("contract", List.of(), 0, 10, "_score", "desc");
+
+        final java.util.Optional<SearchDocument> docA = result.documents().stream()
+                .filter(d -> d.filePath() != null && d.filePath().contains("doc_a_vertrag"))
+                .findFirst();
+
+        assertThat(docA)
+                .as("doc_a should appear via vector match for 'contract' query")
+                .isPresent();
+
+        final VectorMatchInfo matchInfo = docA.get().vectorMatchInfo();
+        assertThat(matchInfo)
+                .as("doc_a should have vectorMatchInfo when matched via vector")
+                .isNotNull();
+
+        assertThat(matchInfo.matchedChunkText())
+                .as("matchedChunkText must be non-null for semantic passage test to be meaningful")
+                .isNotNull();
+
+        assertThat(docA.get().passages())
+                .as("doc_a should have at least one passage")
+                .isNotEmpty();
+
+        assertThat(docA.get().passages().getFirst().source())
+                .as("Passage source should be 'semantic' when BM25 found no keyword matches")
+                .isEqualTo("semantic");
+
+        // The semantic passage text should be derived from the chunk, not the first 300 chars
+        assertThat(docA.get().passages().getFirst().text())
+                .as("Semantic passage text should contain content from the matched chunk")
+                .isNotBlank();
     }
 }

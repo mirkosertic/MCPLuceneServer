@@ -107,7 +107,7 @@ class VectorIndexingIntegrationTest {
         final ExtractedDocument extracted = new ExtractedDocument(
                 content, null, null, "text/plain", content.length());
         final Document parentDoc = documentIndexer.createDocument(file, extracted);
-        indexService.indexDocument(file, parentDoc, content);
+        indexService.indexDocument(parentDoc, content);
         indexService.commit();
         indexService.refreshSearcher();
     }

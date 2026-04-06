@@ -1223,14 +1223,16 @@ Search results are optimized for MCP responses (< 1 MB) and include:
           "score": 1.0,
           "matchedTerms": ["search term"],
           "termCoverage": 1.0,
-          "position": 0.12
+          "position": 0.12,
+          "source": "keyword"
         },
         {
           "text": "...another occurrence of <em>search</em> in a later section...",
           "score": 0.75,
           "matchedTerms": ["search"],
           "termCoverage": 0.5,
-          "position": 0.67
+          "position": 0.67,
+          "source": "keyword"
         }
       ]
     }
@@ -1275,6 +1277,7 @@ Search results are optimized for MCP responses (< 1 MB) and include:
   - `matchedTerms` -- The distinct query terms that appear in this passage (extracted from the `<em>` tags). Useful for understanding which parts of a multi-term query a passage satisfies.
   - `termCoverage` -- The fraction of all query terms present in this passage (0.0-1.0). A value of 1.0 means every query term matched. LLMs can use this to prefer passages that address the full query.
   - `position` -- Location within the source document (0.0 = start, 1.0 = end), derived from the passage's character offset. Useful for citations or for understanding document structure.
+  - `source` -- Indicates how this passage was produced: `"keyword"` means the BM25 highlighter found term matches in the indexed document text; `"semantic"` means no keyword term matches were found and the best-matching vector chunk was used as the snippet instead. Semantic passages are relevant because the document was retrieved via vector similarity (hybrid search), even if the exact query words do not appear in the text.
 
 - **Lucene Faceting:** The `facets` object uses **Lucene's SortedSetDocValues** for efficient faceted search. It shows actual facet values and document counts from the search results, not just available fields. Only facet dimensions that have values in the result set are returned.
 
@@ -1407,20 +1410,22 @@ Search results include a `passages` array with highlighted excerpts and quality 
       "score": 1.0,
       "matchedTerms": ["machine learning"],
       "termCoverage": 1.0,
-      "position": 0.08
+      "position": 0.08,
+      "source": "keyword"
     },
     {
       "text": "...<em>machine learning</em> algorithms were applied to the dataset in Section 4...",
       "score": 0.75,
       "matchedTerms": ["machine learning"],
       "termCoverage": 1.0,
-      "position": 0.45
+      "position": 0.45,
+      "source": "keyword"
     }
   ]
 }
 ```
 
-This allows you to see relevant excerpts without downloading the full document. The metadata fields help LLMs quickly identify the best passage: prefer passages with high `termCoverage` (covers more of the query) and use `position` for document-structure context.
+This allows you to see relevant excerpts without downloading the full document. The metadata fields help LLMs quickly identify the best passage: prefer passages with high `termCoverage` (covers more of the query), use `position` for document-structure context, and check `source` to understand whether the passage was found by keyword matching (`"keyword"`) or by vector similarity (`"semantic"`).
 
 ### Example 8: Managing Crawlable Directories at Runtime
 
@@ -2121,10 +2126,17 @@ java --enable-native-access=ALL-UNNAMED -Xmx2g -Dspring.profiles.active=deployed
 
 The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) provides a visual debugging interface for testing MCP servers. Use it to inspect requests, responses, and debug tool behavior without needing a full MCP client like Claude Desktop.
 
-**Run the server with the inspector:**
+**Run the server with the inspector for STDIO connect:**
+
 ```bash
 npx @modelcontextprotocol/inspector java -jar --enable-native-access=ALL-UNNAMED -Xmx2g -Dspring.profiles.active=deployed -jar ./target/luceneserver-0.0.1-SNAPSHOT.jar
 ```
+ or in case of HTTP Streaming:
+
+```bash
+npx @modelcontextprotocol/inspector http://localhost:9000/mcp/message --transport http
+```
+
 
 This opens a web-based UI where you can:
 - Test all MCP tools interactively

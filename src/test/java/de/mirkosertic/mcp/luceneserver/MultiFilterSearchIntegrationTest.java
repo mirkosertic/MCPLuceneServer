@@ -76,7 +76,7 @@ class MultiFilterSearchIntegrationTest {
     private void indexDocument(final Path file) throws IOException {
         final ExtractedDocument extracted = extractor.extract(file);
         final var luceneDoc = documentIndexer.createDocument(file, extracted);
-        documentIndexer.indexDocument(indexService.getIndexWriter(), luceneDoc);
+        documentIndexer.indexDocument(luceneDoc, extracted.content(), indexService);
         indexService.commit();
         indexService.refreshSearcher();
     }
@@ -95,7 +95,7 @@ class MultiFilterSearchIntegrationTest {
                 content, metadata, language, "text/plain", testFile.toFile().length());
 
         final var luceneDoc = documentIndexer.createDocument(testFile, extracted);
-        documentIndexer.indexDocument(indexService.getIndexWriter(), luceneDoc);
+        documentIndexer.indexDocument(luceneDoc, extracted.content(), indexService);
         indexService.commit();
         indexService.refreshSearcher();
     }
@@ -256,7 +256,7 @@ class MultiFilterSearchIntegrationTest {
             final ExtractedDocument mdExtracted = new ExtractedDocument(
                     "English markdown file", Map.of(), "en", "text/markdown", mdFile.toFile().length());
             final var mdLuceneDoc = documentIndexer.createDocument(mdFile, mdExtracted);
-            documentIndexer.indexDocument(indexService.getIndexWriter(), mdLuceneDoc);
+            documentIndexer.indexDocument(mdLuceneDoc, mdExtracted.content(), indexService);
             indexService.commit();
             indexService.refreshSearcher();
 

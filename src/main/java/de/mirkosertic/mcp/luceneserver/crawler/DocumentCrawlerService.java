@@ -361,7 +361,7 @@ public class DocumentCrawlerService implements FileChangeListener {
                 return;
             }
             final Document document = documentIndexer.createDocument(file, extracted);
-            documentIndexer.indexDocument(indexService.getIndexWriter(), document);
+            documentIndexer.indexDocument(document, extracted.content(), indexService);
             statisticsTracker.incrementFilesProcessed(directory, extracted.fileSize());
             statisticsTracker.incrementFilesIndexed(directory);
         } catch (final Exception e) {
@@ -535,7 +535,7 @@ public class DocumentCrawlerService implements FileChangeListener {
                             documentIndexer.deleteDocument(indexService.getIndexWriter(), evt.file().toString());
                         } else {
                             final Document document = documentIndexer.createDocument(evt.file(), extracted);
-                            documentIndexer.indexDocument(indexService.getIndexWriter(), document);
+                            documentIndexer.indexDocument(document, extracted.content(), indexService);
                             logger.info("Indexed file: {}", evt.file());
                         }
                     } catch (final Exception e) {

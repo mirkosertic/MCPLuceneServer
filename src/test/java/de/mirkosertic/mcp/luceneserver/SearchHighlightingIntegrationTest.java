@@ -102,7 +102,7 @@ class SearchHighlightingIntegrationTest {
 
         // Index the document
         final var luceneDoc = documentIndexer.createDocument(testFile, extracted);
-        documentIndexer.indexDocument(indexService.getIndexWriter(), luceneDoc);
+        documentIndexer.indexDocument(luceneDoc, extracted.content(), indexService);
         indexService.commit();
         indexService.refreshSearcher();
 
@@ -629,7 +629,7 @@ class SearchHighlightingIntegrationTest {
     private void indexDocument(final Path file) throws IOException {
         final ExtractedDocument extracted = extractor.extract(file);
         final var luceneDoc = documentIndexer.createDocument(file, extracted);
-        documentIndexer.indexDocument(indexService.getIndexWriter(), luceneDoc);
+        documentIndexer.indexDocument(luceneDoc, extracted.content(), indexService);
         indexService.commit();
         indexService.refreshSearcher();
     }

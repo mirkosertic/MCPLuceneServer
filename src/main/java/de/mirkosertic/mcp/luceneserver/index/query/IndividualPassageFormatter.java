@@ -1,4 +1,4 @@
-package de.mirkosertic.mcp.luceneserver;
+package de.mirkosertic.mcp.luceneserver.index.query;
 
 import org.apache.lucene.search.uhighlight.PassageFormatter;
 
@@ -14,11 +14,11 @@ import java.util.List;
  * scores, matched terms, coverage, and position.</p>
  *
  * <p>This formatter is designed to be used together with
- * {@link LuceneIndexService.PassageAwareHighlighter} which exposes the
+ * {@link de.mirkosertic.mcp.luceneserver.LuceneIndexService.PassageAwareHighlighter} which exposes the
  * {@code highlightFieldsAsObjects} API that preserves the raw {@link Object}
  * return value rather than casting it to {@link String}.</p>
  */
-class IndividualPassageFormatter extends PassageFormatter {
+public class IndividualPassageFormatter extends PassageFormatter {
 
     /**
      * A single formatted passage with its Lucene-computed metadata.
@@ -29,7 +29,7 @@ class IndividualPassageFormatter extends PassageFormatter {
      * @param startOffset character offset of the passage start in the original content
      * @param endOffset   character offset of the passage end in the original content
      */
-    record FormattedPassage(String text, float score, int numMatches, int startOffset, int endOffset) {
+    public record FormattedPassage(String text, float score, int numMatches, int startOffset, int endOffset) {
     }
 
     /**
