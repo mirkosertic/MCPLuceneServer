@@ -30,6 +30,10 @@ public record Passage(
         @Description("Approximate position of this passage within the source document " +
                 "(0.0 = very start, 1.0 = very end). Helpful for understanding document structure " +
                 "and for citations that need to reference a location.")
-        double position
+        double position,
+
+        @Description("Passage source: 'keyword' = BM25 highlighter found term matches in the indexed document; " +
+                "'semantic' = no keyword term matches were found, best-matching vector chunk used as snippet instead.")
+        String source
 ) {
 }

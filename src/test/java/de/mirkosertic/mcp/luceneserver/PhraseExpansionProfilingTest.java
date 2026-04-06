@@ -79,21 +79,21 @@ class PhraseExpansionProfilingTest {
         doc1.add(new StringField("file_path", "/test/exact.txt", Field.Store.YES));
         doc1.add(new TextField("content", "Domain Design", Field.Store.YES));
         doc1.add(new StringField("file_type", "txt", Field.Store.YES));
-        documentIndexer.indexDocument(indexService.getIndexWriter(), doc1);
+        documentIndexer.indexDocument(doc1, "Domain Design", indexService);
 
         // Document 2: Proximity match (hyphenated)
         final Document doc2 = new Document();
         doc2.add(new StringField("file_path", "/test/hyphenated.txt", Field.Store.YES));
         doc2.add(new TextField("content", "Domain-driven Design", Field.Store.YES));
         doc2.add(new StringField("file_type", "txt", Field.Store.YES));
-        documentIndexer.indexDocument(indexService.getIndexWriter(), doc2);
+        documentIndexer.indexDocument(doc2, "Domain.driven Design", indexService);
 
         // Document 3: Proximity match (one word between)
         final Document doc3 = new Document();
         doc3.add(new StringField("file_path", "/test/proximity.txt", Field.Store.YES));
         doc3.add(new TextField("content", "Domain Effective Design", Field.Store.YES));
         doc3.add(new StringField("file_type", "txt", Field.Store.YES));
-        documentIndexer.indexDocument(indexService.getIndexWriter(), doc3);
+        documentIndexer.indexDocument(doc3, "Domain Effective Design", indexService);
 
         // Commit to ensure documents are visible
         indexService.commit();

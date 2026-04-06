@@ -1,4 +1,4 @@
-package de.mirkosertic.mcp.luceneserver;
+package de.mirkosertic.mcp.luceneserver.index.query;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.index.Term;

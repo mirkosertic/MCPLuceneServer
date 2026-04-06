@@ -88,7 +88,7 @@ class VectorSearchDebugIntegrationTest {
         final ExtractedDocument extracted = new ExtractedDocument(
                 content, null, null, "text/plain", content.length());
         final Document parentDoc = documentIndexer.createDocument(file, extracted);
-        svc.indexDocument(file, parentDoc, content);
+        svc.indexDocument(parentDoc, content);
         svc.commit();
         svc.refreshSearcher();
     }
@@ -128,7 +128,7 @@ class VectorSearchDebugIntegrationTest {
         final DocumentIndexer di2 = new DocumentIndexer();
         final ExtractedDocument ex = new ExtractedDocument(
                 CONTENT_A, null, null, "text/plain", CONTENT_A.length());
-        di2.indexDocument(indexServiceNoVector.getIndexWriter(), di2.createDocument(fileA, ex));
+        di2.indexDocument(di2.createDocument(fileA, ex), ex.content(), indexServiceWithVector);
         indexServiceNoVector.commit();
         indexServiceNoVector.refreshSearcher();
     }

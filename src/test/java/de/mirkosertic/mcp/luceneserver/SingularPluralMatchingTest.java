@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver;
 
 import de.mirkosertic.mcp.luceneserver.index.analysis.OpenNLPLemmatizingAnalyzer;
+import de.mirkosertic.mcp.luceneserver.index.query.ProximityExpandingQueryParser;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.TextField;
