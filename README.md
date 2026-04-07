@@ -53,7 +53,7 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - Cross-platform notifications (macOS Notification Center, Windows Toast, Linux notify-send)
 
 🧠 **Semantic / Hybrid Search**
-- Optional vector search using multilingual-e5 embeddings with Late Chunking, combined with BM25 via Reciprocal Rank Fusion (RRF). See [VECTORSEARCH.md](VECTORSEARCH.md) for details.
+- Optional vector search using multilingual-e5 embeddings with Late Chunking, combined with BM25 via Reciprocal Rank Fusion (RRF). See [SEMANTICSEARCH.md](SEMANTICSEARCH.md) for details.
 
 ## Table of Contents
 
@@ -77,7 +77,7 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 Additional technical documentation:
 
 - [PIPELINE.md](PIPELINE.md) — Analyzer chains, query pipeline, and tokenization details
-- [VECTORSEARCH.md](VECTORSEARCH.md) — Hybrid search architecture: Late Chunking, Block Join indexing, RRF scoring, and configuration
+- [SEMANTICSEARCH.md](SEMANTICSEARCH.md) — Semantic search architecture: Late Chunking, Block Join indexing, KNN scoring, and configuration
 - [ONNX.md](ONNX.md) — ONNX model export, optimization and INT8 quantization guide for e5-base and e5-large
 
 ## Quick Start
@@ -1887,7 +1887,7 @@ java --enable-native-access=ALL-UNNAMED \
 | `spring.profiles.active` includes `vectorsearch` | —         | Enables semantic vector indexing and hybrid search                                      |
 | `vector.model`                                   | `e5-base` | Embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality) |
 
-See [VECTORSEARCH.md](VECTORSEARCH.md) for full architecture details, tuning guidance, and RRF scoring configuration.
+See [SEMANTICSEARCH.md](SEMANTICSEARCH.md) for full architecture details, tuning guidance, and KNN scoring configuration.
 
 ### Critical Note: Vector Search and the Semantic Gap
 

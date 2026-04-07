@@ -1,7 +1,7 @@
-# MCP Lucene Server - Hybrid Vector Search
+# MCP Lucene Server - Semantic Search
 
-This document describes the hybrid search architecture combining BM25 text search with dense
-vector search (semantic search) using ONNX-based transformer embeddings.
+This document describes the semantic search architecture using ONNX-based transformer embeddings
+and pure KNN vector search.
 
 For general feature overview and user-facing documentation, see [README.md](README.md).
 For analyzer pipeline details, see [PIPELINE.md](PIPELINE.md).
@@ -37,16 +37,16 @@ Embedding search finds all of them — because the model understands the semanti
 proximity of these terms.
 ```
 
-### The Solution: Hybrid Search
+### The Solution: Semantic Search
 
-The MCP Lucene Server combines both approaches:
+The MCP Lucene Server supports pure KNN semantic search as a separate tool (`semanticSearch`):
 
-1. **BM25 Search** (lexical): Exact matches, wildcards, lemmatization, transliteration
-2. **Dense Vector Search** (semantic): Cosine similarity between query and document embeddings
-3. **RRF Fusion** (Reciprocal Rank Fusion): Both ranked lists are merged
+1. **Embedding** — the query and document chunks are encoded into dense vectors using an ONNX transformer model
+2. **KNN Search** — finds the nearest neighbor chunks in vector space using cosine similarity
+3. **Configurable threshold** — a `similarityThreshold` parameter (default 0.70, range 0.0–1.0) filters out poor matches
 
-The result: documents appear in search results even when the searched terms do not appear
-verbatim in the document.
+Results are ordered by cosine similarity — the most semantically relevant documents appear first.
+This approach is fully explainable: each result has a `cosineScore` showing exactly how similar it is to the query.
 
 ---
 
@@ -153,9 +153,10 @@ The embedding dimension is also stored in commit metadata (`embedding_dimension`
 between models (768 → 1024 or vice versa) is automatically detected as a mismatch and
 triggers a full re-crawl.
 
-### Fallback Without Vector Search Profile
+### Fallback When Semantic Search Is Not Configured
 
-When the `vectorsearch` profile is not active, `onnxService == null`. In this case, only
+When `VECTOR_MODEL` is not set or semantic tools (`semanticSearch`, `profileSemanticSearch`) are not
+included in the active tool set, `onnxService == null`. In this case only
 `addDocument(parentDoc)` is called — no embedding, no child documents, zero additional overhead.
 
 ---
@@ -215,118 +216,92 @@ TopDocs parentHits = searcher.search(parentQuery, 1);
 
 Only the best child match (highest vector score) is kept per parent.
 
-### Step 5: RRF Fusion
-
-The BM25 ranked list and the vector ranked list are merged via RRF (see Section 5).
-
-### Fallback on Error
-
-If vector search throws an exception (model timeout, OOM, etc.), the system automatically
-falls back to text-only results:
-
-```java
-} catch (final Exception e) {
-    logger.warn("Vector search failed, falling back to text-only: {}", e.getMessage());
-    return new VectorMergeResult(textDocs, Map.of());
-}
-```
-
 ---
 
-## 5. Scoring & Ranking (RRF)
+## 5. Scoring & Ranking
 
-### Why Not a Simple Boost Factor?
+### Cosine Similarity
 
-BM25 scores and cosine scores exist in completely different value ranges:
-- BM25: typically 1–20 (depending on IDF, term frequency, document length)
-- Cosine: 0–1
+Results are ordered by cosine similarity between the query embedding and the best matching chunk embedding.
+Since the vectors are L2-normalized, Lucene's DOT_PRODUCT score maps to cosine similarity as:
 
-An additive or multiplicative boost would let BM25 dominate and render semantic matches
-invisible. **RRF solves this problem** by using only *ranks*, not scores.
+    cosine = 2 × score − 1
 
-### RRF Formula
+### Similarity Threshold (Configurable)
 
-```
-score(doc) = 1 / (60 + rank_text + 1)  +  1 / (60 + rank_vector + 1)
-```
+The minimum cosine similarity is a **tool parameter** (`similarityThreshold`, default **0.70**).
+The LLM or tool user can adjust it per query to tune recall/precision:
 
-The constant k=60 is the established standard from the RRF literature (Cormack et al., 2009).
+- **Lower values** (e.g. 0.50): more results, broader semantic match
+- **Higher values** (e.g. 0.85): fewer results, only closely matching documents
+- **Default (0.70)**: balanced starting point for most use cases
 
-**Example** with 10 text results and 5 vector hits:
+The Lucene DOT_PRODUCT score threshold derived from the parameter:
 
-```
-Document A: text_rank=0, vector_rank=0  → 1/61 + 1/61 = 0.0328  (both lists: rank 1)
-Document B: text_rank=1, vector_rank=3  → 1/62 + 1/64 = 0.0317  (both lists)
-Document C: text_rank=2, no vector hit  → 1/63 = 0.0159           (text list only)
-Document D: no text hit, vector_rank=1  → 1/62 = 0.0161           (vector list only!)
-```
+    Lucene score threshold = (1 + similarityThreshold) / 2
 
-Document D — a purely semantic match with no exact text overlap — appears **above** Document C
-in the final ranking.
+Example with default: `(1 + 0.70) / 2 = 0.85` — chunks scoring below this are discarded before parent resolution.
 
-### Properties of RRF Ranking
+### Result Ordering
 
-- Documents in both lists rise to the top (combined score)
-- Documents only in the vector list (semantic match without text match) still appear
-- Marginal borderline matches (just above the cosine threshold) rank low because their
-  vector rank is high
-- Score scaling differences between BM25 and cosine are irrelevant
+Results are ordered by the best chunk cosine similarity per parent document (descending).
+There is no BM25 component — purely semantic relevance determines the ranking.
 
-### VectorMatchInfo in the Response
+### SemanticMatchInfo in the Response
 
-Each search result optionally contains a `vectorMatchInfo` structure:
+Each result contains semantic match information:
 
 | Field               | Description                                          |
 |---------------------|------------------------------------------------------|
-| `matchedViaVector`  | `true` if this document was found via vector search  |
 | `matchedChunkIndex` | Index of the best matching chunk within the document |
 | `matchedChunkText`  | Approximate text of the matching chunk               |
-| `vectorScore`       | Lucene DOT_PRODUCT score of the best chunk           |
+| `cosineScore`       | Cosine similarity of the best matching chunk (0–1)   |
 
 ---
 
 ## 6. Activation & Configuration
 
-### Profile Activation
+### Activation
+
+Semantic search tools are activated by including them in the tool list and setting `VECTOR_MODEL`:
 
 ```bash
-# With vector search (recommended for new installations)
-java -Dspring.profiles.active=deployed,vectorsearch -jar mcpluceneserver.jar
+# Include semantic tools and set the ONNX model
+LUCENE_TOOLS_INCLUDE=search,semantic VECTOR_MODEL=e5-base java -jar mcpluceneserver.jar
 
-# Without vector search (default, no overhead)
-java -Dspring.profiles.active=deployed -jar mcpluceneserver.jar
+# Or include all tools (semantic tools automatically activate when VECTOR_MODEL is set)
+VECTOR_MODEL=e5-base java -jar mcpluceneserver.jar
+
+# Docker container
+docker run -e LUCENE_TOOLS_INCLUDE=search,semantic -e VECTOR_MODEL=e5-base \
+           -e SPRING_PROFILES_ACTIVE=deployed mcpluceneserver
 ```
 
-The `deployed` and `vectorsearch` profiles are independent and can be freely combined.
-The comma-separated format is standard for this application.
+If semantic tools are requested but `VECTOR_MODEL` is not set, a warning is logged and semantic tools are silently excluded from the active tool set.
 
 ### Model Selection
 
 ```bash
 # e5-base (default, recommended)
-java -Dspring.profiles.active=deployed,vectorsearch \
-     -Dvector.model=e5-base \
-     -jar mcpluceneserver.jar
+VECTOR_MODEL=e5-base java -jar mcpluceneserver.jar
 
 # e5-large (higher quality, ~3x slower)
-java -Dspring.profiles.active=deployed,vectorsearch \
-     -Dvector.model=e5-large \
-     -jar mcpluceneserver.jar
+VECTOR_MODEL=e5-large java -jar mcpluceneserver.jar
 ```
 
 ### Configuration Parameters
 
-| Parameter                                        | Default   | Description                          |
-|--------------------------------------------------|-----------|--------------------------------------|
-| `spring.profiles.active` includes `vectorsearch` | off       | Enables vector indexing and search   |
-| `-Dvector.model`                                 | `e5-base` | ONNX model (`e5-base` or `e5-large`) |
+| Parameter             | Default   | Description                                    |
+|-----------------------|-----------|------------------------------------------------|
+| `VECTOR_MODEL`        | (not set) | ONNX model (`e5-base` or `e5-large`); required for semantic tools |
+| `LUCENE_TOOLS_INCLUDE`| `*`       | Include `semantic` or `semanticSearch` to enable |
+| `similarityThreshold` | `0.70`    | Per-query threshold (tool parameter, not config) |
 
-### Behavior on First Start With Profile Enabled
+### Behavior on First Start With VECTOR_MODEL Enabled
 
-When `vectorsearch` is activated for the first time and an index without child documents
-already exists, a full re-crawl is required. The server detects this automatically:
+When `VECTOR_MODEL` is set for the first time and an index without child documents already exists, a full re-crawl is required. The server detects this automatically:
 
-1. Schema version: stored version (e.g. 8) ≠ current version (9) → `schemaUpgradeRequired = true`
+1. Schema version: stored version ≠ current version → `schemaUpgradeRequired = true`
 2. Or: no `embedding_dimension` in commit metadata → `schemaUpgradeRequired = true`
 
 `LuceneserverApplication.init()` then automatically starts a full crawl.
@@ -404,9 +379,10 @@ to facets.
 
 ### Mixed-Index State
 
-When the `vectorsearch` profile is activated after indexing without it, existing parent
-documents have no child documents. These documents are found only by BM25 search. A full
-re-crawl is needed for complete vector coverage.
+When `VECTOR_MODEL` is enabled after indexing without it, existing parent documents have no
+child documents. Documents without child documents will not appear in `semanticSearch` results —
+only lexical search (`simpleSearch`, `extendedSearch`) will find them. A full re-crawl is
+needed for complete semantic coverage.
 
 Documents newly indexed or updated after enabling the profile immediately receive their
 chunk embeddings.
@@ -423,12 +399,6 @@ int chunkSize = content.length() / numChunks;
 
 This is sufficient for display in `matchedChunkText`, but does not exactly reflect the
 text processed by the model. Exact token boundaries reside in the model's tokenizer.
-
-### Score Scales and RRF
-
-BM25 scores (1–20) and cosine scores (0–1) are not directly comparable. RRF avoids this
-problem entirely by using only ranks. The final RRF score of a document typically falls
-in the range 0.01–0.04 and has no intuitive meaning beyond the ranking order.
 
 ### Memory Footprint
 
@@ -459,5 +429,5 @@ If no accelerated provider is available, the system falls back to CPU without er
 Implementation details in:
 - `ONNXService.java` — embedding, late chunking, batch processing
 - `DocumentIndexer.java` — field definitions, `createChildDocuments()`
-- `LuceneIndexService.java` — `indexDocument()`, `mergeWithVectorResults()`, RRF fusion
+- `LuceneIndexService.java` — `indexDocument()`, `semanticSearch()`
 - [ONNX.md](ONNX.md) — model export, optimization, quantization
