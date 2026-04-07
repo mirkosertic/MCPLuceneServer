@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.tools;
 
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlStatistics;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlerConfigurationManager;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentCrawlerService;
@@ -38,10 +39,13 @@ public class CrawlerTools implements McpToolProvider {
 
     private final DocumentCrawlerService crawlerService;
     private final CrawlerConfigurationManager configManager;
+    private final ApplicationConfig config;
 
-    public CrawlerTools(final DocumentCrawlerService crawlerService, final CrawlerConfigurationManager configManager) {
+    public CrawlerTools(final DocumentCrawlerService crawlerService, final CrawlerConfigurationManager configManager,
+            final ApplicationConfig config) {
         this.crawlerService = crawlerService;
         this.configManager = configManager;
+        this.config = config;
     }
 
     @Override
@@ -49,91 +53,107 @@ public class CrawlerTools implements McpToolProvider {
         final List<McpServerFeatures.SyncToolSpecification> tools = new ArrayList<>();
 
         // Start crawl tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("startCrawl")
-                        .description("Start crawling configured directories. Indexes Office docs, PDFs, emails, markdown. " +
-                                "Extracts metadata and detects language automatically. Use getCrawlerStats to monitor progress.")
-                        .inputSchema(SchemaGenerator.generateSchema(StartCrawlRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> startCrawl(request.arguments()))
-                .build());
+        if (config.isToolActive("startCrawl")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("startCrawl")
+                            .description("Start crawling configured directories. Indexes Office docs, PDFs, emails, markdown. " +
+                                    "Extracts metadata and detects language automatically. Use getCrawlerStats to monitor progress.")
+                            .inputSchema(SchemaGenerator.generateSchema(StartCrawlRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> startCrawl(request.arguments()))
+                    .build());
+        }
 
         // Get crawler stats tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("getCrawlerStats")
-                        .description("Get real-time statistics about the crawler progress, including files processed, throughput, and per-directory stats.")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .build())
-                .callHandler((exchange, request) -> getCrawlerStats())
-                .build());
+        if (config.isToolActive("getCrawlerStats")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("getCrawlerStats")
+                            .description("Get real-time statistics about the crawler progress, including files processed, throughput, and per-directory stats.")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .build())
+                    .callHandler((exchange, request) -> getCrawlerStats())
+                    .build());
+        }
 
         // Get crawler status tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("getCrawlerStatus")
-                        .description("Get the current state of the crawler (IDLE, CRAWLING, PAUSED, or WATCHING).")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .build())
-                .callHandler((exchange, request) -> getCrawlerStatus())
-                .build());
+        if (config.isToolActive("getCrawlerStatus")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("getCrawlerStatus")
+                            .description("Get the current state of the crawler (IDLE, CRAWLING, PAUSED, or WATCHING).")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .build())
+                    .callHandler((exchange, request) -> getCrawlerStatus())
+                    .build());
+        }
 
         // Pause crawler tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("pauseCrawler")
-                        .description("Pause an ongoing crawl operation. The crawler can be resumed later.")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .build())
-                .callHandler((exchange, request) -> pauseCrawler())
-                .build());
+        if (config.isToolActive("pauseCrawler")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("pauseCrawler")
+                            .description("Pause an ongoing crawl operation. The crawler can be resumed later.")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .build())
+                    .callHandler((exchange, request) -> pauseCrawler())
+                    .build());
+        }
 
         // Resume crawler tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("resumeCrawler")
-                        .description("Resume a paused crawl operation.")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .build())
-                .callHandler((exchange, request) -> resumeCrawler())
-                .build());
+        if (config.isToolActive("resumeCrawler")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("resumeCrawler")
+                            .description("Resume a paused crawl operation.")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .build())
+                    .callHandler((exchange, request) -> resumeCrawler())
+                    .build());
+        }
 
         // List crawlable directories tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("listCrawlableDirectories")
-                        .description("List all configured crawlable directories. " +
-                                "Shows directories from ~/.mcplucene/config.yaml or environment variable override.")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .build())
-                .callHandler((exchange, request) -> listCrawlableDirectories())
-                .build());
+        if (config.isToolActive("listCrawlableDirectories")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("listCrawlableDirectories")
+                            .description("List all configured crawlable directories. " +
+                                    "Shows directories from ~/.mcplucene/config.yaml or environment variable override.")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .build())
+                    .callHandler((exchange, request) -> listCrawlableDirectories())
+                    .build());
+        }
 
         // Add crawlable directory tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("addCrawlableDirectory")
-                        .description("Add a directory to the crawler configuration. " +
-                                "The directory will be persisted to ~/.mcplucene/config.yaml and " +
-                                "automatically crawled on next startup. If the crawler is currently " +
-                                "watching directories, this directory will be added to the watch list.")
-                        .inputSchema(SchemaGenerator.generateSchema(AddDirectoryRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> addCrawlableDirectory(request.arguments()))
-                .build());
+        if (config.isToolActive("addCrawlableDirectory")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("addCrawlableDirectory")
+                            .description("Add a directory to the crawler configuration. " +
+                                    "The directory will be persisted to ~/.mcplucene/config.yaml and " +
+                                    "automatically crawled on next startup. If the crawler is currently " +
+                                    "watching directories, this directory will be added to the watch list.")
+                            .inputSchema(SchemaGenerator.generateSchema(AddDirectoryRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> addCrawlableDirectory(request.arguments()))
+                    .build());
+        }
 
         // Remove crawlable directory tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("removeCrawlableDirectory")
-                        .description("Remove a directory from the crawler configuration. " +
-                                "The change will be persisted to ~/.mcplucene/config.yaml. " +
-                                "Note: This does not remove already indexed documents from the directory.")
-                        .inputSchema(SchemaGenerator.generateSchema(RemoveDirectoryRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> removeCrawlableDirectory(request.arguments()))
-                .build());
+        if (config.isToolActive("removeCrawlableDirectory")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("removeCrawlableDirectory")
+                            .description("Remove a directory from the crawler configuration. " +
+                                    "The change will be persisted to ~/.mcplucene/config.yaml. " +
+                                    "Note: This does not remove already indexed documents from the directory.")
+                            .inputSchema(SchemaGenerator.generateSchema(RemoveDirectoryRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> removeCrawlableDirectory(request.arguments()))
+                    .build());
+        }
 
         return tools;
     }
