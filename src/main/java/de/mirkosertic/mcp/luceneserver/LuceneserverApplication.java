@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.config.LoggingConfigurator;
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
+import de.mirkosertic.mcp.luceneserver.index.QueryRuntimeStats;
 import de.mirkosertic.mcp.luceneserver.onnx.ONNXService;
 import de.mirkosertic.mcp.luceneserver.util.NotificationService;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlExecutorService;
@@ -103,10 +105,13 @@ public class LuceneserverApplication {
                 configManager
         );
 
+        final QueryRuntimeStats queryRuntimeStats = new QueryRuntimeStats();
+
         this.searchTools = new LuceneSearchTools(
                 indexService,
                 crawlerService,
-                configManager
+                configManager,
+                queryRuntimeStats
         );
     }
 

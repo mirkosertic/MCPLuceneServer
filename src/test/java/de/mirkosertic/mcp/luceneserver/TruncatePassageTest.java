@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver;
 
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryResponse;

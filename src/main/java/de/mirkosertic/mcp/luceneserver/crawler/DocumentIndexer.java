@@ -1,6 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
-import de.mirkosertic.mcp.luceneserver.LuceneIndexService;
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
