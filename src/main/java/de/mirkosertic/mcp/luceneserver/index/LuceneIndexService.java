@@ -30,6 +30,7 @@ import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreDetails;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoringBreakdown;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorMatchInfo;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorSearchDebug;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchMetrics;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.TermStatistics;
@@ -3432,29 +3433,50 @@ public class LuceneIndexService {
                     : new KnnFloatVectorQuery("embedding", queryVector, knnCandidates);
 
             final TopDocs vectorTopDocs = searcher.search(knnQuery, knnCandidates);
+            final int rawCandidateCount = vectorTopDocs.scoreDocs.length;
 
             // Group by file_path — keep best-scoring chunk per parent document
             final Map<String, Float> bestScoreByPath = new LinkedHashMap<>();
             final Map<String, String> bestChunkTextByPath = new LinkedHashMap<>();
 
-            for (final ScoreDoc scoreDoc : vectorTopDocs.scoreDocs) {
+            // Collect top candidate debug info (all raw candidates, before threshold)
+            final List<VectorSearchDebug.VectorCandidateInfo> topCandidates = new ArrayList<>();
+
+            for (int candidateIdx = 0; candidateIdx < vectorTopDocs.scoreDocs.length; candidateIdx++) {
+                final ScoreDoc scoreDoc = vectorTopDocs.scoreDocs[candidateIdx];
+                final float cosineScoreRaw = 2.0f * scoreDoc.score - 1.0f;
+                final Document childDoc = searcher.storedFields().document(scoreDoc.doc);
+                final String filePath = childDoc.get("file_path");
+                final String chunkText = childDoc.get("chunk_text");
+                final int chunkIndex = childDoc.getField("chunk_index") != null
+                        ? Integer.parseInt(childDoc.get("chunk_index"))
+                        : candidateIdx;
+                final boolean passedThreshold = scoreDoc.score >= luceneScoreThreshold;
+
+                topCandidates.add(new VectorSearchDebug.VectorCandidateInfo(
+                        filePath != null ? filePath : "",
+                        chunkIndex,
+                        chunkText,
+                        scoreDoc.score,
+                        cosineScoreRaw,
+                        passedThreshold,
+                        candidateIdx + 1
+                ));
+
                 // Apply cosine similarity threshold (Lucene score = (1 + cosine) / 2)
-                if (scoreDoc.score < luceneScoreThreshold) {
+                if (!passedThreshold) {
                     continue;
                 }
 
-                final Document childDoc = searcher.storedFields().document(scoreDoc.doc);
-                final String filePath = childDoc.get("file_path");
                 if (filePath == null) {
                     continue;
                 }
 
                 // Convert Lucene DOT_PRODUCT score back to cosine similarity
-                final float cosineScore = 2.0f * scoreDoc.score - 1.0f;
+                final float cosineScore = cosineScoreRaw;
 
                 if (!bestScoreByPath.containsKey(filePath) || cosineScore > bestScoreByPath.get(filePath)) {
                     bestScoreByPath.put(filePath, cosineScore);
-                    final String chunkText = childDoc.get("chunk_text");
                     bestChunkTextByPath.put(filePath, chunkText != null ? chunkText : "");
                 }
             }
@@ -3496,7 +3518,7 @@ public class LuceneIndexService {
                 results.add(new Passage(cleanedText, normalizedScore, List.of(), 0.0, 0.0, "semantic"));
             }
 
-            return new SemanticSearchResult(results, bestScoreByPath.size(), embeddingDurationMs, similarityThreshold);
+            return new SemanticSearchResult(results, bestScoreByPath.size(), embeddingDurationMs, similarityThreshold, rawCandidateCount, topCandidates);
         } finally {
             searcherManager.release(searcher);
         }
