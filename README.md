@@ -237,7 +237,7 @@ By default, results are sorted by relevance score (most relevant first). You can
 | `file_size` | File size in bytes | Descending (largest first) |
 
 **Sort Examples:**
-```json
+```jsonc
 // Most recently modified documents
 { "query": "contract", "sortBy": "modified_date", "sortOrder": "desc" }
 
@@ -398,7 +398,7 @@ See [PIPELINE.md](PIPELINE.md) for complete analyzer chains, concrete token exam
 - Search execution time in milliseconds (`searchTimeMs`)
 
 **Filter examples:**
-```json
+```jsonc
 // Browse all English PDFs
 { "query": null, "filters": [
     { "field": "language", "value": "en" },
@@ -496,7 +496,7 @@ Analyze and debug `simpleSearch` / `extendedSearch` queries. Provides detailed i
 
 A structured analysis object containing:
 
-```typescript
+```
 {
   success: boolean,
   queryAnalysis: {
