@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver;
 
+import de.mirkosertic.mcp.luceneserver.index.QueryRuntimeStats;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

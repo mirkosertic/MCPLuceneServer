@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver;
 
 import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;

@@ -1,4 +1,4 @@
-package de.mirkosertic.mcp.luceneserver;
+package de.mirkosertic.mcp.luceneserver.index;
 
 import de.mirkosertic.mcp.luceneserver.index.analysis.CachedNLPLemmatizerOp;
 import de.mirkosertic.mcp.luceneserver.index.analysis.GermanTransliteratingAnalyzer;
@@ -121,7 +121,7 @@ public class LuceneIndexService {
             "language", "file_extension", "file_type", "author");
 
     /** Fields indexed as LongPoint (support range queries). */
-    static final Set<String> LONG_POINT_FIELDS = Set.of(
+    public static final Set<String> LONG_POINT_FIELDS = Set.of(
             "file_size", "created_date", "modified_date", "indexed_date");
 
     /** Subset of LONG_POINT_FIELDS that represent dates (epoch millis). */
@@ -2115,7 +2115,7 @@ public class LuceneIndexService {
      * @param maxLength the maximum character length; values &le; 0 disable truncation
      * @return the (possibly truncated) text
      */
-    static String truncatePassage(final String text, final int maxLength) {
+    public static String truncatePassage(final String text, final int maxLength) {
         if (maxLength <= 0 || text == null || text.length() <= maxLength) {
             return text;
         }
@@ -2580,7 +2580,7 @@ public class LuceneIndexService {
      * Supports: "2024-01-15T14:30:00Z" (Instant), "2024-01-15T14:30:00" (LocalDateTime, UTC),
      * "2024-01-15" (LocalDate, start of day UTC).
      */
-    static long parseIso8601ToEpochMillis(final String value) {
+    public static long parseIso8601ToEpochMillis(final String value) {
         // Try Instant (2024-01-15T14:30:00Z)
         try {
             return Instant.parse(value).toEpochMilli();

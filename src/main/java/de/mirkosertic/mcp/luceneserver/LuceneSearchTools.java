@@ -2,6 +2,8 @@ package de.mirkosertic.mcp.luceneserver;
 
 import com.google.common.io.Resources;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
+import de.mirkosertic.mcp.luceneserver.index.QueryRuntimeStats;
 import de.mirkosertic.mcp.luceneserver.index.analysis.LemmatizerCacheStats;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlStatistics;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlerConfigurationManager;
@@ -68,14 +70,16 @@ public class LuceneSearchTools {
     private final LuceneIndexService indexService;
     private final DocumentCrawlerService crawlerService;
     private final CrawlerConfigurationManager configManager;
-    private final QueryRuntimeStats queryRuntimeStats = new QueryRuntimeStats();
+    private final QueryRuntimeStats queryRuntimeStats;
 
     public LuceneSearchTools(final LuceneIndexService indexService,
                              final DocumentCrawlerService crawlerService,
-                             final CrawlerConfigurationManager configManager) {
+                             final CrawlerConfigurationManager configManager,
+                             final QueryRuntimeStats queryRuntimeStats) {
         this.indexService = indexService;
         this.crawlerService = crawlerService;
         this.configManager = configManager;
+        this.queryRuntimeStats = queryRuntimeStats;
     }
 
     public List<McpServerFeatures.SyncResourceSpecification> getResourceSpecifications() {

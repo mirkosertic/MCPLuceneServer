@@ -1,6 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
-import de.mirkosertic.mcp.luceneserver.LuceneIndexService;
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

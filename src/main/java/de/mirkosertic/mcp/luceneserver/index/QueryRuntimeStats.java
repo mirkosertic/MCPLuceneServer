@@ -1,4 +1,4 @@
-package de.mirkosertic.mcp.luceneserver;
+package de.mirkosertic.mcp.luceneserver.index;
 
 import java.util.Arrays;
 import java.util.HashMap;
