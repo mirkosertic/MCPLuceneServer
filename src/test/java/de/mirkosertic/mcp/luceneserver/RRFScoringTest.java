@@ -14,10 +14,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.offset;
 
 /**
- * Unit tests for Reciprocal Rank Fusion (RRF) scoring logic used in hybrid search.
+ * Unit tests for Reciprocal Rank Fusion (RRF) scoring logic.
  *
- * <p>RRF formula: {@code score(rank) = 1 / (60 + rank + 1)}
- * (0-based rank, constant k = 60, as used in {@link LuceneIndexService#mergeWithVectorResults})</p>
+ * <p>RRF formula: {@code score(rank) = 1 / (60 + rank + 1)} (0-based rank, constant k = 60).
+ * The hybrid RRF merge has been removed from {@link LuceneIndexService}, but the formula
+ * correctness tests are retained here as standalone unit tests.</p>
  */
 @DisplayName("RRF scoring logic tests")
 class RRFScoringTest {
@@ -57,8 +58,7 @@ class RRFScoringTest {
     // ========== Merge logic ===========
 
     /**
-     * Minimal merge helper that replicates the RRF logic from
-     * {@link LuceneIndexService#mergeWithVectorResults}.
+     * Minimal merge helper that implements the RRF formula.
      *
      * @param textDocIds   ordered list of text-result doc IDs (best first)
      * @param vectorDocIds ordered list of vector-result doc IDs (best first)

@@ -6,7 +6,6 @@ import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.crawler.ExtractedDocument;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryResponse;
-import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorSearchDebug;
 import de.mirkosertic.mcp.luceneserver.onnx.ONNXService;
 import org.apache.lucene.document.Document;
 import org.junit.jupiter.api.AfterEach;
@@ -30,21 +29,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Integration tests for vector search debug information in {@code profileQuery}.
+ * Integration tests for {@code profileQuery} after removal of vector search debug.
  *
- * <p>Verifies that:
- * <ul>
- *   <li>When {@code useVectorSearch=true} and {@code onnxService} is mocked, the response
- *       contains {@code vectorSearchDebug} with {@code vectorSearchAvailable=true} and
- *       {@code vectorSearchEnabled=true}.</li>
- *   <li>When {@code useVectorSearch=false}, the response shows
- *       {@code vectorSearchEnabled=false}.</li>
- *   <li>When {@code onnxService} is null, the response shows
- *       {@code vectorSearchAvailable=false}.</li>
- * </ul>
- * </p>
+ * <p>Verifies that {@code profileQuery} succeeds and returns a null {@code vectorSearchDebug}
+ * field (since {@code buildVectorSearchDebug} has been removed), regardless of whether an
+ * ONNX service is present.</p>
  */
-@DisplayName("Vector search debug integration tests for profileQuery")
+@DisplayName("profileQuery integration tests (vector search debug removed)")
 class VectorSearchDebugIntegrationTest {
 
     private static final int DIM = 64;
@@ -129,7 +120,7 @@ class VectorSearchDebugIntegrationTest {
         final DocumentIndexer di2 = new DocumentIndexer();
         final ExtractedDocument ex = new ExtractedDocument(
                 CONTENT_A, null, null, "text/plain", CONTENT_A.length());
-        di2.indexDocument(di2.createDocument(fileA, ex), ex.content(), indexServiceWithVector);
+        di2.indexDocument(di2.createDocument(fileA, ex), ex.content(), indexServiceNoVector);
         indexServiceNoVector.commit();
         indexServiceNoVector.refreshSearcher();
     }
@@ -147,8 +138,8 @@ class VectorSearchDebugIntegrationTest {
     // ==================== Tests ====================
 
     @Test
-    @DisplayName("useVectorSearch=true with onnxService: vectorSearchDebug shows available=true, enabled=true")
-    void testVectorSearchDebugPresentWhenEnabled() throws Exception {
+    @DisplayName("profileQuery with onnxService present succeeds and returns null vectorSearchDebug")
+    void testProfileQuerySucceedsWithVectorService() throws Exception {
         final ProfileQueryRequest request = ProfileQueryRequest.fromMap(Map.of(
                 "query", "Vertrag"
         ));
@@ -157,54 +148,13 @@ class VectorSearchDebugIntegrationTest {
 
         assertThat(response.success()).isTrue();
         assertThat(response.vectorSearchDebug())
-                .as("vectorSearchDebug should be present when onnxService is available")
-                .isNotNull();
-
-        final VectorSearchDebug debug = response.vectorSearchDebug();
-        assertThat(debug.vectorSearchAvailable())
-                .as("vectorSearchAvailable should be true when onnxService is non-null")
-                .isTrue();
-        assertThat(debug.vectorSearchEnabled())
-                .as("vectorSearchEnabled should be true when useVectorSearch defaults to true")
-                .isTrue();
-        assertThat(debug.cosineCutoff())
-                .as("cosineCutoff should be 0.70")
-                .isEqualTo(0.70f);
+                .as("vectorSearchDebug should be null — buildVectorSearchDebug has been removed")
+                .isNull();
     }
 
     @Test
-    @DisplayName("useVectorSearch=false: vectorSearchDebug shows vectorSearchEnabled=false")
-    void testVectorSearchDebugDisabledWhenToggleOff() throws Exception {
-        final ProfileQueryRequest request = ProfileQueryRequest.fromMap(Map.of(
-                "query", "Vertrag",
-                "useVectorSearch", Boolean.FALSE
-        ));
-
-        final ProfileQueryResponse response = indexServiceWithVector.profileQuery(request);
-
-        assertThat(response.success()).isTrue();
-        assertThat(response.vectorSearchDebug())
-                .as("vectorSearchDebug should still be present even when disabled")
-                .isNotNull();
-
-        final VectorSearchDebug debug = response.vectorSearchDebug();
-        assertThat(debug.vectorSearchAvailable())
-                .as("vectorSearchAvailable should be true (onnxService is non-null)")
-                .isTrue();
-        assertThat(debug.vectorSearchEnabled())
-                .as("vectorSearchEnabled should be false when useVectorSearch=false")
-                .isFalse();
-        assertThat(debug.embeddingDurationMs())
-                .as("No embedding should have been computed when disabled")
-                .isEqualTo(0L);
-        assertThat(debug.rawCandidateCount())
-                .as("No KNN candidates when disabled")
-                .isEqualTo(0);
-    }
-
-    @Test
-    @DisplayName("null onnxService: vectorSearchDebug shows vectorSearchAvailable=false")
-    void testVectorSearchDebugUnavailableWhenNoOnnxService() throws Exception {
+    @DisplayName("profileQuery without onnxService succeeds and returns null vectorSearchDebug")
+    void testProfileQuerySucceedsWithoutVectorService() throws Exception {
         final ProfileQueryRequest request = ProfileQueryRequest.fromMap(Map.of(
                 "query", "Vertrag"
         ));
@@ -213,33 +163,33 @@ class VectorSearchDebugIntegrationTest {
 
         assertThat(response.success()).isTrue();
         assertThat(response.vectorSearchDebug())
-                .as("vectorSearchDebug should be present even without onnxService")
-                .isNotNull();
-
-        final VectorSearchDebug debug = response.vectorSearchDebug();
-        assertThat(debug.vectorSearchAvailable())
-                .as("vectorSearchAvailable should be false when onnxService is null")
-                .isFalse();
-        assertThat(debug.vectorSearchEnabled())
-                .as("vectorSearchEnabled should be false when onnxService is null")
-                .isFalse();
+                .as("vectorSearchDebug should be null — buildVectorSearchDebug has been removed")
+                .isNull();
     }
 
     @Test
-    @DisplayName("Blank query: vectorSearchDebug present but no embedding computed")
-    void testVectorSearchDebugWithBlankQuery() throws Exception {
+    @DisplayName("profileQuery with blank query succeeds")
+    void testProfileQueryWithBlankQuery() throws Exception {
         final ProfileQueryRequest request = ProfileQueryRequest.fromMap(Map.of());
 
         final ProfileQueryResponse response = indexServiceWithVector.profileQuery(request);
 
         assertThat(response.success()).isTrue();
-        assertThat(response.vectorSearchDebug()).isNotNull();
+        assertThat(response.vectorSearchDebug()).isNull();
+    }
 
-        final VectorSearchDebug debug = response.vectorSearchDebug();
-        assertThat(debug.vectorSearchAvailable()).isTrue();
-        // enabled is true (useVectorSearch defaults to true and onnxService is available),
-        // but the query is blank so no embedding is performed
-        assertThat(debug.embeddingDurationMs()).isEqualTo(0L);
-        assertThat(debug.rawCandidateCount()).isEqualTo(0);
+    @Test
+    @DisplayName("profileQuery returns query analysis even without vector debug")
+    void testProfileQueryReturnsQueryAnalysis() throws Exception {
+        final ProfileQueryRequest request = ProfileQueryRequest.fromMap(Map.of(
+                "query", "Vertrag"
+        ));
+
+        final ProfileQueryResponse response = indexServiceWithVector.profileQuery(request);
+
+        assertThat(response.success()).isTrue();
+        assertThat(response.queryAnalysis())
+                .as("queryAnalysis should be populated")
+                .isNotNull();
     }
 }

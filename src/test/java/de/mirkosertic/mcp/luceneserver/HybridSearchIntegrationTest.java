@@ -5,7 +5,6 @@ import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.crawler.ExtractedDocument;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
-import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorMatchInfo;
 import de.mirkosertic.mcp.luceneserver.onnx.ONNXService;
 import org.apache.lucene.document.Document;
 import org.junit.jupiter.api.AfterEach;
@@ -25,34 +24,20 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Integration tests for hybrid (text + vector) search using RRF merging.
+ * Integration tests for BM25 text search with and without a vector-capable index service.
  *
- * <p>The ONNX model is mocked so that:
- * <ul>
- *   <li>doc_a ("Vertrag") embeds very similarly to the query vector (high dot product → passes threshold)</li>
- *   <li>doc_b ("Rechnung") embeds opposite to the query vector (low dot product → below threshold)</li>
- *   <li>doc_c ("Zahlung") embeds moderately similarly (moderate dot product)</li>
- * </ul>
- * </p>
- *
- * <p>Vector embeddings are L2-normalized unit vectors.  Lucene DOT_PRODUCT similarity for two
- * normalized vectors equals the cosine similarity.  The Lucene score is then
- * {@code (1 + cosine) / 2}.  The cutoff used in the service is cosine=0.70 → luceneScore=0.85.</p>
+ * <p>Hybrid RRF merging has been removed. These tests verify that BM25 text search works
+ * correctly whether or not an ONNX service is present, and that passages are generated
+ * appropriately for keyword matches.</p>
  */
-@DisplayName("Hybrid search integration tests")
+@DisplayName("BM25 search integration tests (formerly hybrid search)")
 class HybridSearchIntegrationTest {
 
     /** Unit vector dimension must match mocked hiddenSize. */
     private static final int DIM = 64;
-
-    /** Cosine cutoff threshold used by the service. */
-    private static final float COSINE_CUTOFF = 0.70f;
-    private static final float LUCENE_THRESHOLD = (1f + COSINE_CUTOFF) / 2f; // 0.85
 
     @TempDir
     Path tempDir;
@@ -67,16 +52,9 @@ class HybridSearchIntegrationTest {
     private ApplicationConfig config;
     private ONNXService onnxService;
 
-    // Query vector: e₁ = [1, 0, 0, ...]
-    private final float[] queryVector = makeE1(DIM);
-
-    // doc_a: identical to query → cosine = 1.0 → luceneScore = 1.0 (well above threshold)
+    // Embeddings used only for index setup (not for RRF)
     private final float[] embeddingA = makeE1(DIM);
-
-    // doc_b: opposite to query → cosine ≈ -1.0 → luceneScore ≈ 0.0 (below threshold)
     private final float[] embeddingB = makeE1Neg(DIM);
-
-    // doc_c: orthogonal to query → cosine = 0.0 → luceneScore = 0.5 (below threshold 0.85)
     private final float[] embeddingC = makeE2(DIM);
 
     private Path fileA;
@@ -99,17 +77,17 @@ class HybridSearchIntegrationTest {
     private static float[] makeE1(final int dim) {
         final float[] v = new float[dim];
         v[0] = 1.0f;
-        return v;  // already L2-normalised (single non-zero component)
+        return v;
     }
 
-    /** Negated e₁. */
+    /** Negated e1. */
     private static float[] makeE1Neg(final int dim) {
         final float[] v = new float[dim];
         v[0] = -1.0f;
         return v;
     }
 
-    /** Unit vector with energy in dimension 1 (orthogonal to e₁). */
+    /** Unit vector with energy in dimension 1 (orthogonal to e1). */
     private static float[] makeE2(final int dim) {
         final float[] v = new float[dim];
         v[1] = 1.0f;
@@ -155,10 +133,6 @@ class HybridSearchIntegrationTest {
         // ---- ONNX mock ----
         onnxService = mock(ONNXService.class);
         when(onnxService.getHiddenSize()).thenReturn(DIM);
-
-        // embed(query, "query: ") → queryVector
-        when(onnxService.embed(anyString(), eq(ONNXService.QUERY_PREFIX)))
-                .thenReturn(Arrays.copyOf(queryVector, DIM));
 
         // embedWithLateChunking: each document returns its own embedding vector
         when(onnxService.embedWithLateChunking(eq(CONTENT_A), anyString(), anyInt()))
@@ -236,93 +210,70 @@ class HybridSearchIntegrationTest {
     }
 
     @Test
-    @DisplayName("Hybrid search with mocked onnxService returns doc_a for 'Vertrag' query")
-    void testVectorSearchEnabled() throws Exception {
+    @DisplayName("BM25 search with onnxService present returns doc_a for 'Vertrag' query")
+    void testBM25SearchWithVectorServiceReturnsResult() throws Exception {
         final LuceneIndexService.SearchResult result =
                 indexServiceWithVector.search("Vertrag", List.of(), 0, 10, "_score", "desc");
 
         assertThat(result.documents())
-                .as("Hybrid search should return at least one result")
+                .as("BM25 search should return at least one result")
                 .isNotEmpty();
 
         final List<String> filePaths = result.documents().stream()
                 .map(SearchDocument::filePath)
                 .toList();
         assertThat(filePaths)
-                .as("doc_a should appear in hybrid search results for 'Vertrag'")
+                .as("doc_a should appear in search results for 'Vertrag'")
                 .anyMatch(p -> p != null && p.contains("doc_a_vertrag"));
     }
 
     @Test
-    @DisplayName("doc_b (below cosine cutoff) does not receive a vectorMatchInfo")
+    @DisplayName("vectorMatchInfo is null for all documents (RRF removed)")
+    void testVectorMatchInfoAlwaysNull() throws Exception {
+        final LuceneIndexService.SearchResult result =
+                indexServiceWithVector.search("Vertrag", List.of(), 0, 10, "_score", "desc");
+
+        assertThat(result.documents())
+                .as("Search should return results")
+                .isNotEmpty();
+
+        for (final SearchDocument doc : result.documents()) {
+            assertThat(doc.vectorMatchInfo())
+                    .as("vectorMatchInfo should be null for all documents — hybrid RRF removed")
+                    .isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("vectorMatchInfo is null for doc_b (RRF removed)")
     void testDocsBelowCutoffNotInVectorResults() throws Exception {
         final LuceneIndexService.SearchResult result =
                 indexServiceWithVector.search("Rechnung", List.of(), 0, 10, "_score", "desc");
 
-        // doc_b may or may not appear (it can be found via text), but its
-        // vectorMatchInfo must be null because embeddingB is orthogonal or
-        // opposite to queryVector → Lucene score << threshold (0.85).
+        // Without hybrid RRF, vectorMatchInfo is always null
         for (final SearchDocument doc : result.documents()) {
             if (doc.filePath() != null && doc.filePath().contains("doc_b_rechnung")) {
                 assertThat(doc.vectorMatchInfo())
-                        .as("doc_b embedding is below cosine cutoff — no vectorMatchInfo expected")
+                        .as("vectorMatchInfo should always be null — hybrid RRF has been removed")
                         .isNull();
             }
         }
     }
 
     @Test
-    @DisplayName("doc_a has non-null vectorMatchInfo when found via vector search")
-    void testVectorMatchInfoPopulated() throws Exception {
-        final LuceneIndexService.SearchResult result =
-                indexServiceWithVector.search("Vertrag", List.of(), 0, 10, "_score", "desc");
-
-        // doc_a should appear and have vectorMatchInfo (embeddingA == queryVector → cosine=1.0)
-        final java.util.Optional<SearchDocument> docA = result.documents().stream()
-                .filter(d -> d.filePath() != null && d.filePath().contains("doc_a_vertrag"))
-                .findFirst();
-
-        assertThat(docA)
-                .as("doc_a should appear in hybrid results")
-                .isPresent();
-
-        final VectorMatchInfo matchInfo = docA.get().vectorMatchInfo();
-        assertThat(matchInfo)
-                .as("doc_a should have a non-null vectorMatchInfo")
-                .isNotNull();
-
-        assertThat(matchInfo.matchedViaVector())
-                .as("matchedViaVector should be true")
-                .isTrue();
-
-        // vectorScore should be near 1.0 (identical vectors → cosine=1.0 → luceneScore=1.0)
-        assertThat(matchInfo.vectorScore())
-                .as("Vector score should be at or near 1.0 for identical embedding")
-                .isGreaterThan(LUCENE_THRESHOLD);
-    }
-
-    @Test
     @DisplayName("Search with null onnxService works without NPE")
     void testNoOnnxCallWhenDisabled() throws Exception {
-        // indexServiceNoVector has no onnxService; search should not throw
         final LuceneIndexService.SearchResult result =
                 indexServiceNoVector.search("Vertrag", List.of(), 0, 10, "_score", "desc");
 
         assertThat(result).isNotNull();
         assertThat(result.documents()).isNotNull();
-
-        // The mocked onnxService on the text-only service is null (different instance).
-        // Verify that no embed() call was ever made on the mock used for the vector service
-        // during the no-vector search (wrong service — nothing to verify, but no NPE occurred).
-        // The important assertion: the text-only service returned a valid result.
         assertThat(result.totalHits()).isGreaterThanOrEqualTo(0);
     }
 
     @Test
     @DisplayName("Passage source is 'keyword' when BM25 highlighter finds term matches in content")
     void testKeywordPassageSourceForTextMatch() throws Exception {
-        // Searching for "Vertrag" which IS present in CONTENT_A — the highlighter should
-        // find term matches and produce keyword passages.
         final LuceneIndexService.SearchResult result =
                 indexServiceNoVector.search("Vertrag", List.of(), 0, 10, "_score", "desc");
 
@@ -344,43 +295,20 @@ class HybridSearchIntegrationTest {
     }
 
     @Test
-    @DisplayName("Semantic passage used when query terms do not appear in document content")
-    void testSemanticPassageUsedWhenHighlighterFindsNoMatch() throws Exception {
-        // Query "contract" is English but CONTENT_A is German ("Vertrag") — the BM25 highlighter
-        // will find no keyword matches. However the mock always returns queryVector for any query
-        // string, and embeddingA matches perfectly, so doc_a gets a vector hit with chunk text.
-        // We expect a semantic passage (source="semantic") containing the chunk text.
+    @DisplayName("Query 'contract' in English finds no RRF results in German-only corpus (no hybrid)")
+    void testEnglishQueryNoHybridResults() throws Exception {
+        // Without hybrid RRF, an English query against a German corpus relies solely on BM25
         final LuceneIndexService.SearchResult result =
                 indexServiceWithVector.search("contract", List.of(), 0, 10, "_score", "desc");
 
-        final java.util.Optional<SearchDocument> docA = result.documents().stream()
-                .filter(d -> d.filePath() != null && d.filePath().contains("doc_a_vertrag"))
-                .findFirst();
+        assertThat(result).isNotNull();
+        assertThat(result.documents()).isNotNull();
 
-        assertThat(docA)
-                .as("doc_a should appear via vector match for 'contract' query")
-                .isPresent();
-
-        final VectorMatchInfo matchInfo = docA.get().vectorMatchInfo();
-        assertThat(matchInfo)
-                .as("doc_a should have vectorMatchInfo when matched via vector")
-                .isNotNull();
-
-        assertThat(matchInfo.matchedChunkText())
-                .as("matchedChunkText must be non-null for semantic passage test to be meaningful")
-                .isNotNull();
-
-        assertThat(docA.get().passages())
-                .as("doc_a should have at least one passage")
-                .isNotEmpty();
-
-        assertThat(docA.get().passages().getFirst().source())
-                .as("Passage source should be 'semantic' when BM25 found no keyword matches")
-                .isEqualTo("semantic");
-
-        // The semantic passage text should be derived from the chunk, not the first 300 chars
-        assertThat(docA.get().passages().getFirst().text())
-                .as("Semantic passage text should contain content from the matched chunk")
-                .isNotBlank();
+        // All returned documents have null vectorMatchInfo
+        for (final SearchDocument doc : result.documents()) {
+            assertThat(doc.vectorMatchInfo())
+                    .as("vectorMatchInfo should be null — hybrid RRF has been removed")
+                    .isNull();
+        }
     }
 }

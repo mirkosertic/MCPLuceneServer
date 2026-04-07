@@ -30,7 +30,6 @@ import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreDetails;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoringBreakdown;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorMatchInfo;
-import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorSearchDebug;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchMetrics;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.TermStatistics;
@@ -150,6 +149,18 @@ public class LuceneIndexService {
     static final Set<String> LOWERCASE_WILDCARD_FIELDS = Set.of(
             "content", "content_reversed", "content_lemma_de", "content_lemma_en",
             "content_translit_de");
+
+    /**
+     * Controls how the query string is parsed.
+     *
+     * <ul>
+     *   <li>{@code SIMPLE} — the query string is escaped with {@link QueryParser#escape} before
+     *       parsing, so special Lucene characters are treated as literals.</li>
+     *   <li>{@code EXTENDED} — the query string is parsed as-is, allowing the full Lucene query
+     *       syntax (wildcards, boolean operators, phrases, etc.).</li>
+     * </ul>
+     */
+    public enum QueryMode { SIMPLE, EXTENDED }
 
     /**
      * States for long-running admin operations.
@@ -522,7 +533,7 @@ public class LuceneIndexService {
 
     /**
      * Search the index with structured multi-filters and DrillSideways faceting.
-     * Backward-compatible overload that defaults to {@code useVectorSearch=true}.
+     * Backward-compatible overload that defaults to {@link QueryMode#EXTENDED}.
      *
      * @param queryString the user query (null or blank = MatchAllDocsQuery)
      * @param filters     list of structured filters (may be empty)
@@ -535,26 +546,26 @@ public class LuceneIndexService {
     public SearchResult search(final String queryString, final List<SearchFilter> filters,
                                final int page, final int pageSize,
                                final String sortBy, final String sortOrder) throws IOException, ParseException {
-        return search(queryString, filters, page, pageSize, sortBy, sortOrder, true);
+        return search(queryString, filters, page, pageSize, sortBy, sortOrder, QueryMode.EXTENDED);
     }
 
     /**
      * Search the index with structured multi-filters and DrillSideways faceting.
      *
-     * @param queryString    the user query (null or blank = MatchAllDocsQuery)
-     * @param filters        list of structured filters (may be empty)
-     * @param page           0-based page number
-     * @param pageSize       results per page
-     * @param sortBy         the field to sort by
-     * @param sortOrder      the sort order
-     * @param useVectorSearch when {@code true} (and vectorsearch profile is active), enables hybrid RRF search;
-     *                        when {@code false}, uses BM25 text search only
+     * @param queryString the user query (null or blank = MatchAllDocsQuery)
+     * @param filters     list of structured filters (may be empty)
+     * @param page        0-based page number
+     * @param pageSize    results per page
+     * @param sortBy      the field to sort by
+     * @param sortOrder   the sort order
+     * @param queryMode   {@link QueryMode#SIMPLE} escapes the query string before parsing;
+     *                    {@link QueryMode#EXTENDED} parses as-is (full Lucene syntax)
      * @return search results with documents, facets, and active filters
      */
     public SearchResult search(final String queryString, final List<SearchFilter> filters,
                                final int page, final int pageSize,
                                final String sortBy, final String sortOrder,
-                               final boolean useVectorSearch) throws IOException, ParseException {
+                               final QueryMode queryMode) throws IOException, ParseException {
 
         // Validate all filters first
         for (final SearchFilter filter : filters) {
@@ -573,15 +584,19 @@ public class LuceneIndexService {
                 mainQuery = new MatchAllDocsQuery();
                 highlightQuery = mainQuery;
             } else {
+                // In SIMPLE mode, escape special Lucene characters so the query is treated as literals.
+                final String effectiveQueryString = queryMode == QueryMode.SIMPLE
+                        ? QueryParser.escape(queryString)
+                        : queryString;
                 final QueryParser parser = new ProximityExpandingQueryParser("content", queryAnalyzer);
                 parser.setAllowLeadingWildcard(true);
-                final Query parsed = parser.parse(queryString);
+                final Query parsed = parser.parse(effectiveQueryString);
                 final Query contentQuery = rewriteLeadingWildcards(parsed);
                 highlightQuery = contentQuery;
 
                 // Build stemmed query: content (boosted) + stemmed fields
                 final String languageHint = extractLanguageHint(filters);
-                mainQuery = buildStemmedQuery(contentQuery, queryString, languageHint);
+                mainQuery = buildStemmedQuery(contentQuery, effectiveQueryString, languageHint);
             }
 
             // 2. Classify filters
@@ -751,22 +766,10 @@ public class LuceneIndexService {
             );
             final Set<String> queryTerms = extractQueryTerms(highlightQuery);
 
-            // 8. Optional hybrid search: merge text results with vector results via RRF
-            final ScoreDoc[] mergedScoreDocs;
-            final Map<Integer, VectorMatchInfo> vectorMatchInfoByDocId;
-            if (useVectorSearch && onnxService != null && queryString != null && !queryString.isBlank()) {
-                final VectorMergeResult mergeResult = mergeWithVectorResults(
-                        queryString, topDocs.scoreDocs, searcher, pageSize);
-                mergedScoreDocs = mergeResult.scoreDocs();
-                vectorMatchInfoByDocId = mergeResult.vectorMatchInfoByDocId();
-            } else {
-                mergedScoreDocs = topDocs.scoreDocs;
-                vectorMatchInfoByDocId = Map.of();
-            }
-
-            // 9. Collect results for the requested page
+            // 8. Collect results for the requested page (BM25 only — hybrid RRF removed)
+            final ScoreDoc[] scoreDocs = topDocs.scoreDocs;
+            final Map<Integer, VectorMatchInfo> vectorMatchInfoByDocId = Map.of();
             final List<SearchDocument> results = new ArrayList<>();
-            final ScoreDoc[] scoreDocs = mergedScoreDocs;
 
             for (int i = startIndex; i < scoreDocs.length && i < maxResults; i++) {
                 final Document doc = searcher.storedFields().document(scoreDocs[i].doc);
@@ -810,125 +813,6 @@ public class LuceneIndexService {
         }
     }
 
-    /**
-     * Carries the outcome of a hybrid RRF merge: the re-ranked score docs together with
-     * a per-parent-doc map of {@link VectorMatchInfo} for building the search response.
-     */
-    private record VectorMergeResult(ScoreDoc[] scoreDocs, Map<Integer, VectorMatchInfo> vectorMatchInfoByDocId) {}
-
-    /**
-     * Merge text search results with vector (KNN) results using Reciprocal Rank Fusion (RRF).
-     *
-     * <p>For each child document returned by the KNN query, retrieves its parent document
-     * via a term query on the {@code file_path} field, then merges the text rank and vector
-     * rank using the RRF formula {@code 1 / (60 + rank + 1)}.  Returns the top {@code pageSize}
-     * merged results together with a map that associates each matched parent doc ID with its
-     * {@link VectorMatchInfo}.</p>
-     *
-     * @param queryString  the raw query string used to derive the query embedding
-     * @param textDocs     the text-search ScoreDoc array (ranked by BM25/stemmed score)
-     * @param searcher     the current IndexSearcher
-     * @param pageSize     maximum number of results to return
-     * @return merged and re-ranked result including vector match metadata
-     */
-    private VectorMergeResult mergeWithVectorResults(final String queryString,
-                                                     final ScoreDoc[] textDocs,
-                                                     final IndexSearcher searcher,
-                                                     final int pageSize) {
-        try {
-            logger.info("Merging text search results with vector results for hybrid search");
-            final float[] queryVector = onnxService.embed(queryString, ONNXService.QUERY_PREFIX);
-            final int vectorK = 50;
-            final KnnFloatVectorQuery knnQuery = new KnnFloatVectorQuery("embedding", queryVector, vectorK);
-            final TopDocs vectorTopDocs = searcher.search(knnQuery, vectorK);
-
-            logger.info("Vector search for search query: {} returned {} hits", queryString, vectorTopDocs.scoreDocs.length);
-            final float cosineCutoff = 0.70f;
-            // DOT_PRODUCT similarity in Lucene returns a score in (0, 1] for normalized vectors.
-            // Convert cosine threshold: score = (1 + cosine) / 2
-            final float luceneThreshold = (1f + cosineCutoff) / 2f;
-
-            // Build map: textDocId → textRank (0-based)
-            final Map<Integer, Integer> textRankByDocId = new HashMap<>();
-            for (int i = 0; i < textDocs.length; i++) {
-                textRankByDocId.put(textDocs[i].doc, i);
-            }
-
-            // Resolve vector child doc IDs → parent doc IDs via file_path field.
-            // Also collect VectorMatchInfo (chunk index, chunk text, vector score) for each parent.
-            final Map<Integer, Integer> parentDocIdByVectorRank = new LinkedHashMap<>();
-            final Map<Integer, VectorMatchInfo> vectorMatchInfoByParentDocId = new HashMap<>();
-            for (int vRank = 0; vRank < vectorTopDocs.scoreDocs.length; vRank++) {
-                final ScoreDoc childScoreDoc = vectorTopDocs.scoreDocs[vRank];
-                // Apply cosine similarity threshold
-                if (childScoreDoc.score < luceneThreshold) {
-                    logger.info("Ignoring search result with low vector score: {}, threshold is {}", childScoreDoc.score, luceneThreshold);
-                    continue;
-                }
-                try {
-                    final Document childDoc = searcher.storedFields().document(childScoreDoc.doc);
-                    final String filePath = childDoc.get("file_path");
-                    if (filePath == null) {
-                        continue;
-                    }
-                    // Find the parent document with this file_path that is a parent doc type
-                    final Query parentQuery = new BooleanQuery.Builder()
-                            .add(new TermQuery(new Term("file_path", filePath)), BooleanClause.Occur.MUST)
-                            .add(new TermQuery(new Term(DocumentIndexer.DOC_TYPE_FIELD,
-                                    DocumentIndexer.DOC_TYPE_PARENT)), BooleanClause.Occur.MUST)
-                            .build();
-                    final TopDocs parentHits = searcher.search(parentQuery, 1);
-                    if (parentHits.totalHits.value() > 0) {
-                        final int parentDocId = parentHits.scoreDocs[0].doc;
-                        // Record first (best-ranked) child hit per parent
-                        if (parentDocIdByVectorRank.putIfAbsent(parentDocId, vRank) == null) {
-                            // This is the first (highest-ranked) child for this parent — capture details.
-                            // chunk_index is stored as a numeric StoredField (int), not a string field.
-                            final org.apache.lucene.index.IndexableField chunkIndexField = childDoc.getField("chunk_index");
-                            final int chunkIndex = chunkIndexField != null && chunkIndexField.numericValue() != null
-                                    ? chunkIndexField.numericValue().intValue() : -1;
-                            final String chunkText = childDoc.get("chunk_text");
-                            vectorMatchInfoByParentDocId.put(parentDocId,
-                                    VectorMatchInfo.matched(chunkIndex, chunkText, childScoreDoc.score));
-                        }
-                    }
-                } catch (final IOException e) {
-                    logger.debug("Error resolving parent for vector child doc {}", childScoreDoc.doc);
-                }
-            }
-
-            // RRF merge: combine text rank and vector rank
-            // Score = 1/(60+rank+1) for each list; sum scores
-            final Map<Integer, Float> rrfScores = new HashMap<>();
-
-            // Text results contribute to RRF
-            for (int tRank = 0; tRank < textDocs.length; tRank++) {
-                final int docId = textDocs[tRank].doc;
-                rrfScores.merge(docId, 1.0f / (60 + tRank + 1), Float::sum);
-            }
-
-            // Vector results contribute to RRF (parent doc IDs)
-            for (final Map.Entry<Integer, Integer> entry : parentDocIdByVectorRank.entrySet()) {
-                final int parentDocId = entry.getKey();
-                final int vRank = entry.getValue();
-                rrfScores.merge(parentDocId, 1.0f / (60 + vRank + 1), Float::sum);
-            }
-
-            // Sort by RRF score descending and return top pageSize results
-            final ScoreDoc[] mergedDocs = rrfScores.entrySet().stream()
-                    .sorted(Map.Entry.<Integer, Float>comparingByValue(Comparator.reverseOrder()))
-                    .limit(pageSize)
-                    .map(e -> new ScoreDoc(e.getKey(), e.getValue()))
-                    .toArray(ScoreDoc[]::new);
-
-            logger.info("Returning {} merged results", mergedDocs.length);
-            return new VectorMergeResult(mergedDocs, vectorMatchInfoByParentDocId);
-
-        } catch (final Exception e) {
-            logger.warn("Vector search failed, falling back to text-only: {}", e.getMessage());
-            return new VectorMergeResult(textDocs, Map.of());
-        }
-    }
 
     /**
      * Profile a query to understand its behavior, performance, and scoring.
@@ -987,103 +871,19 @@ public class LuceneIndexService {
                 facetCost = analyzeFacetCost(mainQuery, request.effectiveFilters(), searcher);
             }
 
-            // Level 5: Vector search debug (automatic when useVectorSearch=true and onnxService present)
-            final VectorSearchDebug vectorSearchDebug = buildVectorSearchDebug(
-                    request, searcher);
-
             // Generate recommendations
             final List<String> recommendations = generateRecommendations(
                     queryAnalysis, searchMetrics, filterImpact, docExplanations);
 
             return ProfileQueryResponse.success(
                     queryAnalysis, searchMetrics, filterImpact,
-                    docExplanations, facetCost, recommendations, vectorSearchDebug);
+                    docExplanations, facetCost, recommendations, null);
 
         } finally {
             searcherManager.release(searcher);
         }
     }
 
-    /**
-     * Build vector search debug information for the profileQuery Level 5 analysis.
-     *
-     * <p>When {@code useVectorSearch} is true and {@code onnxService} is non-null and the query
-     * is non-blank, runs a KNN search to collect raw candidate counts, threshold-filtered counts,
-     * and top-candidate details.  Otherwise returns a debug object indicating availability/enabled
-     * state only.</p>
-     */
-    private VectorSearchDebug buildVectorSearchDebug(final ProfileQueryRequest request,
-                                                     final IndexSearcher searcher) {
-        final boolean available = onnxService != null;
-        final boolean enabled = available && request.effectiveUseVectorSearch();
-
-        if (!enabled || request.effectiveQuery() == null || request.effectiveQuery().isBlank()) {
-            return new VectorSearchDebug(available, enabled, 0, 0, 0, 0.70f, null);
-        }
-
-        try {
-            final long embeddingStart = System.currentTimeMillis();
-            final float[] queryVector = onnxService.embed(request.effectiveQuery(), ONNXService.QUERY_PREFIX);
-            final long embeddingDurationMs = System.currentTimeMillis() - embeddingStart;
-
-            final int vectorK = 50;
-            final KnnFloatVectorQuery knnQuery = new KnnFloatVectorQuery("embedding", queryVector, vectorK);
-            final TopDocs vectorTopDocs = searcher.search(knnQuery, vectorK);
-
-            final float cosineCutoff = 0.70f;
-            final float luceneThreshold = (1f + cosineCutoff) / 2f;
-
-            final int rawCandidateCount = vectorTopDocs.scoreDocs.length;
-
-            final List<VectorSearchDebug.VectorCandidateInfo> topCandidates = new ArrayList<>();
-            int filteredCount = 0;
-
-            for (int vRank = 0; vRank < rawCandidateCount; vRank++) {
-                final ScoreDoc childScoreDoc = vectorTopDocs.scoreDocs[vRank];
-                final boolean passed = childScoreDoc.score >= luceneThreshold;
-                if (passed) {
-                    filteredCount++;
-                }
-                if (topCandidates.size() < 10) {
-                    try {
-                        final Document childDoc = searcher.storedFields().document(childScoreDoc.doc);
-                        final String filePath = childDoc.get("file_path");
-                        final org.apache.lucene.index.IndexableField chunkIndexField =
-                                childDoc.getField("chunk_index");
-                        final int chunkIndex = chunkIndexField != null && chunkIndexField.numericValue() != null
-                                ? chunkIndexField.numericValue().intValue() : -1;
-                        final String chunkText = childDoc.get("chunk_text");
-                        final float cosineScore = childScoreDoc.score * 2f - 1f;
-                        final float rrfContribution = 1f / (60 + vRank + 1);
-                        topCandidates.add(new VectorSearchDebug.VectorCandidateInfo(
-                                filePath != null ? filePath : "",
-                                chunkIndex,
-                                chunkText,
-                                childScoreDoc.score,
-                                cosineScore,
-                                passed,
-                                vRank,
-                                rrfContribution));
-                    } catch (final IOException e) {
-                        logger.debug("Error reading candidate doc {} for vector debug", childScoreDoc.doc);
-                    }
-                }
-            }
-
-            return new VectorSearchDebug(
-                    true,
-                    true,
-                    embeddingDurationMs,
-                    rawCandidateCount,
-                    filteredCount,
-                    cosineCutoff,
-                    topCandidates.isEmpty() ? null : topCandidates);
-
-        } catch (final Exception e) {
-            logger.warn("Vector search debug failed: {}", e.getMessage());
-            return new VectorSearchDebug(true, true, 0, 0, 0, 0.70f, null);
-        }
-    }
 
     public long getDocumentCount() throws IOException {
         final IndexSearcher searcher = searcherManager.acquire();
