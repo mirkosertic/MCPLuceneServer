@@ -1071,9 +1071,14 @@ public class LuceneIndexService {
 
         final IndexSearcher searcher = searcherManager.acquire();
         try {
-            // Create exact match query for file_path field
-            final Query query = new org.apache.lucene.search.TermQuery(
-                    new org.apache.lucene.index.Term("file_path", filePath));
+            // Match only the parent document — child chunk documents also carry file_path
+            // and appear before the parent in the Block Join segment order, so a plain
+            // TermQuery on file_path alone would return a child chunk instead of the parent.
+            final Query query = new BooleanQuery.Builder()
+                    .add(new TermQuery(new Term("file_path", filePath)), BooleanClause.Occur.MUST)
+                    .add(new TermQuery(new Term(DocumentIndexer.DOC_TYPE_FIELD, DocumentIndexer.DOC_TYPE_PARENT)),
+                            BooleanClause.Occur.MUST)
+                    .build();
 
             // Search for the document
             final TopDocs topDocs = searcher.search(query, 1);
@@ -3381,7 +3386,7 @@ public class LuceneIndexService {
      * and {@code pageSize}.</p>
      *
      * @param queryString        the natural-language query to embed
-     * @param filters            optional filters to apply as a KNN pre-filter
+     * @param filters            optional filters to apply as a post-filter on parent documents
      * @param page               zero-based page number
      * @param pageSize           number of results per page
      * @param similarityThreshold cosine similarity threshold (0.0–1.0); candidates below this are dropped
@@ -3416,21 +3421,13 @@ public class LuceneIndexService {
 
         final IndexSearcher searcher = searcherManager.acquire();
         try {
-            // Build KNN pre-filter from the provided filters (if any)
-            Query filterQuery = null;
-            if (filters != null && !filters.isEmpty()) {
-                final BooleanQuery.Builder filterBuilder = new BooleanQuery.Builder();
-                for (final SearchFilter f : filters) {
-                    addFilterClause(filterBuilder, f);
-                }
-                filterQuery = filterBuilder.build();
-            }
-
-            // Retrieve top-50 nearest-neighbour child chunk documents
+            // Retrieve top-50 nearest-neighbour child chunk documents.
+            // NOTE: User filters (language, file_extension, etc.) must NOT be applied as a KNN
+            // pre-filter here, because those fields only exist on *parent* documents, not on
+            // child chunk documents. A pre-filter would match zero child docs and return empty
+            // results. Instead we apply filters as a post-filter during parent document lookup.
             final int knnCandidates = 50;
-            final KnnFloatVectorQuery knnQuery = (filterQuery != null)
-                    ? new KnnFloatVectorQuery("embedding", queryVector, knnCandidates, filterQuery)
-                    : new KnnFloatVectorQuery("embedding", queryVector, knnCandidates);
+            final KnnFloatVectorQuery knnQuery = new KnnFloatVectorQuery("embedding", queryVector, knnCandidates);
 
             final TopDocs vectorTopDocs = searcher.search(knnQuery, knnCandidates);
             final int rawCandidateCount = vectorTopDocs.scoreDocs.length;
@@ -3495,13 +3492,20 @@ public class LuceneIndexService {
             for (int i = startIdx; i < endIdx; i++) {
                 final String filePath = sortedPaths.get(i);
 
-                // Look up the parent document for metadata
-                final Query parentQuery = new BooleanQuery.Builder()
+                // Look up the parent document for metadata, applying user filters as a post-filter.
+                // Filters are evaluated here (against parent documents) rather than as a KNN
+                // pre-filter, because filter fields (language, file_extension, author, etc.)
+                // only exist on parent documents, not on child chunk documents.
+                final BooleanQuery.Builder parentQueryBuilder = new BooleanQuery.Builder()
                         .add(new TermQuery(new Term("file_path", filePath)), BooleanClause.Occur.MUST)
                         .add(new TermQuery(new Term(DocumentIndexer.DOC_TYPE_FIELD, DocumentIndexer.DOC_TYPE_PARENT)),
-                                BooleanClause.Occur.MUST)
-                        .build();
-                final TopDocs parentDocs = searcher.search(parentQuery, 1);
+                                BooleanClause.Occur.MUST);
+                if (filters != null && !filters.isEmpty()) {
+                    for (final SearchFilter f : filters) {
+                        addFilterClause(parentQueryBuilder, f);
+                    }
+                }
+                final TopDocs parentDocs = searcher.search(parentQueryBuilder.build(), 1);
                 if (parentDocs.scoreDocs.length == 0) {
                     continue;
                 }

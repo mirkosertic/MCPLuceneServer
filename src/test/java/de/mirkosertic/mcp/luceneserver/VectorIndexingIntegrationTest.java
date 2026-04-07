@@ -233,6 +233,43 @@ class VectorIndexingIntegrationTest {
     }
 
     @Test
+    @DisplayName("getDocumentByFilePath returns parent doc, not a child chunk")
+    void testGetDocumentByFilePathReturnsParent() throws Exception {
+        // Index a document; the mock returns 2 chunks so child docs exist alongside the parent.
+        when(onnxService.embedWithLateChunking(anyString(), anyString(), anyInt()))
+                .thenReturn(List.of(makeUnitVector(768), makeUnitVector(768)));
+
+        final Path file = createTextFile("parent_lookup.txt",
+                "First paragraph of the document. Second paragraph of the document.");
+        indexFile(file, "First paragraph of the document. Second paragraph of the document.");
+
+        // Verify child docs were created (precondition for the bug to manifest)
+        final int childCount = countDocsByFieldValue(
+                DocumentIndexer.DOC_TYPE_FIELD, DocumentIndexer.DOC_TYPE_CHILD);
+        assertThat(childCount)
+                .as("Precondition: index must contain child chunk documents")
+                .isEqualTo(2);
+
+        // getDocumentByFilePath must return the parent, not one of the child chunks.
+        // Before the fix a plain TermQuery on file_path returned the first child doc
+        // (lowest Lucene doc-ID in the block), which has no file_name / file_extension.
+        final Map<String, Object> result = indexService.getDocumentByFilePath(file.toString());
+
+        assertThat(result)
+                .as("Parent document should be found")
+                .isNotNull();
+        assertThat(result.get("file_path"))
+                .as("file_path must match the indexed file")
+                .isEqualTo(file.toString());
+        assertThat(result.get("file_name"))
+                .as("file_name is only stored on parent docs — presence proves parent was returned")
+                .isEqualTo("parent_lookup.txt");
+        assertThat(result.get("file_extension"))
+                .as("file_extension is only stored on parent docs")
+                .isEqualTo("txt");
+    }
+
+    @Test
     @DisplayName("Embedding dimension mismatch triggers schemaUpgradeRequired")
     void testDimensionMismatchTriggersUpgrade() throws Exception {
         // Create index with hiddenSize=768
