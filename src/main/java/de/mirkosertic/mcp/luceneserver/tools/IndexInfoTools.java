@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.tools;
 
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.index.QueryRuntimeStats;
@@ -31,10 +32,13 @@ public class IndexInfoTools implements McpToolProvider {
 
     private final LuceneIndexService indexService;
     private final QueryRuntimeStats queryRuntimeStats;
+    private final ApplicationConfig config;
 
-    public IndexInfoTools(final LuceneIndexService indexService, final QueryRuntimeStats queryRuntimeStats) {
+    public IndexInfoTools(final LuceneIndexService indexService, final QueryRuntimeStats queryRuntimeStats,
+            final ApplicationConfig config) {
         this.indexService = indexService;
         this.queryRuntimeStats = queryRuntimeStats;
+        this.config = config;
     }
 
     @Override
@@ -42,42 +46,48 @@ public class IndexInfoTools implements McpToolProvider {
         final List<McpServerFeatures.SyncToolSpecification> tools = new ArrayList<>();
 
         // Get index stats tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("getIndexStats")
-                        .description("Get index statistics: document count, schema version, date field ranges, " +
-                                "lemmatizer cache performance (hit rate, size, evictions per language), " +
-                                "and query runtime metrics (avg/min/max duration, p50-p99 percentiles, " +
-                                "per-field facet computation timing). " +
-                                "Note: Query metrics are available after the first search; stats update on next search.")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .build())
-                .callHandler((exchange, request) -> getIndexStats())
-                .build());
+        if (config.isToolActive("getIndexStats")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("getIndexStats")
+                            .description("Get index statistics: document count, schema version, date field ranges, " +
+                                    "lemmatizer cache performance (hit rate, size, evictions per language), " +
+                                    "and query runtime metrics (avg/min/max duration, p50-p99 percentiles, " +
+                                    "per-field facet computation timing). " +
+                                    "Note: Query metrics are available after the first search; stats update on next search.")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .build())
+                    .callHandler((exchange, request) -> getIndexStats())
+                    .build());
+        }
 
         // List indexed fields tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("listIndexedFields")
-                        .description("List all field names present in the Lucene index. Useful for understanding the index schema and building queries.")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .build())
-                .callHandler((exchange, request) -> listIndexedFields())
-                .build());
+        if (config.isToolActive("listIndexedFields")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("listIndexedFields")
+                            .description("List all field names present in the Lucene index. Useful for understanding the index schema and building queries.")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .build())
+                    .callHandler((exchange, request) -> listIndexedFields())
+                    .build());
+        }
 
         // Get document details tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("getDocumentDetails")
-                        .description("Retrieve all stored fields and content of a document from the Lucene index by its file path. " +
-                                "This tool retrieves document details and extracted content directly from the index without requiring filesystem access. " +
-                                "Returns all metadata fields (file_path, file_name, file_extension, file_type, file_size, title, author, creator, subject, keywords, language, " +
-                                "created_date, modified_date, indexed_date, content_hash) and the full document content. " +
-                                "Content is limited to 500,000 characters (500KB) to keep response size safe - use the contentTruncated field to check if content was truncated.")
-                        .inputSchema(SchemaGenerator.generateSchema(GetDocumentDetailsRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> getDocumentDetails(request.arguments()))
-                .build());
+        if (config.isToolActive("getDocumentDetails")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("getDocumentDetails")
+                            .description("Retrieve all stored fields and content of a document from the Lucene index by its file path. " +
+                                    "This tool retrieves document details and extracted content directly from the index without requiring filesystem access. " +
+                                    "Returns all metadata fields (file_path, file_name, file_extension, file_type, file_size, title, author, creator, subject, keywords, language, " +
+                                    "created_date, modified_date, indexed_date, content_hash) and the full document content. " +
+                                    "Content is limited to 500,000 characters (500KB) to keep response size safe - use the contentTruncated field to check if content was truncated.")
+                            .inputSchema(SchemaGenerator.generateSchema(GetDocumentDetailsRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> getDocumentDetails(request.arguments()))
+                    .build());
+        }
 
         return tools;
     }

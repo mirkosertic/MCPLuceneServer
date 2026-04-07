@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver.tools;
 
 import com.google.common.io.Resources;
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.crawler.DocumentCrawlerService;
 import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.mcp.SchemaGenerator;
@@ -38,10 +39,13 @@ public class IndexAdminTools implements McpToolProvider {
 
     private final LuceneIndexService indexService;
     private final DocumentCrawlerService crawlerService;
+    private final ApplicationConfig config;
 
-    public IndexAdminTools(final LuceneIndexService indexService, final DocumentCrawlerService crawlerService) {
+    public IndexAdminTools(final LuceneIndexService indexService, final DocumentCrawlerService crawlerService,
+            final ApplicationConfig config) {
         this.indexService = indexService;
         this.crawlerService = crawlerService;
+        this.config = config;
     }
 
     public List<McpServerFeatures.SyncResourceSpecification> getResourceSpecifications() {
@@ -85,67 +89,77 @@ public class IndexAdminTools implements McpToolProvider {
         final List<McpServerFeatures.SyncToolSpecification> tools = new ArrayList<>();
 
         // Index admin MCP App (https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("indexAdmin")
-                        .description("MCP App for Lucene index administrative tasks and maintenance")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .meta(Map.of("ui", Map.of("resourceUri", ADMIN_APP_RESOURCE_ID),
-                                "ui/resourceUri", ADMIN_APP_RESOURCE_ID))
-                        .build())
-                .callHandler((exchange, request) -> indexAdmin(request.arguments()))
-                .build());
+        if (config.isToolActive("indexAdmin")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("indexAdmin")
+                            .description("MCP App for Lucene index administrative tasks and maintenance")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .meta(Map.of("ui", Map.of("resourceUri", ADMIN_APP_RESOURCE_ID),
+                                    "ui/resourceUri", ADMIN_APP_RESOURCE_ID))
+                            .build())
+                    .callHandler((exchange, request) -> indexAdmin(request.arguments()))
+                    .build());
+        }
 
         // Unlock index tool (dangerous recovery operation)
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("unlockIndex")
-                        .description("Remove the write.lock file from the Lucene index directory. " +
-                                "WARNING: This is a dangerous recovery operation. Only use if you are CERTAIN no other process is using the index. " +
-                                "Unlocking an index that is actively being written to can cause data corruption. " +
-                                "Requires explicit confirmation (confirm=true) to proceed.")
-                        .inputSchema(SchemaGenerator.generateSchema(UnlockIndexRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> unlockIndex(request.arguments()))
-                .build());
+        if (config.isToolActive("unlockIndex")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("unlockIndex")
+                            .description("Remove the write.lock file from the Lucene index directory. " +
+                                    "WARNING: This is a dangerous recovery operation. Only use if you are CERTAIN no other process is using the index. " +
+                                    "Unlocking an index that is actively being written to can cause data corruption. " +
+                                    "Requires explicit confirmation (confirm=true) to proceed.")
+                            .inputSchema(SchemaGenerator.generateSchema(UnlockIndexRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> unlockIndex(request.arguments()))
+                    .build());
+        }
 
         // Optimize index tool (long-running)
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("optimizeIndex")
-                        .description("Optimize the Lucene index by merging segments. This is a long-running operation that runs in the background. " +
-                                "Use getIndexAdminStatus to poll for progress. " +
-                                "Optimization improves search performance but temporarily increases disk usage during the merge. " +
-                                "Cannot run while the crawler is active.")
-                        .inputSchema(SchemaGenerator.generateSchema(OptimizeIndexRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> optimizeIndex(request.arguments()))
-                .build());
+        if (config.isToolActive("optimizeIndex")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("optimizeIndex")
+                            .description("Optimize the Lucene index by merging segments. This is a long-running operation that runs in the background. " +
+                                    "Use getIndexAdminStatus to poll for progress. " +
+                                    "Optimization improves search performance but temporarily increases disk usage during the merge. " +
+                                    "Cannot run while the crawler is active.")
+                            .inputSchema(SchemaGenerator.generateSchema(OptimizeIndexRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> optimizeIndex(request.arguments()))
+                    .build());
+        }
 
         // Purge index tool (destructive, long-running)
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("purgeIndex")
-                        .description("Delete all documents from the Lucene index. This is a destructive operation that runs in the background. " +
-                                "Use getIndexAdminStatus to poll for progress. " +
-                                "Requires explicit confirmation (confirm=true) to proceed. " +
-                                "Set fullPurge=true to also delete index files and reinitialize (reclaims disk space immediately).")
-                        .inputSchema(SchemaGenerator.generateSchema(PurgeIndexRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> purgeIndex(request.arguments()))
-                .build());
+        if (config.isToolActive("purgeIndex")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("purgeIndex")
+                            .description("Delete all documents from the Lucene index. This is a destructive operation that runs in the background. " +
+                                    "Use getIndexAdminStatus to poll for progress. " +
+                                    "Requires explicit confirmation (confirm=true) to proceed. " +
+                                    "Set fullPurge=true to also delete index files and reinitialize (reclaims disk space immediately).")
+                            .inputSchema(SchemaGenerator.generateSchema(PurgeIndexRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> purgeIndex(request.arguments()))
+                    .build());
+        }
 
         // Get index admin status tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("getIndexAdminStatus")
-                        .description("Get the status of long-running index administration operations (optimize, purge). " +
-                                "Returns the current state (IDLE, OPTIMIZING, PURGING, COMPLETED, FAILED), progress percentage, " +
-                                "progress message, elapsed time, and the result of the last completed operation.")
-                        .inputSchema(SchemaGenerator.emptySchema())
-                        .build())
-                .callHandler((exchange, request) -> getIndexAdminStatus())
-                .build());
+        if (config.isToolActive("getIndexAdminStatus")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("getIndexAdminStatus")
+                            .description("Get the status of long-running index administration operations (optimize, purge). " +
+                                    "Returns the current state (IDLE, OPTIMIZING, PURGING, COMPLETED, FAILED), progress percentage, " +
+                                    "progress message, elapsed time, and the result of the last completed operation.")
+                            .inputSchema(SchemaGenerator.emptySchema())
+                            .build())
+                    .callHandler((exchange, request) -> getIndexAdminStatus())
+                    .build());
+        }
 
         return tools;
     }

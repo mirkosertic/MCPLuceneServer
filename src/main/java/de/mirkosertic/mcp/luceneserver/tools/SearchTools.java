@@ -86,89 +86,103 @@ public class SearchTools implements McpToolProvider {
         final List<McpServerFeatures.SyncToolSpecification> tools = new ArrayList<>();
 
         // Simple search tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("simpleSearch")
-                        .description(SIMPLE_SEARCH_DESCRIPTION)
-                        .inputSchema(SchemaGenerator.generateSchema(SimpleSearchRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> simpleSearch(request.arguments()))
-                .build());
+        if (config.isToolActive("simpleSearch")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("simpleSearch")
+                            .description(SIMPLE_SEARCH_DESCRIPTION)
+                            .inputSchema(SchemaGenerator.generateSchema(SimpleSearchRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> simpleSearch(request.arguments()))
+                    .build());
+        }
 
         // Extended search tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("extendedSearch")
-                        .description(EXTENDED_SEARCH_DESCRIPTION)
-                        .inputSchema(SchemaGenerator.generateSchema(ExtendedSearchRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> extendedSearch(request.arguments()))
-                .build());
+        if (config.isToolActive("extendedSearch")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("extendedSearch")
+                            .description(EXTENDED_SEARCH_DESCRIPTION)
+                            .inputSchema(SchemaGenerator.generateSchema(ExtendedSearchRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> extendedSearch(request.arguments()))
+                    .build());
+        }
 
         // Semantic search tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("semanticSearch")
-                        .description(SEMANTIC_SEARCH_DESCRIPTION)
-                        .inputSchema(SchemaGenerator.generateSchema(SemanticSearchRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> semanticSearch(request.arguments()))
-                .build());
+        if (config.isToolActive("semanticSearch")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("semanticSearch")
+                            .description(SEMANTIC_SEARCH_DESCRIPTION)
+                            .inputSchema(SchemaGenerator.generateSchema(SemanticSearchRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> semanticSearch(request.arguments()))
+                    .build());
+        }
 
         // Profile semantic search tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("profileSemanticSearch")
-                        .description(PROFILE_SEMANTIC_SEARCH_DESCRIPTION)
-                        .inputSchema(SchemaGenerator.generateSchema(ProfileSemanticSearchRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> profileSemanticSearch(request.arguments()))
-                .build());
+        if (config.isToolActive("profileSemanticSearch")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("profileSemanticSearch")
+                            .description(PROFILE_SEMANTIC_SEARCH_DESCRIPTION)
+                            .inputSchema(SchemaGenerator.generateSchema(ProfileSemanticSearchRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> profileSemanticSearch(request.arguments()))
+                    .build());
+        }
 
         // Profile query tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("profileQuery")
-                        .description("Debug and optimize search queries. Analyzes query structure, scoring, filter impact, and performance.\n\n" +
-                                "ANALYSIS LEVELS (cumulative):\n" +
-                                "- Level 1 (always, ~5-10ms): query structure, rewrites (e.g. *vertrag→reversed field), term stats (df/IDF/rarity), search metrics, cost estimates per clause\n" +
-                                "- Level 2 (analyzeFilterImpact=true, ~50-200ms): per-filter selectivity (low/medium/high/very high) and timing; costs N+1 queries\n" +
-                                "- Level 3 (analyzeDocumentScoring=true, ~100-300ms): BM25 breakdown per top doc, term contribution%; maxDocExplanations default=5 (max 10)\n" +
-                                "- Level 4 (analyzeFacetCost=true, ~20-50ms): facet computation overhead per dimension; costs 2 queries\n" +
-                                "- All levels combined: ~200-500ms\n\n" +
-                                "Returns structured output with actionable recommendations. " +
-                                "Start with Level 1 (fast, often sufficient). Enable deeper levels only for specific debugging: Level 2 for filter tuning, Level 3 for ranking issues.\n\n" +
-                                "LIMITATIONS: explains only matched documents; wildcard internals opaque; no passage-level scoring")
-                        .inputSchema(SchemaGenerator.generateSchema(ProfileQueryRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> profileQuery(request.arguments()))
-                .build());
+        if (config.isToolActive("profileQuery")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("profileQuery")
+                            .description("Debug and optimize search queries. Analyzes query structure, scoring, filter impact, and performance.\n\n" +
+                                    "ANALYSIS LEVELS (cumulative):\n" +
+                                    "- Level 1 (always, ~5-10ms): query structure, rewrites (e.g. *vertrag→reversed field), term stats (df/IDF/rarity), search metrics, cost estimates per clause\n" +
+                                    "- Level 2 (analyzeFilterImpact=true, ~50-200ms): per-filter selectivity (low/medium/high/very high) and timing; costs N+1 queries\n" +
+                                    "- Level 3 (analyzeDocumentScoring=true, ~100-300ms): BM25 breakdown per top doc, term contribution%; maxDocExplanations default=5 (max 10)\n" +
+                                    "- Level 4 (analyzeFacetCost=true, ~20-50ms): facet computation overhead per dimension; costs 2 queries\n" +
+                                    "- All levels combined: ~200-500ms\n\n" +
+                                    "Returns structured output with actionable recommendations. " +
+                                    "Start with Level 1 (fast, often sufficient). Enable deeper levels only for specific debugging: Level 2 for filter tuning, Level 3 for ranking issues.\n\n" +
+                                    "LIMITATIONS: explains only matched documents; wildcard internals opaque; no passage-level scoring")
+                            .inputSchema(SchemaGenerator.generateSchema(ProfileQueryRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> profileQuery(request.arguments()))
+                    .build());
+        }
 
         // Suggest terms tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("suggestTerms")
-                        .description("Suggest index terms matching a prefix. Useful for discovering vocabulary, " +
-                                "finding German compound words (prefix on 'content'), exploring author names, " +
-                                "or auto-completing field values. Returns terms sorted by document frequency. " +
-                                "For analyzed fields (content, title, etc.), the prefix is automatically lowercased to match indexed tokens.")
-                        .inputSchema(SchemaGenerator.generateSchema(SuggestTermsRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> suggestTerms(request.arguments()))
-                .build());
+        if (config.isToolActive("suggestTerms")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("suggestTerms")
+                            .description("Suggest index terms matching a prefix. Useful for discovering vocabulary, " +
+                                    "finding German compound words (prefix on 'content'), exploring author names, " +
+                                    "or auto-completing field values. Returns terms sorted by document frequency. " +
+                                    "For analyzed fields (content, title, etc.), the prefix is automatically lowercased to match indexed tokens.")
+                            .inputSchema(SchemaGenerator.generateSchema(SuggestTermsRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> suggestTerms(request.arguments()))
+                    .build());
+        }
 
         // Get top terms tool
-        tools.add(McpServerFeatures.SyncToolSpecification.builder()
-                .tool(McpSchema.Tool.builder()
-                        .name("getTopTerms")
-                        .description("Get the most frequent terms in a field. Useful for understanding index vocabulary, " +
-                                "discovering common values (languages, file types, authors), and identifying dominant terms in content. " +
-                                "Returns terms sorted by document frequency. " +
-                                "Warning: On large content fields this enumerates all terms — use suggestTerms with a prefix for targeted exploration.")
-                        .inputSchema(SchemaGenerator.generateSchema(GetTopTermsRequest.class))
-                        .build())
-                .callHandler((exchange, request) -> getTopTerms(request.arguments()))
-                .build());
+        if (config.isToolActive("getTopTerms")) {
+            tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                    .tool(McpSchema.Tool.builder()
+                            .name("getTopTerms")
+                            .description("Get the most frequent terms in a field. Useful for understanding index vocabulary, " +
+                                    "discovering common values (languages, file types, authors), and identifying dominant terms in content. " +
+                                    "Returns terms sorted by document frequency. " +
+                                    "Warning: On large content fields this enumerates all terms — use suggestTerms with a prefix for targeted exploration.")
+                            .inputSchema(SchemaGenerator.generateSchema(GetTopTermsRequest.class))
+                            .build())
+                    .callHandler((exchange, request) -> getTopTerms(request.arguments()))
+                    .build());
+        }
 
         return tools;
     }
