@@ -70,18 +70,18 @@ public class LuceneserverApplication {
 
         // Initialize ONNXService here so its hidden_size is available to LuceneIndexService
         // for embedding dimension checks during index initialization.
-        if (config.isVectorSearchEnabled()) {
-            final String modelName = System.getProperty("vector.model", "e5-base");
-            logger.info("Vector search enabled — loading ONNX model '{}'", modelName);
+        if (config.isSemanticSearchEnabled()) {
+            final String modelName = config.getVectorModel();
+            logger.info("Semantic search enabled — loading ONNX model '{}'", modelName);
             try {
                 onnxService = new ONNXService(modelName);
-                logger.info("Vector search active: model='{}' hidden_size={}", modelName, onnxService.getHiddenSize());
+                logger.info("Semantic search active: model='{}' hidden_size={}", modelName, onnxService.getHiddenSize());
             } catch (final Exception e) {
-                throw new RuntimeException("Failed to initialize ONNXService for vector search", e);
+                throw new RuntimeException("Failed to initialize ONNXService for semantic search", e);
             }
         } else {
             onnxService = null;
-            logger.info("Vector search not active (vectorsearch profile not set)");
+            logger.info("Semantic search not active (VECTOR_MODEL not configured or semantic tools not included)");
         }
 
         this.indexService = new LuceneIndexService(

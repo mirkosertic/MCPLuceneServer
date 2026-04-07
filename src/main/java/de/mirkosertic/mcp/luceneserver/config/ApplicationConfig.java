@@ -10,8 +10,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Central configuration for the MCP Lucene Server application.
@@ -29,10 +31,42 @@ public class ApplicationConfig {
 
     private static final String ENV_INDEX_PATH = "LUCENE_INDEX_PATH";
     private static final String ENV_CRAWLER_DIRECTORIES = "LUCENE_CRAWLER_DIRECTORIES";
+    private static final String ENV_TOOLS_INCLUDE = "LUCENE_TOOLS_INCLUDE";
+    private static final String ENV_TOOLS_EXCLUDE = "LUCENE_TOOLS_EXCLUDE";
     private static final String PROP_PROFILES_ACTIVE = "spring.profiles.active";
     private static final String CONFIG_DIR = ".mcplucene";
     private static final String USER_CONFIG_FILE = "config.yaml";
     private static final String DEFAULT_CONFIG_FILE = "application.yaml";
+
+    private static final Set<String> SEMANTIC_TOOLS =
+            Set.of("semanticSearch", "profileSemanticSearch");
+
+    // All 23 tool names
+    private static final Set<String> ALL_TOOLS = Set.of(
+            "simpleSearch", "extendedSearch",
+            "semanticSearch", "profileSemanticSearch",
+            "profileQuery",
+            "suggestTerms", "getTopTerms",
+            "getIndexStats", "listIndexedFields", "getDocumentDetails",
+            "startCrawl", "getCrawlerStats", "getCrawlerStatus", "pauseCrawler", "resumeCrawler",
+            "listCrawlableDirectories", "addCrawlableDirectory", "removeCrawlableDirectory",
+            "optimizeIndex", "purgeIndex", "unlockIndex", "getIndexAdminStatus", "indexAdmin"
+    );
+
+    // Tool group expansions
+    private static final Map<String, Set<String>> TOOL_GROUPS = Map.ofEntries(
+            Map.entry("search",        Set.of("simpleSearch", "extendedSearch")),
+            Map.entry("semantic",      Set.of("semanticSearch", "profileSemanticSearch")),
+            Map.entry("debug",         Set.of("profileQuery", "profileSemanticSearch")),
+            Map.entry("info",          Set.of("getIndexStats", "listIndexedFields", "getDocumentDetails")),
+            Map.entry("observability", Set.of("suggestTerms", "getTopTerms")),
+            Map.entry("crawler",       Set.of("startCrawl", "getCrawlerStats", "getCrawlerStatus",
+                                              "pauseCrawler", "resumeCrawler",
+                                              "listCrawlableDirectories", "addCrawlableDirectory",
+                                              "removeCrawlableDirectory")),
+            Map.entry("admin",         Set.of("optimizeIndex", "purgeIndex", "unlockIndex",
+                                              "getIndexAdminStatus", "indexAdmin"))
+    );
 
     // Lucene index settings
     private String indexPath;
@@ -71,7 +105,15 @@ public class ApplicationConfig {
 
     // Profile settings
     private boolean deployedMode = false;
-    private boolean vectorSearchEnabled = false;
+
+    // Vector / semantic search settings
+    private String vectorModel;
+
+    // Tool exposure settings
+    private String toolsInclude;
+    private String toolsExclude;
+    private Set<String> activeTools;
+    private boolean semanticSearchEnabled;
 
     private ApplicationConfig() {
     }
@@ -94,8 +136,11 @@ public class ApplicationConfig {
         // Step 4: Determine profile/mode
         config.determineProfile();
 
-        logger.info("Configuration loaded: indexPath={}, directories={}, deployedMode={}, vectorSearchEnabled={}",
-                config.indexPath, config.directories.size(), config.deployedMode, config.vectorSearchEnabled);
+        // Step 5: Compute active tools (depends on vectorModel and toolsInclude/Exclude)
+        config.computeActiveTools();
+
+        logger.info("Configuration loaded: indexPath={}, directories={}, deployedMode={}, semanticSearchEnabled={}",
+                config.indexPath, config.directories.size(), config.deployedMode, config.semanticSearchEnabled);
 
         return config;
     }
@@ -259,12 +304,51 @@ public class ApplicationConfig {
         if (propIndexPath != null && !propIndexPath.isEmpty()) {
             this.indexPath = propIndexPath;
         }
+
+        // Vector model: env var takes priority over system property
+        this.vectorModel = coalesce(System.getenv("VECTOR_MODEL"),
+                System.getProperty("vector.model"), null);
+
+        // Tool exposure configuration — use coalesce for include (default "*") and
+        // fall back to empty string for exclude (meaning: exclude nothing)
+        final String envToolsInclude = System.getenv(ENV_TOOLS_INCLUDE);
+        final String propToolsInclude = System.getProperty("lucene.tools.include");
+        if (envToolsInclude != null && !envToolsInclude.isBlank()) {
+            this.toolsInclude = envToolsInclude;
+        } else if (propToolsInclude != null && !propToolsInclude.isBlank()) {
+            this.toolsInclude = propToolsInclude;
+        } else {
+            this.toolsInclude = "*";
+        }
+
+        final String envToolsExclude = System.getenv(ENV_TOOLS_EXCLUDE);
+        final String propToolsExclude = System.getProperty("lucene.tools.exclude");
+        if (envToolsExclude != null && !envToolsExclude.isBlank()) {
+            this.toolsExclude = envToolsExclude;
+        } else if (propToolsExclude != null && !propToolsExclude.isBlank()) {
+            this.toolsExclude = propToolsExclude;
+        } else {
+            this.toolsExclude = "";
+        }
+    }
+
+    private static String coalesce(final String... values) {
+        for (final String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v;
+            }
+        }
+        return null;
     }
 
     private void determineProfile() {
-        // Check system property for profile (supports both old Spring-style and new style)
-        final String profilesRaw = System.getProperty(PROP_PROFILES_ACTIVE,
-                System.getProperty("profile", "default"));
+        // Check environment variable first (higher priority than system property)
+        final String envProfiles = System.getenv("SPRING_PROFILES_ACTIVE");
+        final String profilesRaw = (envProfiles != null && !envProfiles.isBlank())
+                ? envProfiles
+                : System.getProperty(PROP_PROFILES_ACTIVE,
+                        System.getProperty("profile", "default"));
+
         final List<String> profiles = new ArrayList<>();
         for (final String p : profilesRaw.split(",")) {
             final String trimmed = p.trim().toLowerCase();
@@ -273,7 +357,47 @@ public class ApplicationConfig {
             }
         }
         this.deployedMode = profiles.contains("deployed");
-        this.vectorSearchEnabled = profiles.contains("vectorsearch");
+        // semanticSearchEnabled is now set exclusively by computeActiveTools()
+    }
+
+    private void computeActiveTools() {
+        final Set<String> included = resolveToolList(toolsInclude);
+        this.activeTools = new LinkedHashSet<>(included);
+        // Only resolve exclusions when the spec is non-blank and not a wildcard
+        if (toolsExclude != null && !toolsExclude.isBlank() && !"*".equals(toolsExclude.trim())) {
+            final Set<String> excluded = resolveToolList(toolsExclude);
+            this.activeTools.removeAll(excluded);
+        }
+
+        final boolean wantsSemanticTools = SEMANTIC_TOOLS.stream().anyMatch(activeTools::contains);
+        final boolean modelConfigured = vectorModel != null && !vectorModel.isBlank();
+        if (wantsSemanticTools && !modelConfigured) {
+            logger.warn("Semantic tools requested via LUCENE_TOOLS_INCLUDE but VECTOR_MODEL is not configured — disabling semantic tools");
+            activeTools.removeAll(SEMANTIC_TOOLS);
+        }
+        this.semanticSearchEnabled = wantsSemanticTools && modelConfigured;
+    }
+
+    private Set<String> resolveToolList(final String spec) {
+        if (spec == null || spec.isBlank() || "*".equals(spec.trim())) {
+            return new LinkedHashSet<>(ALL_TOOLS);
+        }
+        final Set<String> result = new LinkedHashSet<>();
+        for (final String token : spec.split(",")) {
+            final String name = token.trim();
+            if (name.isBlank()) {
+                continue;
+            }
+            final Set<String> groupExpansion = TOOL_GROUPS.get(name);
+            if (groupExpansion != null) {
+                result.addAll(groupExpansion);
+            } else if (ALL_TOOLS.contains(name)) {
+                result.add(name);
+            } else {
+                logger.warn("Unknown tool name or group in LUCENE_TOOLS_INCLUDE/EXCLUDE: '{}' — ignored", name);
+            }
+        }
+        return result;
     }
 
     /**
@@ -408,8 +532,16 @@ public class ApplicationConfig {
         return deployedMode;
     }
 
-    public boolean isVectorSearchEnabled() {
-        return vectorSearchEnabled;
+    public boolean isSemanticSearchEnabled() {
+        return semanticSearchEnabled;
+    }
+
+    public String getVectorModel() {
+        return vectorModel;
+    }
+
+    public boolean isToolActive(final String toolName) {
+        return activeTools.contains(toolName);
     }
 
     public boolean isReconciliationEnabled() {
