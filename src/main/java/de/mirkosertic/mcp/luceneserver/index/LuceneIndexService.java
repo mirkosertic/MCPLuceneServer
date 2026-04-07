@@ -3367,6 +3367,138 @@ public class LuceneIndexService {
     }
 
     /**
+     * Perform a pure KNN semantic search using the ONNX embedding model.
+     *
+     * <p>The query string is embedded using the query prefix and used to find the
+     * nearest-neighbour child chunk documents in the index.  Results are grouped by
+     * parent document (file_path), keeping the best-scoring chunk per parent.  Parent
+     * documents are resolved via a secondary lookup and paged according to {@code page}
+     * and {@code pageSize}.</p>
+     *
+     * @param queryString        the natural-language query to embed
+     * @param filters            optional filters to apply as a KNN pre-filter
+     * @param page               zero-based page number
+     * @param pageSize           number of results per page
+     * @param similarityThreshold cosine similarity threshold (0.0–1.0); candidates below this are dropped
+     * @return a {@link SemanticSearchResult} with paged passages, total hit count,
+     *         embedding latency, and the effective cosine cutoff applied
+     * @throws IOException           if reading from the index fails
+     * @throws IllegalStateException if the ONNX service is not configured
+     */
+    public SemanticSearchResult semanticSearch(
+            final String queryString,
+            final List<SearchFilter> filters,
+            final int page,
+            final int pageSize,
+            final float similarityThreshold) throws IOException {
+
+        if (onnxService == null) {
+            throw new IllegalStateException("Semantic search requires VECTOR_MODEL to be configured");
+        }
+
+        final long embeddingStart = System.nanoTime();
+        final float[] queryVector;
+        try {
+            queryVector = onnxService.embed(queryString, ONNXService.QUERY_PREFIX);
+        } catch (final Exception e) {
+            throw new IOException("Failed to embed query string: " + e.getMessage(), e);
+        }
+        final long embeddingDurationMs = (System.nanoTime() - embeddingStart) / 1_000_000;
+
+        // Convert cosine similarity threshold to Lucene DOT_PRODUCT score threshold.
+        // Lucene stores DOT_PRODUCT scores in [0,1] as (1 + cosine) / 2.
+        final float luceneScoreThreshold = (1.0f + similarityThreshold) / 2.0f;
+
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            // Build KNN pre-filter from the provided filters (if any)
+            Query filterQuery = null;
+            if (filters != null && !filters.isEmpty()) {
+                final BooleanQuery.Builder filterBuilder = new BooleanQuery.Builder();
+                for (final SearchFilter f : filters) {
+                    addFilterClause(filterBuilder, f);
+                }
+                filterQuery = filterBuilder.build();
+            }
+
+            // Retrieve top-50 nearest-neighbour child chunk documents
+            final int knnCandidates = 50;
+            final KnnFloatVectorQuery knnQuery = (filterQuery != null)
+                    ? new KnnFloatVectorQuery("embedding", queryVector, knnCandidates, filterQuery)
+                    : new KnnFloatVectorQuery("embedding", queryVector, knnCandidates);
+
+            final TopDocs vectorTopDocs = searcher.search(knnQuery, knnCandidates);
+
+            // Group by file_path — keep best-scoring chunk per parent document
+            final Map<String, Float> bestScoreByPath = new LinkedHashMap<>();
+            final Map<String, String> bestChunkTextByPath = new LinkedHashMap<>();
+
+            for (final ScoreDoc scoreDoc : vectorTopDocs.scoreDocs) {
+                // Apply cosine similarity threshold (Lucene score = (1 + cosine) / 2)
+                if (scoreDoc.score < luceneScoreThreshold) {
+                    continue;
+                }
+
+                final Document childDoc = searcher.storedFields().document(scoreDoc.doc);
+                final String filePath = childDoc.get("file_path");
+                if (filePath == null) {
+                    continue;
+                }
+
+                // Convert Lucene DOT_PRODUCT score back to cosine similarity
+                final float cosineScore = 2.0f * scoreDoc.score - 1.0f;
+
+                if (!bestScoreByPath.containsKey(filePath) || cosineScore > bestScoreByPath.get(filePath)) {
+                    bestScoreByPath.put(filePath, cosineScore);
+                    final String chunkText = childDoc.get("chunk_text");
+                    bestChunkTextByPath.put(filePath, chunkText != null ? chunkText : "");
+                }
+            }
+
+            // Sort paths by descending cosine score
+            final List<String> sortedPaths = bestScoreByPath.entrySet().stream()
+                    .sorted(Map.Entry.<String, Float>comparingByValue().reversed())
+                    .map(Map.Entry::getKey)
+                    .toList();
+
+            // Apply pagination
+            final int startIdx = page * pageSize;
+            final int endIdx = Math.min(startIdx + pageSize, sortedPaths.size());
+
+            final List<Passage> results = new ArrayList<>();
+            for (int i = startIdx; i < endIdx; i++) {
+                final String filePath = sortedPaths.get(i);
+
+                // Look up the parent document for metadata
+                final Query parentQuery = new BooleanQuery.Builder()
+                        .add(new TermQuery(new Term("file_path", filePath)), BooleanClause.Occur.MUST)
+                        .add(new TermQuery(new Term(DocumentIndexer.DOC_TYPE_FIELD, DocumentIndexer.DOC_TYPE_PARENT)),
+                                BooleanClause.Occur.MUST)
+                        .build();
+                final TopDocs parentDocs = searcher.search(parentQuery, 1);
+                if (parentDocs.scoreDocs.length == 0) {
+                    continue;
+                }
+
+                final float cosineScore = bestScoreByPath.get(filePath);
+                final String chunkText = bestChunkTextByPath.get(filePath);
+
+                // Build a semantic Passage using the best-matching chunk text.
+                // Position is 0.0 (sentinel) since chunk offset within parent is not stored.
+                final double normalizedScore = Math.round((double) cosineScore * 100.0) / 100.0;
+                final String cleanedText = chunkText != null && !chunkText.isBlank()
+                        ? TextCleaner.clean(chunkText)
+                        : "";
+                results.add(new Passage(cleanedText, normalizedScore, List.of(), 0.0, 0.0, "semantic"));
+            }
+
+            return new SemanticSearchResult(results, bestScoreByPath.size(), embeddingDurationMs, similarityThreshold);
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    /**
      * Thin subclass of {@link UnifiedHighlighter} that exposes the {@code protected}
      * {@link #highlightFieldsAsObjects} method.  This allows callers to receive the
      * raw {@link Object} returned by the {@link IndividualPassageFormatter} (a
