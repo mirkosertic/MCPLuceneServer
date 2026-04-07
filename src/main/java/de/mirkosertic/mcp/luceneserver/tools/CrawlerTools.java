@@ -54,6 +54,7 @@ public class CrawlerTools implements McpToolProvider {
 
         // Start crawl tool
         if (config.isToolActive("startCrawl")) {
+            logger.info("Exposing startCrawl tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("startCrawl")
@@ -67,6 +68,7 @@ public class CrawlerTools implements McpToolProvider {
 
         // Get crawler stats tool
         if (config.isToolActive("getCrawlerStats")) {
+            logger.info("Exposing getCrawlerStats tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("getCrawlerStats")
@@ -79,6 +81,7 @@ public class CrawlerTools implements McpToolProvider {
 
         // Get crawler status tool
         if (config.isToolActive("getCrawlerStatus")) {
+            logger.info("Exposing getCrawlerStatus tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("getCrawlerStatus")
@@ -91,6 +94,7 @@ public class CrawlerTools implements McpToolProvider {
 
         // Pause crawler tool
         if (config.isToolActive("pauseCrawler")) {
+            logger.info("Exposing pauseCrawler tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("pauseCrawler")
@@ -103,6 +107,7 @@ public class CrawlerTools implements McpToolProvider {
 
         // Resume crawler tool
         if (config.isToolActive("resumeCrawler")) {
+            logger.info("Exposing resumeCrawler tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("resumeCrawler")
@@ -115,6 +120,7 @@ public class CrawlerTools implements McpToolProvider {
 
         // List crawlable directories tool
         if (config.isToolActive("listCrawlableDirectories")) {
+            logger.info("Exposing listCrawlableDirectories tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("listCrawlableDirectories")
@@ -128,6 +134,7 @@ public class CrawlerTools implements McpToolProvider {
 
         // Add crawlable directory tool
         if (config.isToolActive("addCrawlableDirectory")) {
+            logger.info("Exposing addCrawlableDirectory tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("addCrawlableDirectory")
@@ -143,6 +150,7 @@ public class CrawlerTools implements McpToolProvider {
 
         // Remove crawlable directory tool
         if (config.isToolActive("removeCrawlableDirectory")) {
+            logger.info("Exposing removeCrawlableDirectory tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("removeCrawlableDirectory")

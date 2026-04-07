@@ -45,7 +45,7 @@ public record SearchFilter(
         final String value = (String) map.get("value");
 
         final List<String> values;
-        if (map.get("values") instanceof List<?> rawList) {
+        if (map.get("values") instanceof final List<?> rawList) {
             values = rawList.stream()
                     .map(Object::toString)
                     .toList();

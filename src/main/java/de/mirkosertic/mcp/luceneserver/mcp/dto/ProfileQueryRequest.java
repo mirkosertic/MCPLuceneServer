@@ -83,7 +83,7 @@ public record ProfileQueryRequest(
      * otherwise defaults to EXTENDED.
      */
     public LuceneIndexService.QueryMode effectiveQueryMode() {
-        if (queryMode != null && "SIMPLE".equalsIgnoreCase(queryMode)) {
+        if ("SIMPLE".equalsIgnoreCase(queryMode)) {
             return LuceneIndexService.QueryMode.SIMPLE;
         }
         return LuceneIndexService.QueryMode.EXTENDED;

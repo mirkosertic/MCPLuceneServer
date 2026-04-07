@@ -1,6 +1,5 @@
 package de.mirkosertic.mcp.luceneserver.index;
 
-import de.mirkosertic.mcp.luceneserver.index.analysis.CachedNLPLemmatizerOp;
 import de.mirkosertic.mcp.luceneserver.index.analysis.GermanTransliteratingAnalyzer;
 import de.mirkosertic.mcp.luceneserver.index.analysis.LemmatizerCacheStats;
 import de.mirkosertic.mcp.luceneserver.index.analysis.OpenNLPLemmatizingAnalyzer;
@@ -449,7 +448,7 @@ public class LuceneIndexService {
 
                     // Create child documents
                     final List<Document> children = documentIndexer.createChildDocuments(
-                            filePath.toString(), embeddings, chunkTexts);
+                            filePath, embeddings, chunkTexts);
 
                     // Block join: children first, parent last
                     final List<Document> block = new ArrayList<>(children.size() + 1);
@@ -457,7 +456,7 @@ public class LuceneIndexService {
                     block.add(facetedParent);
 
                     // Delete old block (parent + its children) before inserting new block
-                    indexWriter.deleteDocuments(new Term("file_path", filePath.toString()));
+                    indexWriter.deleteDocuments(new Term("file_path", filePath));
                     indexWriter.addDocuments(block);
                     return;
                 }

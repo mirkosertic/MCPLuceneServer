@@ -140,10 +140,10 @@ docker run -v ./lucene-data-dir:/userdata -p 9000:9000 \
   -it mirkosertic42/mcpluceneserver:main
 ```
 
-| Environment Variable | Default | Description |
-|---|---|---|
-| `VECTOR_MODEL` | (none) | ONNX embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality). Set to enable semantic search. |
-| `JAVA_OPTS` | `-Xmx2g` | JVM options. Increase to `-Xmx4g` or higher when using semantic search. |
+| Environment Variable | Default  | Description                                                                                                                  |
+|----------------------|----------|------------------------------------------------------------------------------------------------------------------------------|
+| `VECTOR_MODEL`       | (none)   | ONNX embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality). Set to enable semantic search. |
+| `JAVA_OPTS`          | `-Xmx2g` | JVM options. Increase to `-Xmx4g` or higher when using semantic search.                                                      |
 
 ### Step 2: Configure Claude Desktop
 
@@ -229,12 +229,12 @@ Search the Lucene fulltext index using full Lucene query syntax. Supports Boolea
 
 By default, results are sorted by relevance score (most relevant first). You can sort by metadata fields:
 
-| Sort Field | Description | Default Order |
-|------------|-------------|---------------|
-| `_score` | Relevance score (default) | Descending (best match first) |
-| `modified_date` | Last modified date | Descending (most recent first) |
-| `created_date` | Creation date | Descending (most recent first) |
-| `file_size` | File size in bytes | Descending (largest first) |
+| Sort Field      | Description               | Default Order                  |
+|-----------------|---------------------------|--------------------------------|
+| `_score`        | Relevance score (default) | Descending (best match first)  |
+| `modified_date` | Last modified date        | Descending (most recent first) |
+| `created_date`  | Creation date             | Descending (most recent first) |
+| `file_size`     | File size in bytes        | Descending (largest first)     |
 
 **Sort Examples:**
 ```jsonc
@@ -265,25 +265,25 @@ By default, results are sorted by relevance score (most relevant first). You can
 
 The `filters` array accepts objects with these fields:
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `field` | yes | Field name to filter on |
-| `operator` | no | `eq` (default), `in`, `not`, `not_in`, `range` |
-| `value` | for eq/not | Single value for exact match or exclusion |
-| `values` | for in/not_in | Array of values (OR semantics within the field) |
-| `from` | for range | Range start (inclusive) |
-| `to` | for range | Range end (inclusive) |
-| `addedAt` | no | Client timestamp — round-tripped in `activeFilters` response |
+| Field      | Required      | Description                                                  |
+|------------|---------------|--------------------------------------------------------------|
+| `field`    | yes           | Field name to filter on                                      |
+| `operator` | no            | `eq` (default), `in`, `not`, `not_in`, `range`               |
+| `value`    | for eq/not    | Single value for exact match or exclusion                    |
+| `values`   | for in/not_in | Array of values (OR semantics within the field)              |
+| `from`     | for range     | Range start (inclusive)                                      |
+| `to`       | for range     | Range end (inclusive)                                        |
+| `addedAt`  | no            | Client timestamp — round-tripped in `activeFilters` response |
 
 **Operator reference:**
 
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `eq` | Exact match (default) | `{field: "language", value: "en"}` |
-| `in` | Match any of values | `{field: "file_extension", operator: "in", values: ["pdf", "docx"]}` |
-| `not` | Exclude value | `{field: "language", operator: "not", value: "unknown"}` |
-| `not_in` | Exclude multiple values | `{field: "language", operator: "not_in", values: ["unknown", ""]}` |
-| `range` | Numeric/date range | `{field: "modified_date", operator: "range", from: "2024-01-01", to: "2025-12-31"}` |
+| Operator | Description             | Example                                                                             |
+|----------|-------------------------|-------------------------------------------------------------------------------------|
+| `eq`     | Exact match (default)   | `{field: "language", value: "en"}`                                                  |
+| `in`     | Match any of values     | `{field: "file_extension", operator: "in", values: ["pdf", "docx"]}`                |
+| `not`    | Exclude value           | `{field: "language", operator: "not", value: "unknown"}`                            |
+| `not_in` | Exclude multiple values | `{field: "language", operator: "not_in", values: ["unknown", ""]}`                  |
+| `range`  | Numeric/date range      | `{field: "modified_date", operator: "range", from: "2024-01-01", to: "2025-12-31"}` |
 
 **Filterable fields:**
 - **Faceted** (DrillSideways): `language`, `file_extension`, `file_type`, `author`
@@ -1202,22 +1202,22 @@ Ask Claude: "Is the purge operation complete?"
 
 Control which MCP tools are exposed using two environment variables:
 
-| Variable | Default | Description |
-|---|---|---|
-| `LUCENE_TOOLS_INCLUDE` | `*` (all tools) | Comma-separated tool names or group shorthands to expose |
-| `LUCENE_TOOLS_EXCLUDE` | (empty) | Comma-separated tool names or group shorthands to hide; **always wins** over include |
+| Variable               | Default         | Description                                                                          |
+|------------------------|-----------------|--------------------------------------------------------------------------------------|
+| `LUCENE_TOOLS_INCLUDE` | `*` (all tools) | Comma-separated tool names or group shorthands to expose                             |
+| `LUCENE_TOOLS_EXCLUDE` | (empty)         | Comma-separated tool names or group shorthands to hide; **always wins** over include |
 
 ### Tool Groups
 
-| Group | Tools |
-|---|---|
-| `search` | simpleSearch, extendedSearch |
-| `semantic` | semanticSearch, profileSemanticSearch |
-| `debug` | profileQuery |
-| `info` | getIndexStats, listIndexedFields, getDocumentDetails |
-| `observability` | suggestTerms, getTopTerms |
-| `crawler` | startCrawl, getCrawlerStats, getCrawlerStatus, pauseCrawler, resumeCrawler, listCrawlableDirectories, addCrawlableDirectory, removeCrawlableDirectory |
-| `admin` | optimizeIndex, purgeIndex, unlockIndex, getIndexAdminStatus, indexAdmin |
+| Group           | Tools                                                                                                                                                 |
+|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `search`        | simpleSearch, extendedSearch                                                                                                                          |
+| `semantic`      | semanticSearch, profileSemanticSearch                                                                                                                 |
+| `debug`         | profileQuery                                                                                                                                          |
+| `info`          | getIndexStats, listIndexedFields, getDocumentDetails                                                                                                  |
+| `observability` | suggestTerms, getTopTerms                                                                                                                             |
+| `crawler`       | startCrawl, getCrawlerStats, getCrawlerStatus, pauseCrawler, resumeCrawler, listCrawlableDirectories, addCrawlableDirectory, removeCrawlableDirectory |
+| `admin`         | optimizeIndex, purgeIndex, unlockIndex, getIndexAdminStatus, indexAdmin                                                                               |
 
 Individual tool names can be used in addition to group shorthands.
 
@@ -1964,9 +1964,9 @@ VECTOR_MODEL=e5-base java --enable-native-access=ALL-UNNAMED \
   -jar luceneserver-0.0.1-SNAPSHOT.jar
 ```
 
-| Environment Variable | Default | Description |
-|---|---|---|
-| `VECTOR_MODEL` | (none) | Embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality). Set to enable semantic search tools. |
+| Environment Variable | Default | Description                                                                                                                   |
+|----------------------|---------|-------------------------------------------------------------------------------------------------------------------------------|
+| `VECTOR_MODEL`       | (none)  | Embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality). Set to enable semantic search tools. |
 
 See [SEMANTICSEARCH.md](SEMANTICSEARCH.md) for full architecture details, tuning guidance, and KNN scoring configuration.
 
@@ -1996,13 +1996,13 @@ An LLM already bridges the semantic gap as part of its reasoning process. Before
 
 ### Environment Variables
 
-| Environment Variable | Default | Description |
-|---|---|---|
-| `LUCENE_INDEX_PATH` | `${user.home}/.mcplucene/luceneindex` | Path to the Lucene index directory |
-| `LUCENE_CRAWLER_DIRECTORIES` | (none) | Comma-separated list of directories to crawl (overrides config file) |
-| `VECTOR_MODEL` | (none) | Embedding model (`e5-base` or `e5-large`). Set to enable semantic search. |
-| `LUCENE_TOOLS_INCLUDE` | `*` (all) | Comma-separated tool names or group shorthands to expose |
-| `LUCENE_TOOLS_EXCLUDE` | (empty) | Comma-separated tool names or group shorthands to hide |
+| Environment Variable         | Default                               | Description                                                               |
+|------------------------------|---------------------------------------|---------------------------------------------------------------------------|
+| `LUCENE_INDEX_PATH`          | `${user.home}/.mcplucene/luceneindex` | Path to the Lucene index directory                                        |
+| `LUCENE_CRAWLER_DIRECTORIES` | (none)                                | Comma-separated list of directories to crawl (overrides config file)      |
+| `VECTOR_MODEL`               | (none)                                | Embedding model (`e5-base` or `e5-large`). Set to enable semantic search. |
+| `LUCENE_TOOLS_INCLUDE`       | `*` (all)                             | Comma-separated tool names or group shorthands to expose                  |
+| `LUCENE_TOOLS_EXCLUDE`       | (empty)                               | Comma-separated tool names or group shorthands to hide                    |
 
 **Note on `LUCENE_CRAWLER_DIRECTORIES`:**
 When this environment variable is set, it takes precedence over `~/.mcplucene/config.yaml` and `application.yaml`. The MCP configuration tools (`addCrawlableDirectory`, `removeCrawlableDirectory`) will refuse to modify configuration while this override is active. To use runtime configuration, remove this environment variable.

@@ -62,9 +62,9 @@ public final class SchemaGenerator {
             schema.put("description", description.value());
         }
 
-        if (type instanceof Class<?> clazz) {
+        if (type instanceof final Class<?> clazz) {
             addTypeSchema(schema, clazz);
-        } else if (type instanceof ParameterizedType paramType) {
+        } else if (type instanceof final ParameterizedType paramType) {
             addParameterizedTypeSchema(schema, paramType);
         } else {
             schema.put("type", "string");
@@ -121,13 +121,13 @@ public final class SchemaGenerator {
             final ParameterizedType paramType) {
         final Type rawType = paramType.getRawType();
 
-        if (rawType instanceof Class<?> rawClass) {
+        if (rawType instanceof final Class<?> rawClass) {
             if (List.class.isAssignableFrom(rawClass) || Set.class.isAssignableFrom(rawClass)) {
                 schema.put("type", "array");
                 final Type[] typeArgs = paramType.getActualTypeArguments();
                 if (typeArgs.length > 0) {
                     final Map<String, Object> itemSchema = new LinkedHashMap<>();
-                    if (typeArgs[0] instanceof Class<?> itemClass) {
+                    if (typeArgs[0] instanceof final Class<?> itemClass) {
                         addTypeSchema(itemSchema, itemClass);
                     } else {
                         itemSchema.put("type", "object");
@@ -146,7 +146,7 @@ public final class SchemaGenerator {
     }
 
     private static boolean isOptionalType(final Type type) {
-        if (type instanceof Class<?> clazz) {
+        if (type instanceof final Class<?> clazz) {
             // Primitive wrappers are considered optional if annotated with @Nullable
             return false;
         }
