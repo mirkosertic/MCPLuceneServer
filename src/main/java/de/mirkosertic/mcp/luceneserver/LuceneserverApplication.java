@@ -21,13 +21,21 @@ import de.mirkosertic.mcp.luceneserver.transport.TransportFactory;
 import de.mirkosertic.mcp.luceneserver.transport.TransportType;
 import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
+import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import de.mirkosertic.mcp.luceneserver.tools.CrawlerTools;
+import de.mirkosertic.mcp.luceneserver.tools.IndexAdminTools;
+import de.mirkosertic.mcp.luceneserver.tools.IndexInfoTools;
+import de.mirkosertic.mcp.luceneserver.tools.McpToolProvider;
+import de.mirkosertic.mcp.luceneserver.tools.SearchTools;
+
 import java.io.IOException;
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * Main entry point for the MCP Lucene Server.
@@ -44,7 +52,10 @@ public class LuceneserverApplication {
     private final CrawlExecutorService crawlExecutor;
     private final DirectoryWatcherService watcherService;
     private final DocumentCrawlerService crawlerService;
-    private final LuceneSearchTools searchTools;
+    private final SearchTools searchTools;
+    private final CrawlerTools crawlerTools;
+    private final IndexInfoTools indexInfoTools;
+    private final IndexAdminTools indexAdminTools;
     private ONNXService onnxService;
     private McpSyncServer mcpSyncServer;
     private McpSyncServer mcpStreamableSyncServer;
@@ -107,12 +118,10 @@ public class LuceneserverApplication {
 
         final QueryRuntimeStats queryRuntimeStats = new QueryRuntimeStats();
 
-        this.searchTools = new LuceneSearchTools(
-                indexService,
-                crawlerService,
-                configManager,
-                queryRuntimeStats
-        );
+        this.searchTools = new SearchTools(indexService, queryRuntimeStats);
+        this.crawlerTools = new CrawlerTools(crawlerService, configManager);
+        this.indexInfoTools = new IndexInfoTools(indexService, queryRuntimeStats);
+        this.indexAdminTools = new IndexAdminTools(indexService, crawlerService);
     }
 
     /**
@@ -200,12 +209,16 @@ public class LuceneserverApplication {
         final LatestProtocolStdioServerTransportProvider transportProvider =
                 TransportFactory.createStdioTransport(jsonMapper);
 
+        final List<McpServerFeatures.SyncToolSpecification> allTools = Stream.of(
+                (McpToolProvider) searchTools, crawlerTools, indexInfoTools, indexAdminTools)
+                .flatMap(p -> p.getToolSpecifications().stream()).toList();
+
         // Build and start the MCP server
         mcpSyncServer = McpServer.sync(transportProvider)
                 .serverInfo(serverInfo)
                 .capabilities(capabilities)
-                .tools(searchTools.getToolSpecifications())
-                .resources(searchTools.getResourceSpecifications())
+                .tools(allTools)
+                .resources(indexAdminTools.getResourceSpecifications())
                 .build();
     }
 
@@ -222,13 +235,17 @@ public class LuceneserverApplication {
         // Create HTTP transport with embedded Jetty server
         httpTransport = TransportFactory.createHttpTransport(jsonMapper);
 
+        final List<McpServerFeatures.SyncToolSpecification> allTools = Stream.of(
+                (McpToolProvider) searchTools, crawlerTools, indexInfoTools, indexAdminTools)
+                .flatMap(p -> p.getToolSpecifications().stream()).toList();
+
         // Build sync MCP server for HTTP using streamable transport
         // The transport provider handles async HTTP internally while we use sync handlers
         mcpStreamableSyncServer = McpServer.sync(httpTransport.transportProvider())
                 .serverInfo(serverInfo)
                 .capabilities(capabilities)
-                .tools(searchTools.getToolSpecifications())
-                .resources(searchTools.getResourceSpecifications())
+                .tools(allTools)
+                .resources(indexAdminTools.getResourceSpecifications())
                 .build();
 
         // Start the HTTP server
