@@ -47,6 +47,7 @@ public class IndexInfoTools implements McpToolProvider {
 
         // Get index stats tool
         if (config.isToolActive("getIndexStats")) {
+            logger.info("Exposing getIndexStats tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("getIndexStats")
@@ -63,6 +64,7 @@ public class IndexInfoTools implements McpToolProvider {
 
         // List indexed fields tool
         if (config.isToolActive("listIndexedFields")) {
+            logger.info("Exposing listIndexedFields tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("listIndexedFields")
@@ -75,6 +77,7 @@ public class IndexInfoTools implements McpToolProvider {
 
         // Get document details tool
         if (config.isToolActive("getDocumentDetails")) {
+            logger.info("Exposing getDocumentDetails tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("getDocumentDetails")

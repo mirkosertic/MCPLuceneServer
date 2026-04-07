@@ -78,7 +78,7 @@ public class CachedNLPLemmatizerOp extends NLPLemmatizerOp {
     public static Cache<TokenPosPair, String> createSharedCache(final int maxSize, final LemmatizerCacheStats stats) {
         return Caffeine.newBuilder()
                 .maximumSize(maxSize)
-                .evictionListener((TokenPosPair key, String value, RemovalCause cause) -> {
+                .evictionListener((final TokenPosPair key, final String value, final RemovalCause cause) -> {
                     if (cause.wasEvicted()) {
                         stats.recordEviction();
                     }

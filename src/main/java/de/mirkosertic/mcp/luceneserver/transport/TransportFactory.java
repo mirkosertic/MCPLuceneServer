@@ -15,7 +15,7 @@ import java.net.InetSocketAddress;
  * Factory for creating MCP transport providers based on system properties.
  * Supports STDIO (default) and HTTP transports.
  */
-public class TransportFactory {
+public final class TransportFactory {
 
     private static final Logger logger = LoggerFactory.getLogger(TransportFactory.class);
 

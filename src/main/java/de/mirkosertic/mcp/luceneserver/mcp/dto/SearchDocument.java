@@ -85,38 +85,38 @@ public record SearchDocument(
         private List<Passage> passages = List.of();
         private VectorMatchInfo vectorMatchInfo;
 
-        public Builder score(double score) { this.score = score; return this; }
-        public Builder filePath(String filePath) { this.filePath = filePath; return this; }
-        public Builder fileName(String fileName) { this.fileName = fileName; return this; }
-        public Builder title(String title) { this.title = title; return this; }
-        public Builder author(String author) { this.author = author; return this; }
-        public Builder creator(String creator) { this.creator = creator; return this; }
-        public Builder subject(String subject) { this.subject = subject; return this; }
-        public Builder language(String language) { this.language = language; return this; }
-        public Builder fileExtension(String fileExtension) { this.fileExtension = fileExtension; return this; }
-        public Builder fileType(String fileType) { this.fileType = fileType; return this; }
-        public Builder fileSize(Long fileSize) { this.fileSize = fileSize; return this; }
-        public Builder fileSize(String fileSize) {
+        public Builder score(final double score) { this.score = score; return this; }
+        public Builder filePath(final String filePath) { this.filePath = filePath; return this; }
+        public Builder fileName(final String fileName) { this.fileName = fileName; return this; }
+        public Builder title(final String title) { this.title = title; return this; }
+        public Builder author(final String author) { this.author = author; return this; }
+        public Builder creator(final String creator) { this.creator = creator; return this; }
+        public Builder subject(final String subject) { this.subject = subject; return this; }
+        public Builder language(final String language) { this.language = language; return this; }
+        public Builder fileExtension(final String fileExtension) { this.fileExtension = fileExtension; return this; }
+        public Builder fileType(final String fileType) { this.fileType = fileType; return this; }
+        public Builder fileSize(final Long fileSize) { this.fileSize = fileSize; return this; }
+        public Builder fileSize(final String fileSize) {
             this.fileSize = fileSize != null ? Long.parseLong(fileSize) : null;
             return this;
         }
-        public Builder createdDate(Long createdDate) { this.createdDate = createdDate; return this; }
-        public Builder createdDate(String createdDate) {
+        public Builder createdDate(final Long createdDate) { this.createdDate = createdDate; return this; }
+        public Builder createdDate(final String createdDate) {
             this.createdDate = createdDate != null ? Long.parseLong(createdDate) : null;
             return this;
         }
-        public Builder modifiedDate(Long modifiedDate) { this.modifiedDate = modifiedDate; return this; }
-        public Builder modifiedDate(String modifiedDate) {
+        public Builder modifiedDate(final Long modifiedDate) { this.modifiedDate = modifiedDate; return this; }
+        public Builder modifiedDate(final String modifiedDate) {
             this.modifiedDate = modifiedDate != null ? Long.parseLong(modifiedDate) : null;
             return this;
         }
-        public Builder indexedDate(Long indexedDate) { this.indexedDate = indexedDate; return this; }
-        public Builder indexedDate(String indexedDate) {
+        public Builder indexedDate(final Long indexedDate) { this.indexedDate = indexedDate; return this; }
+        public Builder indexedDate(final String indexedDate) {
             this.indexedDate = indexedDate != null ? Long.parseLong(indexedDate) : null;
             return this;
         }
-        public Builder passages(List<Passage> passages) { this.passages = passages; return this; }
-        public Builder vectorMatchInfo(VectorMatchInfo vectorMatchInfo) { this.vectorMatchInfo = vectorMatchInfo; return this; }
+        public Builder passages(final List<Passage> passages) { this.passages = passages; return this; }
+        public Builder vectorMatchInfo(final VectorMatchInfo vectorMatchInfo) { this.vectorMatchInfo = vectorMatchInfo; return this; }
 
         public SearchDocument build() {
             return new SearchDocument(score, filePath, fileName, title, author, creator,

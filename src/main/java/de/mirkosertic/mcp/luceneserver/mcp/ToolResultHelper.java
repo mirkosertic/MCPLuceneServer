@@ -65,13 +65,13 @@ public final class ToolResultHelper {
      * Check if a response indicates an error (has success=false).
      */
     private static boolean isErrorResponse(final Object response) {
-        if (response instanceof Record record) {
+        if (response instanceof final Record record) {
             try {
                 final var successField = record.getClass().getRecordComponents();
                 for (final var component : successField) {
                     if ("success".equals(component.getName())) {
                         final Object value = component.getAccessor().invoke(record);
-                        if (value instanceof Boolean success) {
+                        if (value instanceof final Boolean success) {
                             return !success;
                         }
                     }

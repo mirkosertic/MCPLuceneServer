@@ -59,7 +59,7 @@ public final class LoggingConfigurator {
             final JoranConfigurator configurator = new JoranConfigurator();
             configurator.setContext(context);
 
-            try (InputStream configStream = LoggingConfigurator.class.getClassLoader()
+            try (final InputStream configStream = LoggingConfigurator.class.getClassLoader()
                     .getResourceAsStream(configFile)) {
                 if (configStream != null) {
                     configurator.doConfigure(configStream);

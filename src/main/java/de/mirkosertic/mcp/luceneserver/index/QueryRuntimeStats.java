@@ -120,7 +120,7 @@ public class QueryRuntimeStats {
 
     private static long percentileValue(final long[] sortedData, final int count, final int percentile) {
         final int index = (int) Math.ceil(percentile / 100.0 * count) - 1;
-        return sortedData[Math.max(0, Math.min(index, count - 1))];
+        return sortedData[Math.clamp(index, 0, count - 1)];
     }
 
     /**

@@ -30,7 +30,6 @@ import org.slf4j.LoggerFactory;
 import de.mirkosertic.mcp.luceneserver.tools.CrawlerTools;
 import de.mirkosertic.mcp.luceneserver.tools.IndexAdminTools;
 import de.mirkosertic.mcp.luceneserver.tools.IndexInfoTools;
-import de.mirkosertic.mcp.luceneserver.tools.McpToolProvider;
 import de.mirkosertic.mcp.luceneserver.tools.SearchTools;
 
 import java.io.IOException;
@@ -56,7 +55,7 @@ public class LuceneserverApplication {
     private final CrawlerTools crawlerTools;
     private final IndexInfoTools indexInfoTools;
     private final IndexAdminTools indexAdminTools;
-    private ONNXService onnxService;
+    private final ONNXService onnxService;
     private McpSyncServer mcpSyncServer;
     private McpSyncServer mcpStreamableSyncServer;
     private TransportFactory.HttpTransportWrapper httpTransport;
@@ -210,7 +209,7 @@ public class LuceneserverApplication {
                 TransportFactory.createStdioTransport(jsonMapper);
 
         final List<McpServerFeatures.SyncToolSpecification> allTools = Stream.of(
-                (McpToolProvider) searchTools, crawlerTools, indexInfoTools, indexAdminTools)
+                        searchTools, crawlerTools, indexInfoTools, indexAdminTools)
                 .flatMap(p -> p.getToolSpecifications().stream()).toList();
 
         // Build and start the MCP server
@@ -236,7 +235,7 @@ public class LuceneserverApplication {
         httpTransport = TransportFactory.createHttpTransport(jsonMapper);
 
         final List<McpServerFeatures.SyncToolSpecification> allTools = Stream.of(
-                (McpToolProvider) searchTools, crawlerTools, indexInfoTools, indexAdminTools)
+                        searchTools, crawlerTools, indexInfoTools, indexAdminTools)
                 .flatMap(p -> p.getToolSpecifications().stream()).toList();
 
         // Build sync MCP server for HTTP using streamable transport

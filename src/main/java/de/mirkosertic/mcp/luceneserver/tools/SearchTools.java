@@ -40,35 +40,46 @@ public class SearchTools implements McpToolProvider {
     private static final Logger logger = LoggerFactory.getLogger(SearchTools.class);
 
     private static final String SIMPLE_SEARCH_DESCRIPTION =
-            "Search documents using plain text keywords. Special characters are treated as literals (no Lucene syntax). " +
-            "Supports filters, pagination, and sorting. Uses BM25 with stemming for German and English.\n\n" +
-            "FILTERS: use 'filters' array with operators: eq, in, not, not_in, range\n" +
-            "- faceted fields: language, file_extension, file_type, author\n" +
-            "- date fields (ISO-8601): created_date, modified_date, indexed_date\n" +
-            "- numeric: file_size\n\n" +
-            "SORT: sortBy=_score (default), modified_date, created_date, file_size; sortOrder=desc/asc";
+            """
+                    Search documents using plain text keywords. Special characters are treated as literals (no Lucene syntax). \
+                    Supports filters, pagination, and sorting. Uses BM25 with stemming for German and English.
+                    
+                    FILTERS: use 'filters' array with operators: eq, in, not, not_in, range
+                    - faceted fields: language, file_extension, file_type, author
+                    - date fields (ISO-8601): created_date, modified_date, indexed_date
+                    - numeric: file_size
+                    
+                    SORT: sortBy=_score (default), modified_date, created_date, file_size; sortOrder=desc/asc""";
 
     private static final String EXTENDED_SEARCH_DESCRIPTION =
-            "Search documents using full Lucene query syntax. Supports Boolean operators (AND, OR, NOT), " +
-            "wildcards (*word, word*, *word*), fuzzy (~), proximity (\"phrase\"~5), field-specific queries, " +
-            "and phrase matching. Uses BM25 with stemming.\n\n" +
-            "SYNTAX: AND/OR/NOT, grouping (), phrases \"...\", wildcards *, ?, fuzzy~, proximity\"\"~N, field:value\n\n" +
-            "FILTERS and SORT: same as simpleSearch";
+            """
+                    Search documents using full Lucene query syntax. Supports Boolean operators (AND, OR, NOT), \
+                    wildcards (*word, word*, *word*), fuzzy (~), proximity ("phrase"~5), field-specific queries, \
+                    and phrase matching. Uses BM25 with stemming.
+                    
+                    SYNTAX: AND/OR/NOT, grouping (), phrases "...", wildcards *, ?, fuzzy~, proximity""~N, field:value
+                    
+                    FILTERS and SORT: same as simpleSearch""";
 
     private static final String SEMANTIC_SEARCH_DESCRIPTION =
-            "Search documents using natural language semantic similarity (pure KNN embedding search). " +
-            "Finds documents that are semantically related to the query even when exact keywords don't match. " +
-            "Results are ordered by cosine similarity — no BM25, no sort options.\n\n" +
-            "Requires VECTOR_MODEL to be configured.\n\n" +
-            "similarityThreshold (0.0–1.0, default 0.70): lower values return more results with broader semantic match; " +
-            "higher values return only closely matching documents.";
+            """
+                    Search documents using natural language semantic similarity (pure KNN embedding search). \
+                    Finds documents that are semantically related to the query even when exact keywords don't match. \
+                    Results are ordered by cosine similarity — no BM25, no sort options.
+                    
+                    Requires VECTOR_MODEL to be configured.
+                    
+                    similarityThreshold (0.0–1.0, default 0.70): lower values return more results with broader semantic match; \
+                    higher values return only closely matching documents.""";
 
     private static final String PROFILE_SEMANTIC_SEARCH_DESCRIPTION =
-            "Debug and profile semantic search queries. Shows embedding time, cosine scores, matched chunk text, " +
-            "and how many candidates passed the similarity threshold. Use this to tune similarityThreshold and " +
-            "understand why certain documents are or are not returned.\n\n" +
-            "Returns: embeddingDurationMs, rawCandidateCount, filteredCandidateCount, cosineCutoff, " +
-            "topCandidates (with cosineScore and matchedChunkText), and the actual search results.";
+            """
+                    Debug and profile semantic search queries. Shows embedding time, cosine scores, matched chunk text, \
+                    and how many candidates passed the similarity threshold. Use this to tune similarityThreshold and \
+                    understand why certain documents are or are not returned.
+                    
+                    Returns: embeddingDurationMs, rawCandidateCount, filteredCandidateCount, cosineCutoff, \
+                    topCandidates (with cosineScore and matchedChunkText), and the actual search results.""";
 
     private final LuceneIndexService indexService;
     private final QueryRuntimeStats queryRuntimeStats;
@@ -87,6 +98,7 @@ public class SearchTools implements McpToolProvider {
 
         // Simple search tool
         if (config.isToolActive("simpleSearch")) {
+            logger.info("Exposing simpleSearch tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("simpleSearch")
@@ -99,6 +111,7 @@ public class SearchTools implements McpToolProvider {
 
         // Extended search tool
         if (config.isToolActive("extendedSearch")) {
+            logger.info("Exposing extendedSearch tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("extendedSearch")
@@ -111,6 +124,7 @@ public class SearchTools implements McpToolProvider {
 
         // Semantic search tool
         if (config.isToolActive("semanticSearch")) {
+            logger.info("Exposing semanticSearch tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("semanticSearch")
@@ -123,6 +137,7 @@ public class SearchTools implements McpToolProvider {
 
         // Profile semantic search tool
         if (config.isToolActive("profileSemanticSearch")) {
+            logger.info("Exposing profileSemanticSearch tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("profileSemanticSearch")
@@ -135,19 +150,24 @@ public class SearchTools implements McpToolProvider {
 
         // Profile query tool
         if (config.isToolActive("profileQuery")) {
+            logger.info("Exposing profileQuery tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("profileQuery")
-                            .description("Debug and optimize search queries. Analyzes query structure, scoring, filter impact, and performance.\n\n" +
-                                    "ANALYSIS LEVELS (cumulative):\n" +
-                                    "- Level 1 (always, ~5-10ms): query structure, rewrites (e.g. *vertrag→reversed field), term stats (df/IDF/rarity), search metrics, cost estimates per clause\n" +
-                                    "- Level 2 (analyzeFilterImpact=true, ~50-200ms): per-filter selectivity (low/medium/high/very high) and timing; costs N+1 queries\n" +
-                                    "- Level 3 (analyzeDocumentScoring=true, ~100-300ms): BM25 breakdown per top doc, term contribution%; maxDocExplanations default=5 (max 10)\n" +
-                                    "- Level 4 (analyzeFacetCost=true, ~20-50ms): facet computation overhead per dimension; costs 2 queries\n" +
-                                    "- All levels combined: ~200-500ms\n\n" +
-                                    "Returns structured output with actionable recommendations. " +
-                                    "Start with Level 1 (fast, often sufficient). Enable deeper levels only for specific debugging: Level 2 for filter tuning, Level 3 for ranking issues.\n\n" +
-                                    "LIMITATIONS: explains only matched documents; wildcard internals opaque; no passage-level scoring")
+                            .description("""
+                                    Debug and optimize search queries. Analyzes query structure, scoring, filter impact, and performance.
+                                    
+                                    ANALYSIS LEVELS (cumulative):
+                                    - Level 1 (always, ~5-10ms): query structure, rewrites (e.g. *vertrag→reversed field), term stats (df/IDF/rarity), search metrics, cost estimates per clause
+                                    - Level 2 (analyzeFilterImpact=true, ~50-200ms): per-filter selectivity (low/medium/high/very high) and timing; costs N+1 queries
+                                    - Level 3 (analyzeDocumentScoring=true, ~100-300ms): BM25 breakdown per top doc, term contribution%; maxDocExplanations default=5 (max 10)
+                                    - Level 4 (analyzeFacetCost=true, ~20-50ms): facet computation overhead per dimension; costs 2 queries
+                                    - All levels combined: ~200-500ms
+                                    
+                                    Returns structured output with actionable recommendations. \
+                                    Start with Level 1 (fast, often sufficient). Enable deeper levels only for specific debugging: Level 2 for filter tuning, Level 3 for ranking issues.
+                                    
+                                    LIMITATIONS: explains only matched documents; wildcard internals opaque; no passage-level scoring""")
                             .inputSchema(SchemaGenerator.generateSchema(ProfileQueryRequest.class))
                             .build())
                     .callHandler((exchange, request) -> profileQuery(request.arguments()))
@@ -156,6 +176,7 @@ public class SearchTools implements McpToolProvider {
 
         // Suggest terms tool
         if (config.isToolActive("suggestTerms")) {
+            logger.info("Exposing suggestTerms tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("suggestTerms")
@@ -171,6 +192,7 @@ public class SearchTools implements McpToolProvider {
 
         // Get top terms tool
         if (config.isToolActive("getTopTerms")) {
+            logger.info("Exposing getTopTerms tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("getTopTerms")

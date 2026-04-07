@@ -90,6 +90,7 @@ public class IndexAdminTools implements McpToolProvider {
 
         // Index admin MCP App (https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)
         if (config.isToolActive("indexAdmin")) {
+            logger.info("Exposing indexAdmin tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("indexAdmin")
@@ -104,6 +105,7 @@ public class IndexAdminTools implements McpToolProvider {
 
         // Unlock index tool (dangerous recovery operation)
         if (config.isToolActive("unlockIndex")) {
+            logger.info("Exposing unlockIndex tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("unlockIndex")
@@ -119,6 +121,7 @@ public class IndexAdminTools implements McpToolProvider {
 
         // Optimize index tool (long-running)
         if (config.isToolActive("optimizeIndex")) {
+            logger.info("Exposing optimizeIndex tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("optimizeIndex")
@@ -134,6 +137,7 @@ public class IndexAdminTools implements McpToolProvider {
 
         // Purge index tool (destructive, long-running)
         if (config.isToolActive("purgeIndex")) {
+            logger.info("Exposing purgeIndex tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("purgeIndex")
@@ -149,6 +153,7 @@ public class IndexAdminTools implements McpToolProvider {
 
         // Get index admin status tool
         if (config.isToolActive("getIndexAdminStatus")) {
+            logger.info("Exposing getIndexAdminStatus tool");
             tools.add(McpServerFeatures.SyncToolSpecification.builder()
                     .tool(McpSchema.Tool.builder()
                             .name("getIndexAdminStatus")
