@@ -6,19 +6,24 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 
 ## Features
 
-✨ **Automatic Document Crawling**
+**Automatic Document Crawling**
 - Automatically indexes PDFs, Microsoft Office, and OpenOffice documents
 - Multi-threaded crawling for fast indexing
 - Real-time directory monitoring for automatic updates
 - Incremental indexing with full reconciliation (skips unchanged files, removes orphans)
 
-🔍 **Powerful Search**
-- Full Lucene query syntax support (wildcards, boolean operators, phrase queries)
+**Powerful Search**
+- Simple keyword search (no Lucene syntax needed) and full Lucene query syntax search
 - Field-specific filtering (by author, language, file type, etc.)
 - Structured passages with quality metadata for LLM consumption
 - Paginated results with filter suggestions
 
-🔬 **Query Profiling & Debugging**
+**Semantic Search**
+- Optional pure KNN embedding-based semantic search using multilingual-e5 embeddings with Late Chunking
+- Finds semantically related documents even without exact keyword matches
+- Requires `VECTOR_MODEL` to be configured. See [SEMANTICSEARCH.md](SEMANTICSEARCH.md) for details.
+
+**Query Profiling & Debugging**
 - Deep query analysis and profiling (`profileQuery` tool)
 - Understand why queries return certain results and how scoring works
 - Filter impact analysis showing document reduction per filter
@@ -27,24 +32,24 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - Actionable optimization recommendations
 - LLM-optimized structured output for easy interpretation
 
-📄 **Rich Metadata Extraction**
+**Rich Metadata Extraction**
 - Automatic language detection
 - Author, title, creation date extraction
 - File type and size information
 - SHA-256 content hashing for change detection
 
-🧹 **Text Normalization**
-- Automatic removal of broken/invalid characters (�, control chars, zero-width chars)
+**Text Normalization**
+- Automatic removal of broken/invalid characters (replacement chars, control chars, zero-width chars)
 - Whitespace normalization (multiple spaces collapsed to single space)
 - Ensures clean, readable search results and passages
 
-⚡ **Performance Optimized**
+**Performance Optimized**
 - Batch processing for efficient indexing
 - NRT (Near Real-Time) search with dynamic optimization
 - Configurable thread pools for parallel processing
 - Progress notifications during bulk operations
 
-🔧 **Easy Integration**
+**Easy Integration**
 - Dual transport support: STDIO (default) and HTTP
 - STDIO transport for seamless Claude Desktop integration
 - HTTP transport for web-based clients and remote access
@@ -52,14 +57,19 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - Flexible configuration via YAML and system properties
 - Cross-platform notifications (macOS Notification Center, Windows Toast, Linux notify-send)
 
-🧠 **Semantic / Hybrid Search**
-- Optional vector search using multilingual-e5 embeddings with Late Chunking, combined with BM25 via Reciprocal Rank Fusion (RRF). See [SEMANTICSEARCH.md](SEMANTICSEARCH.md) for details.
-
 ## Table of Contents
 
 - [Documentation](#documentation)
 - [Quick Start](#quick-start)
-- [Available MCP Tools](#available-mcp-tools)
+- [MCP Tools](#mcp-tools)
+  - [Search Tools](#search-tools-group-search)
+  - [Semantic Search Tools](#semantic-search-tools-group-semantic)
+  - [Debug Tools](#debug-tools-group-debug)
+  - [Crawler Tools](#crawler-tools-group-crawler)
+  - [Index Info Tools](#index-info-tools-group-info)
+  - [Observability Tools](#observability-tools-group-observability)
+  - [Admin Tools](#admin-tools-group-admin)
+- [Tool Exposure Configuration](#tool-exposure-configuration)
 - [Index Field Schema](#index-field-schema)
 - [Usage Examples](#usage-examples)
 - [Document Crawler Features](#document-crawler-features)
@@ -121,11 +131,10 @@ indexer can only access files that are visible to the Docker container, so all f
 environment variable, which can be modified using the Docker CLI or a Docker Compose file. The default
 maximum JVM Heap size(-Xmx) is 2GB.
 
-To enable the **vectorsearch** profile (hybrid semantic search), set the `SPRING_PROFILES_ACTIVE` environment variable:
+To enable **semantic search**, set the `VECTOR_MODEL` environment variable:
 
 ```bash
 docker run -v ./lucene-data-dir:/userdata -p 9000:9000 \
-  -e SPRING_PROFILES_ACTIVE=deployed,vectorsearch \
   -e VECTOR_MODEL=e5-base \
   -e JAVA_OPTS="-Xmx4g" \
   -it mirkosertic42/mcpluceneserver:main
@@ -133,9 +142,8 @@ docker run -v ./lucene-data-dir:/userdata -p 9000:9000 \
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `SPRING_PROFILES_ACTIVE` | `deployed` | Active Spring profiles. Add `vectorsearch` to enable hybrid semantic search. |
-| `VECTOR_MODEL` | `e5-base` | ONNX embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality). Only relevant when `vectorsearch` profile is active. |
-| `JAVA_OPTS` | `-Xmx2g` | JVM options. Increase to `-Xmx4g` or higher when using vector search. |
+| `VECTOR_MODEL` | (none) | ONNX embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality). Set to enable semantic search. |
+| `JAVA_OPTS` | `-Xmx2g` | JVM options. Increase to `-Xmx4g` or higher when using semantic search. |
 
 ### Step 2: Configure Claude Desktop
 
@@ -165,7 +173,7 @@ Add the Lucene MCP server to the `mcpServers` section:
 
 **Important:** Replace `/absolute/path/to/luceneserver-0.0.1-SNAPSHOT.jar` with the actual absolute path to your JAR file.
 
-The `-Dspring.profiles.active=deployed` flag is required for clean STDIO communication (disables console logging, web server, and startup banner).
+The `-Dspring.profiles.active=deployed` flag is required for clean STDIO communication (disables console logging and startup banner).
 
 ### Step 3: Start Using It
 
@@ -184,41 +192,30 @@ That's it! The configuration is saved to `~/.mcplucene/config.yaml` and persists
 - "Find all PDFs by John Doe"
 - "What documents mention quarterly reports?"
 
-## Available MCP Tools
+## MCP Tools
 
-**Quick Reference - Most Important Tools:**
-- 🔍 **`search`** - Search documents with full Lucene query syntax and structured filters
-- 🔬 **`profileQuery`** - Debug and optimize queries with detailed analysis and scoring explanations
-- 🗂️ **`indexAdmin`** - Visual UI for index maintenance (optimize, purge, unlock)
-- 📊 **`getIndexStats`** - View index statistics and document count
-- 🚀 **`startCrawl`** - Index documents from configured directories
-- 🔤 **`suggestTerms`** - Discover index vocabulary by prefix (auto-complete for queries)
-- 📈 **`getTopTerms`** - See most frequent terms in any field
+Tools are organized into groups. Use `LUCENE_TOOLS_INCLUDE` and `LUCENE_TOOLS_EXCLUDE` to control
+which tools are exposed (see [Tool Exposure Configuration](#tool-exposure-configuration)).
 
 ---
 
-### `indexAdmin`
+### Search Tools (group: `search`)
 
-An [MCP App](https://github.com/modelcontextprotocol/ext-apps) that provides a visual user interface for index maintenance tasks directly inside your MCP client (e.g. Claude Desktop). When invoked, the app is rendered inline in the conversation and offers one-click access to administrative operations without requiring manual tool calls.
+#### `simpleSearch`
 
-![Index Administration App](doc/indexadminapp.png)
+Search the Lucene fulltext index using plain text keyword search. Special characters are treated as literals — no Lucene syntax knowledge required. Uses BM25 with German and English stemming.
 
-**Available actions:**
+**Parameters:**
+- `query` (optional): Plain text search query. Can be `null` or `"*"` to match all documents (useful with filters).
+- `filters` (optional): Array of structured filters for precise field-level filtering (see **Structured Filters** below)
+- `page` (optional): Page number, 0-based (default: 0)
+- `pageSize` (optional): Results per page (default: 10, max: 100)
+- `sortBy` (optional): Sort field - `_score` (default), `modified_date`, `created_date`, or `file_size`
+- `sortOrder` (optional): Sort order - `asc` or `desc` (default: `desc`)
 
-- **Unlock Index** -- Removes a stale `write.lock` file after an unclean shutdown (equivalent to calling `unlockIndex` with `confirm=true`)
-- **Optimize Index** -- Merges index segments for improved search performance (equivalent to calling `optimizeIndex`)
-- **Purge Index** -- Deletes all documents from the index (equivalent to calling `purgeIndex` with `confirm=true`)
+#### `extendedSearch`
 
-Each action shows inline status feedback (success, error, or progress details) directly in the app UI.
-
-**Example:**
-```
-Ask Claude: "Can you invoke the indexAdmin tool please?"
-```
-
-### `search`
-
-Search the Lucene fulltext index using **lexical matching** (exact word forms only).
+Search the Lucene fulltext index using full Lucene query syntax. Supports Boolean operators, wildcards, proximity queries, and field-specific queries. Uses BM25 with German and English stemming.
 
 **Parameters:**
 - `query` (optional): The search query using Lucene query syntax. Can be `null` or `"*"` to match all documents (useful with filters).
@@ -227,7 +224,6 @@ Search the Lucene fulltext index using **lexical matching** (exact word forms on
 - `pageSize` (optional): Results per page (default: 10, max: 100)
 - `sortBy` (optional): Sort field - `_score` (default), `modified_date`, `created_date`, or `file_size`
 - `sortOrder` (optional): Sort order - `asc` or `desc` (default: `desc`)
-- `useVectorSearch` (optional): If `false`, disables semantic vector search and uses pure BM25/inverted-index search. Only effective when the `vectorsearch` profile is active. Default: `true`
 
 **Sorting Results:**
 
@@ -301,7 +297,7 @@ The `filters` array accepts objects with these fields:
 - Multiple `eq` filters or `in` values on the **same** faceted field use OR logic (DrillSideways)
 - `not`/`not_in` filters are applied as MUST_NOT clauses
 
-**🤖 AI-Powered Synonym Expansion:**
+**AI-Powered Synonym Expansion:**
 
 This server is designed to work with AI assistants like Claude. Instead of using traditional Lucene synonym files, the AI generates context-appropriate synonyms automatically by constructing OR queries.
 
@@ -313,7 +309,7 @@ This server is designed to work with AI assistants like Claude. Instead of using
 
 When you ask Claude to "find documents about cars", it automatically searches for `(car OR automobile OR vehicle)` - giving you better results than a static synonym list.
 
-**⚠️ Technical Details (Lexical Matching):**
+**Technical Details (Lexical Matching):**
 
 The server uses a multi-analyzer indexing pipeline and multi-field weighted query pipeline for comprehensive search:
 
@@ -330,7 +326,7 @@ See [PIPELINE.md](PIPELINE.md) for complete analyzer chain documentation, concre
 
 The AI assistant compensates for remaining limitations (no synonym expansion, no phonetic matching) by expanding queries intelligently.
 
-**💡 Best Practices for Better Results:**
+**Best Practices for Better Results:**
 
 1. **Generate Synonyms Yourself:** Use OR to combine related terms:
    - Instead of: `contract`
@@ -350,7 +346,7 @@ The AI assistant compensates for remaining limitations (no synonym expansion, no
    (contract* OR agreement*) AND (sign* OR execut*) AND author:"John Doe"
    ```
 
-**Supported Query Syntax:**
+**Supported Query Syntax (extendedSearch):**
 - Simple terms: `hello world` (implicit AND between terms)
 - Phrase queries: `"exact phrase"` (preserves word order)
 - Boolean operators: `term1 AND term2`, `term1 OR term2`, `NOT term`
@@ -421,30 +417,54 @@ See [PIPELINE.md](PIPELINE.md) for complete analyzer chains, concrete token exam
 ]}
 ```
 
-### 🔬 `profileQuery` - Query Profiling & Debugging
+---
 
-> **🌟 Powerful debugging tool for understanding search behavior, scoring, and performance**
+### Semantic Search Tools (group: `semantic`)
 
-Analyze and profile a search query to understand its behavior, performance, and scoring characteristics. This tool provides detailed insights into how Lucene processes your query, which terms contribute to scoring, how filters affect results, and where optimization opportunities exist.
+Semantic search tools require `VECTOR_MODEL` to be configured (e.g., `VECTOR_MODEL=e5-base`).
 
-**✨ Key Benefits:**
-- 🐛 **Debug** why certain documents match or don't match
-- 📊 **Understand** why documents are ranked in a particular order
-- ⚡ **Optimize** slow queries by identifying expensive operations
-- 🎯 **Analyze** filter effectiveness and selectivity
-- 📈 **Learn** which query terms are most/least discriminative
-- 🤖 **LLM-optimized** output format for AI-assisted query tuning
+#### `semanticSearch`
+
+Pure KNN embedding-based semantic search. Finds semantically related documents even without exact keyword matches. Results are ordered by cosine similarity. Requires `VECTOR_MODEL` to be configured.
 
 **Parameters:**
-- `query` (optional): The search query (same as `search` tool)
-- `filters` (optional): Array of structured filters (same as `search` tool)
+- `query` (required): Natural language query — the server computes an embedding and finds the nearest document chunks.
+- `filters` (optional): Array of structured filters (same format as `simpleSearch`/`extendedSearch`)
 - `page` (optional): Page number, 0-based (default: 0)
 - `pageSize` (optional): Results per page (default: 10, max: 100)
+- `similarityThreshold` (optional): Minimum cosine similarity score to include a result (0.0–1.0, default: 0.70). Lower = more results (broader match); higher = fewer results (closer match).
+
+Use `profileSemanticSearch` to tune `similarityThreshold` for your corpus.
+
+#### `profileSemanticSearch`
+
+Debug tool for semantic search. Shows embedding time, cosine scores, matched chunks, and how many candidates passed the similarity threshold. Use this to tune `similarityThreshold` for your data.
+
+**Parameters:**
+- `query` (required): Natural language query to profile
+- `filters` (optional): Array of structured filters
+- `similarityThreshold` (optional): Threshold to test (0.0–1.0, default: 0.70)
+
+---
+
+### Debug Tools (group: `debug`)
+
+#### `profileQuery`
+
+Analyze and debug `simpleSearch` / `extendedSearch` queries. Provides detailed insights into how Lucene processes your query, which terms contribute to scoring, how filters affect results, and where optimization opportunities exist.
+
+**Parameters:**
+- `query` (optional): The search query (same as `simpleSearch`/`extendedSearch`)
+- `filters` (optional): Array of structured filters (same as search tools)
+- `page` (optional): Page number, 0-based (default: 0)
+- `pageSize` (optional): Results per page (default: 10, max: 100)
+- `sortBy` (optional): Sort field (same as search tools)
+- `sortOrder` (optional): Sort order (same as search tools)
+- `queryMode` (optional): `SIMPLE` (default) or `EXTENDED` — selects the query parser mode to match the search tool you are profiling
 - `analyzeFilterImpact` (optional): If `true`, analyzes how each filter reduces result count. **WARNING:** Expensive operation requiring multiple queries. Default: `false`
 - `analyzeDocumentScoring` (optional): If `true`, provides detailed scoring explanations for top documents using Lucene's Explanation API. **WARNING:** Expensive operation. Default: `false`
 - `analyzeFacetCost` (optional): If `true`, measures faceting computation overhead. **WARNING:** Expensive operation. Default: `false`
 - `maxDocExplanations` (optional): Maximum number of documents to explain when `analyzeDocumentScoring=true` (default: 5, max: 10)
-- `useVectorSearch` (optional): If `false`, disables vector search in the profile analysis. Default: `true`
 
 **Analysis Levels:**
 
@@ -471,14 +491,6 @@ Analyze and profile a search query to understand its behavior, performance, and 
 - Measures faceting computation overhead
 - Shows cost per facet dimension
 - Helps decide if faceting should be disabled for performance
-
-**Level 5: Vector Search Debug (Automatically included when vectorsearch profile is active)**
-- Shows whether vector search is available and enabled
-- Embedding duration for the query
-- Number of raw KNN candidates returned
-- Number of candidates that passed the cosine similarity threshold
-- Top candidate chunks with file path, chunk index, chunk text, Lucene score, cosine score, threshold pass/fail
-- RRF contribution per candidate
 
 **Returns:**
 
@@ -570,25 +582,7 @@ A structured analysis object containing:
       }
     }
   },
-  recommendations: string[],     // Actionable optimization suggestions
-  vectorSearchDebug?: {          // Only when vectorsearch profile is active
-    vectorSearchAvailable: boolean,
-    vectorSearchEnabled: boolean,
-    embeddingDurationMs: number,
-    rawCandidateCount: number,
-    filteredCandidateCount: number,
-    cosineCutoff: number,
-    topCandidates?: [{
-      filePath: string,
-      chunkIndex: number,
-      chunkText: string,
-      luceneScore: number,
-      cosineScore: number,
-      passedThreshold: boolean,
-      vectorRank: number,
-      rrfContribution: number
-    }]
-  }
+  recommendations: string[]      // Actionable optimization suggestions
 }
 ```
 
@@ -671,7 +665,7 @@ The profiler reveals how the query was expanded:
 - **Proximity match** ("Domain Effective Design"): Score 0.15 - matches only proximity clause
 
 This shows:
-1. **Exact matches rank highest** due to the 4.0x accumulated boost (2.0 from stemming × 2.0 from phrase expansion)
+1. **Exact matches rank highest** due to the 4.0x accumulated boost (2.0 from stemming x 2.0 from phrase expansion)
 2. **Proximity matches still found** with slop=3 (allowing up to 3 words between terms)
 3. **Clear score separation** between exact and proximity matches ensures precision
 
@@ -681,14 +675,157 @@ This shows:
 - **Document scoring analysis**: Requires Lucene to compute full Explanation objects. Cost grows with `maxDocExplanations`.
 - **Facet cost analysis**: Requires facet computation. Cost depends on number of unique facet values.
 
-**💡 Best Practices:**
+**Best Practices:**
 1. Start with basic analysis (no optional flags) to get quick insights
 2. Enable expensive analysis only when debugging specific performance issues
 3. Use `analyzeDocumentScoring` to understand why certain documents rank highly
 4. Use `analyzeFilterImpact` to optimize filter order and remove redundant filters
 5. Pay attention to the `recommendations` array for actionable optimization tips
 
-### `getIndexStats`
+---
+
+### Crawler Tools (group: `crawler`)
+
+#### `startCrawl`
+
+Start crawling configured directories to index documents.
+
+**Parameters:**
+- `fullReindex` (optional): If true, clears the index before crawling (default: false). When false and `reconciliation-enabled` is true, an incremental crawl is performed instead.
+
+**Features:**
+- Automatically extracts content from PDFs, Office documents, and OpenOffice files
+- Detects document language
+- Extracts metadata (author, title, creation date, etc.)
+- Multi-threaded processing for fast indexing
+- Progress notifications during crawling
+- **Incremental mode** (default): Only new or modified files are indexed; deleted files are removed from the index automatically. Falls back to a full crawl if reconciliation encounters an error.
+
+#### `getCrawlerStats`
+
+Get real-time statistics about the crawler progress.
+
+**Returns:**
+- `filesFound`: Total files discovered
+- `filesProcessed`: Files processed so far
+- `filesIndexed`: Files successfully indexed
+- `filesFailed`: Files that failed to process
+- `bytesProcessed`: Total bytes processed
+- `filesPerSecond`: Processing throughput
+- `megabytesPerSecond`: Data throughput
+- `elapsedTimeMs`: Time elapsed since crawl started
+- `perDirectoryStats`: Statistics breakdown per directory
+- `orphansDeleted`: Number of index entries removed because the file no longer exists on disk (incremental mode)
+- `filesSkippedUnchanged`: Number of files skipped because they were not modified since the last crawl (incremental mode)
+- `reconciliationTimeMs`: Time spent comparing the index against the filesystem (incremental mode)
+- `crawlMode`: Either `"full"` or `"incremental"`
+- `currentlyProcessing`: Array of files currently being processed (extracted/indexed). Each entry contains:
+  - `filePath`: Full path to the file being processed
+  - `processingDurationMs`: How long the file has been processing (in milliseconds)
+- `lastCrawlCompletionTimeMs`: Unix timestamp (ms) of the last successful crawl completion (null if no previous crawl)
+- `lastCrawlDocumentCount`: Number of documents in the index after the last successful crawl (null if no previous crawl)
+- `lastCrawlMode`: Mode of the last crawl - `"full"` or `"incremental"` (null if no previous crawl)
+
+#### `getCrawlerStatus`
+
+Get the current state of the crawler.
+
+**Returns:**
+- `state`: One of `IDLE`, `CRAWLING`, `PAUSED`, or `WATCHING`
+
+#### `pauseCrawler`
+
+Pause an ongoing crawl operation. The crawler can be resumed later with `resumeCrawler`.
+
+#### `resumeCrawler`
+
+Resume a paused crawl operation.
+
+#### `listCrawlableDirectories`
+
+List all configured crawlable directories.
+
+**Returns:**
+- `success`: Boolean indicating operation success
+- `directories`: List of absolute directory paths currently configured
+- `totalDirectories`: Count of configured directories
+- `configPath`: Path to the configuration file (`~/.mcplucene/config.yaml`)
+- `environmentOverride`: Boolean indicating if `LUCENE_CRAWLER_DIRECTORIES` env var is set
+
+**Example response:**
+```json
+{
+  "success": true,
+  "directories": [
+    "/Users/yourname/Documents",
+    "/Users/yourname/Downloads"
+  ],
+  "totalDirectories": 2,
+  "configPath": "/Users/yourname/.mcplucene/config.yaml",
+  "environmentOverride": false
+}
+```
+
+#### `addCrawlableDirectory`
+
+Add a directory to the crawler configuration.
+
+**Parameters:**
+- `path` (required): Absolute path to the directory to crawl
+- `crawlNow` (optional): If true, immediately starts crawling the new directory (default: false)
+
+**Returns:**
+- `success`: Boolean indicating operation success
+- `message`: Confirmation message
+- `totalDirectories`: Updated count of configured directories
+- `directories`: Updated list of all directories
+- `crawlStarted` (optional): Present if `crawlNow=true`, indicates crawl was triggered
+
+**Validation:**
+- Directory must exist and be accessible
+- Path must be a directory (not a file)
+- Duplicate directories are prevented
+- Fails if `LUCENE_CRAWLER_DIRECTORIES` environment variable is set
+
+**Example:**
+```
+Ask Claude: "Add /Users/yourname/Documents as a crawlable directory"
+Ask Claude: "Add /path/to/research and crawl it now"
+```
+
+**Configuration Persistence:**
+The directory is immediately saved to `~/.mcplucene/config.yaml` and will be automatically crawled on future server restarts.
+
+#### `removeCrawlableDirectory`
+
+Remove a directory from the crawler configuration.
+
+**Parameters:**
+- `path` (required): Absolute path to the directory to remove
+
+**Returns:**
+- `success`: Boolean indicating operation success
+- `message`: Confirmation message
+- `totalDirectories`: Updated count of configured directories
+- `directories`: Updated list of remaining directories
+
+**Important Notes:**
+- This does NOT remove already-indexed documents from the removed directory
+- To remove indexed documents, use `startCrawl(fullReindex=true)` after removing directories
+- Fails if `LUCENE_CRAWLER_DIRECTORIES` environment variable is set
+- The directory must exist in the current configuration
+
+**Example:**
+```
+Ask Claude: "Stop crawling /Users/yourname/Downloads"
+Ask Claude: "Remove /path/to/old/archive from the crawler"
+```
+
+---
+
+### Index Info Tools (group: `info`)
+
+#### `getIndexStats`
 
 Get statistics about the Lucene index, including lemmatizer cache performance metrics, query runtime percentiles (p50-p99), and per-field facet computation timing.
 
@@ -722,53 +859,13 @@ The server uses single-token caching for OpenNLP lemmatization to reduce CPU usa
 
 **Key Metrics:**
 - **Hit Rate**: Higher is better. 85-95% is typical after indexing a few thousand documents. Higher hit rates mean less CPU usage.
-- **Cache Size**: Current number of cached (token, POS tag) → lemma mappings. Grows up to 1,500,000 entries per language.
+- **Cache Size**: Current number of cached (token, POS tag) to lemma mappings. Grows up to 1,500,000 entries per language.
 - **Evictions**: How many entries have been removed to make room for new ones. Some evictions are normal with large document sets.
 
 **Performance Impact:**
 Without caching, lemmatization can consume 70-80% of CPU during indexing. With caching, CPU usage typically drops to 20-30%, resulting in 2-3x faster indexing throughput for document sets with repetitive vocabulary.
 
-### `startCrawl`
-
-Start crawling configured directories to index documents.
-
-**Parameters:**
-- `fullReindex` (optional): If true, clears the index before crawling (default: false). When false and `reconciliation-enabled` is true, an incremental crawl is performed instead.
-
-**Features:**
-- Automatically extracts content from PDFs, Office documents, and OpenOffice files
-- Detects document language
-- Extracts metadata (author, title, creation date, etc.)
-- Multi-threaded processing for fast indexing
-- Progress notifications during crawling
-- **Incremental mode** (default): Only new or modified files are indexed; deleted files are removed from the index automatically. Falls back to a full crawl if reconciliation encounters an error.
-
-### `getCrawlerStats`
-
-Get real-time statistics about the crawler progress.
-
-**Returns:**
-- `filesFound`: Total files discovered
-- `filesProcessed`: Files processed so far
-- `filesIndexed`: Files successfully indexed
-- `filesFailed`: Files that failed to process
-- `bytesProcessed`: Total bytes processed
-- `filesPerSecond`: Processing throughput
-- `megabytesPerSecond`: Data throughput
-- `elapsedTimeMs`: Time elapsed since crawl started
-- `perDirectoryStats`: Statistics breakdown per directory
-- `orphansDeleted`: Number of index entries removed because the file no longer exists on disk (incremental mode)
-- `filesSkippedUnchanged`: Number of files skipped because they were not modified since the last crawl (incremental mode)
-- `reconciliationTimeMs`: Time spent comparing the index against the filesystem (incremental mode)
-- `crawlMode`: Either `"full"` or `"incremental"`
-- `currentlyProcessing`: Array of files currently being processed (extracted/indexed). Each entry contains:
-  - `filePath`: Full path to the file being processed
-  - `processingDurationMs`: How long the file has been processing (in milliseconds)
-- `lastCrawlCompletionTimeMs`: Unix timestamp (ms) of the last successful crawl completion (null if no previous crawl)
-- `lastCrawlDocumentCount`: Number of documents in the index after the last successful crawl (null if no previous crawl)
-- `lastCrawlMode`: Mode of the last crawl - `"full"` or `"incremental"` (null if no previous crawl)
-
-### `listIndexedFields`
+#### `listIndexedFields`
 
 List all field names present in the Lucene index.
 
@@ -794,188 +891,7 @@ List all field names present in the Lucene index.
 }
 ```
 
-### `suggestTerms`
-
-Suggest index terms matching a prefix. Useful for discovering vocabulary, finding German compound words, exploring author names, or auto-completing field values.
-
-**Parameters:**
-- `field` (required): Field name to suggest terms from (e.g. `content`, `author`, `file_extension`)
-- `prefix` (required): Prefix to match terms against (e.g. `ver` to find `vertrag`, `version`)
-- `limit` (optional): Maximum number of terms to return (default: 20, max: 100)
-
-**Notes:**
-- For analyzed fields (`content`, `title`, etc.), the prefix is automatically lowercased to match indexed tokens
-- For StringFields (`file_extension`, `language`), the prefix is used as-is (exact match)
-- Numeric/date fields (`file_size`, `modified_date`, etc.) are not supported — use `getIndexStats` for date ranges
-- Returns terms sorted by document frequency (most common first)
-- Returns empty results for nonexistent fields (not an error)
-
-**Example — discover German compound words:**
-```json
-{
-  "field": "content",
-  "prefix": "vertrag",
-  "limit": 10
-}
-```
-
-**Example response:**
-```json
-{
-  "success": true,
-  "field": "content",
-  "prefix": "vertrag",
-  "terms": [
-    {"term": "vertrag", "docFreq": 45},
-    {"term": "vertrags", "docFreq": 23},
-    {"term": "vertragsklausel", "docFreq": 8},
-    {"term": "vertragsbedingungen", "docFreq": 5}
-  ],
-  "totalTermsMatched": 4
-}
-```
-
-### `getTopTerms`
-
-Get the most frequent terms in a field. Useful for understanding index vocabulary, discovering common values (languages, file types, authors), and identifying dominant terms.
-
-**Parameters:**
-- `field` (required): Field name to get top terms from (e.g. `content`, `author`, `file_extension`)
-- `limit` (optional): Maximum number of terms to return (default: 20, max: 100)
-
-**Notes:**
-- Returns terms sorted by document frequency (most common first)
-- For large content fields (>100K unique terms), a warning is included suggesting `suggestTerms` instead
-- Numeric/date fields are not supported — use `getIndexStats` for date ranges
-- Returns empty results for nonexistent fields (not an error)
-
-**Example — explore file types in index:**
-```json
-{
-  "field": "file_extension",
-  "limit": 10
-}
-```
-
-**Example response:**
-```json
-{
-  "success": true,
-  "field": "file_extension",
-  "terms": [
-    {"term": "pdf", "docFreq": 234},
-    {"term": "docx", "docFreq": 156},
-    {"term": "txt", "docFreq": 89},
-    {"term": "md", "docFreq": 45}
-  ],
-  "uniqueTermCount": 12
-}
-```
-
-**Example — explore content vocabulary:**
-```json
-{
-  "field": "content",
-  "limit": 20
-}
-```
-
-### `pauseCrawler`
-
-Pause an ongoing crawl operation. The crawler can be resumed later with `resumeCrawler`.
-
-### `resumeCrawler`
-
-Resume a paused crawl operation.
-
-### `getCrawlerStatus`
-
-Get the current state of the crawler.
-
-**Returns:**
-- `state`: One of `IDLE`, `CRAWLING`, `PAUSED`, or `WATCHING`
-
-### `listCrawlableDirectories`
-
-List all configured crawlable directories.
-
-**Returns:**
-- `success`: Boolean indicating operation success
-- `directories`: List of absolute directory paths currently configured
-- `totalDirectories`: Count of configured directories
-- `configPath`: Path to the configuration file (`~/.mcplucene/config.yaml`)
-- `environmentOverride`: Boolean indicating if `LUCENE_CRAWLER_DIRECTORIES` env var is set
-
-**Example response:**
-```json
-{
-  "success": true,
-  "directories": [
-    "/Users/yourname/Documents",
-    "/Users/yourname/Downloads"
-  ],
-  "totalDirectories": 2,
-  "configPath": "/Users/yourname/.mcplucene/config.yaml",
-  "environmentOverride": false
-}
-```
-
-### `addCrawlableDirectory`
-
-Add a directory to the crawler configuration.
-
-**Parameters:**
-- `path` (required): Absolute path to the directory to crawl
-- `crawlNow` (optional): If true, immediately starts crawling the new directory (default: false)
-
-**Returns:**
-- `success`: Boolean indicating operation success
-- `message`: Confirmation message
-- `totalDirectories`: Updated count of configured directories
-- `directories`: Updated list of all directories
-- `crawlStarted` (optional): Present if `crawlNow=true`, indicates crawl was triggered
-
-**Validation:**
-- Directory must exist and be accessible
-- Path must be a directory (not a file)
-- Duplicate directories are prevented
-- Fails if `LUCENE_CRAWLER_DIRECTORIES` environment variable is set
-
-**Example:**
-```
-Ask Claude: "Add /Users/yourname/Documents as a crawlable directory"
-Ask Claude: "Add /path/to/research and crawl it now"
-```
-
-**Configuration Persistence:**
-The directory is immediately saved to `~/.mcplucene/config.yaml` and will be automatically crawled on future server restarts.
-
-### `removeCrawlableDirectory`
-
-Remove a directory from the crawler configuration.
-
-**Parameters:**
-- `path` (required): Absolute path to the directory to remove
-
-**Returns:**
-- `success`: Boolean indicating operation success
-- `message`: Confirmation message
-- `totalDirectories`: Updated count of configured directories
-- `directories`: Updated list of remaining directories
-
-**Important Notes:**
-- This does NOT remove already-indexed documents from the removed directory
-- To remove indexed documents, use `startCrawl(fullReindex=true)` after removing directories
-- Fails if `LUCENE_CRAWLER_DIRECTORIES` environment variable is set
-- The directory must exist in the current configuration
-
-**Example:**
-```
-Ask Claude: "Stop crawling /Users/yourname/Downloads"
-Ask Claude: "Remove /path/to/old/archive from the crawler"
-```
-
-### `getDocumentDetails`
+#### `getDocumentDetails`
 
 Retrieve all stored fields and full content of a document from the Lucene index by its file path. This tool retrieves document details directly from the index **without requiring filesystem access** - useful for examining indexed content even if the original file has been moved or deleted.
 
@@ -1034,30 +950,120 @@ Ask Claude: "What content was extracted from /path/to/contract.docx?"
 }
 ```
 
-### `unlockIndex`
+---
 
-Remove the `write.lock` file from the Lucene index directory. This is a **dangerous recovery operation** - only use if you are certain no other process is using the index.
+### Observability Tools (group: `observability`)
+
+#### `suggestTerms`
+
+Suggest index terms matching a prefix. Useful for discovering vocabulary, finding German compound words, exploring author names, or auto-completing field values.
 
 **Parameters:**
-- `confirm` (required): Must be set to `true` to proceed. This is a safety measure.
+- `field` (required): Field name to suggest terms from (e.g. `content`, `author`, `file_extension`)
+- `prefix` (required): Prefix to match terms against (e.g. `ver` to find `vertrag`, `version`)
+- `limit` (optional): Maximum number of terms to return (default: 20, max: 100)
 
-**Returns:**
-- `success`: Boolean indicating operation success
-- `message`: Confirmation message
-- `lockFileExisted`: Boolean indicating if a lock file was present
-- `lockFilePath`: Path to the lock file
+**Notes:**
+- For analyzed fields (`content`, `title`, etc.), the prefix is automatically lowercased to match indexed tokens
+- For StringFields (`file_extension`, `language`), the prefix is used as-is (exact match)
+- Numeric/date fields (`file_size`, `modified_date`, etc.) are not supported — use `getIndexStats` for date ranges
+- Returns terms sorted by document frequency (most common first)
+- Returns empty results for nonexistent fields (not an error)
 
-**When to use:**
-Use this tool when the server fails to start with a `LockObtainFailedException` after an unclean shutdown. See [Troubleshooting](#index-lock-file-prevents-startup-writelock) for details.
+**Example — discover German compound words:**
+```json
+{
+  "field": "content",
+  "prefix": "vertrag",
+  "limit": 10
+}
+```
+
+**Example response:**
+```json
+{
+  "success": true,
+  "field": "content",
+  "prefix": "vertrag",
+  "terms": [
+    {"term": "vertrag", "docFreq": 45},
+    {"term": "vertrags", "docFreq": 23},
+    {"term": "vertragsklausel", "docFreq": 8},
+    {"term": "vertragsbedingungen", "docFreq": 5}
+  ],
+  "totalTermsMatched": 4
+}
+```
+
+#### `getTopTerms`
+
+Get the most frequent terms in a field. Useful for understanding index vocabulary, discovering common values (languages, file types, authors), and identifying dominant terms.
+
+**Parameters:**
+- `field` (required): Field name to get top terms from (e.g. `content`, `author`, `file_extension`)
+- `limit` (optional): Maximum number of terms to return (default: 20, max: 100)
+
+**Notes:**
+- Returns terms sorted by document frequency (most common first)
+- For large content fields (>100K unique terms), a warning is included suggesting `suggestTerms` instead
+- Numeric/date fields are not supported — use `getIndexStats` for date ranges
+- Returns empty results for nonexistent fields (not an error)
+
+**Example — explore file types in index:**
+```json
+{
+  "field": "file_extension",
+  "limit": 10
+}
+```
+
+**Example response:**
+```json
+{
+  "success": true,
+  "field": "file_extension",
+  "terms": [
+    {"term": "pdf", "docFreq": 234},
+    {"term": "docx", "docFreq": 156},
+    {"term": "txt", "docFreq": 89},
+    {"term": "md", "docFreq": 45}
+  ],
+  "uniqueTermCount": 12
+}
+```
+
+**Example — explore content vocabulary:**
+```json
+{
+  "field": "content",
+  "limit": 20
+}
+```
+
+---
+
+### Admin Tools (group: `admin`)
+
+#### `indexAdmin`
+
+An [MCP App](https://github.com/modelcontextprotocol/ext-apps) that provides a visual user interface for index maintenance tasks directly inside your MCP client (e.g. Claude Desktop). When invoked, the app is rendered inline in the conversation and offers one-click access to administrative operations without requiring manual tool calls.
+
+![Index Administration App](doc/indexadminapp.png)
+
+**Available actions:**
+
+- **Unlock Index** -- Removes a stale `write.lock` file after an unclean shutdown (equivalent to calling `unlockIndex` with `confirm=true`)
+- **Optimize Index** -- Merges index segments for improved search performance (equivalent to calling `optimizeIndex`)
+- **Purge Index** -- Deletes all documents from the index (equivalent to calling `purgeIndex` with `confirm=true`)
+
+Each action shows inline status feedback (success, error, or progress details) directly in the app UI.
 
 **Example:**
 ```
-Ask Claude: "Unlock the Lucene index - I confirm this is safe"
+Ask Claude: "Can you invoke the indexAdmin tool please?"
 ```
 
-**⚠️ Warning:** Unlocking an index that is actively being written to by another process can cause data corruption. Only use this when you are certain the lock is stale.
-
-### `optimizeIndex`
+#### `optimizeIndex`
 
 Optimize the Lucene index by merging segments. This is a **long-running operation** that runs in the background.
 
@@ -1088,7 +1094,7 @@ Ask Claude: "What's the status of the optimization?"
 - Temporarily increases disk usage during the merge
 - For large indices, this can take several minutes to hours
 
-### `purgeIndex`
+#### `purgeIndex`
 
 Delete all documents from the Lucene index. This is a **destructive, long-running operation** that runs in the background.
 
@@ -1118,9 +1124,32 @@ Ask Claude: "Delete all documents from the index - I confirm this"
 Ask Claude: "Purge the index completely and reclaim disk space - I confirm this"
 ```
 
-**⚠️ Warning:** This operation cannot be undone. All indexed documents will be permanently deleted. You will need to re-crawl directories to repopulate the index.
+**Warning:** This operation cannot be undone. All indexed documents will be permanently deleted. You will need to re-crawl directories to repopulate the index.
 
-### `getIndexAdminStatus`
+#### `unlockIndex`
+
+Remove the `write.lock` file from the Lucene index directory. This is a **dangerous recovery operation** - only use if you are certain no other process is using the index.
+
+**Parameters:**
+- `confirm` (required): Must be set to `true` to proceed. This is a safety measure.
+
+**Returns:**
+- `success`: Boolean indicating operation success
+- `message`: Confirmation message
+- `lockFileExisted`: Boolean indicating if a lock file was present
+- `lockFilePath`: Path to the lock file
+
+**When to use:**
+Use this tool when the server fails to start with a `LockObtainFailedException` after an unclean shutdown. See [Troubleshooting](#index-lock-file-prevents-startup-writelock) for details.
+
+**Example:**
+```
+Ask Claude: "Unlock the Lucene index - I confirm this is safe"
+```
+
+**Warning:** Unlocking an index that is actively being written to by another process can cause data corruption. Only use this when you are certain the lock is stale.
+
+#### `getIndexAdminStatus`
 
 Get the status of long-running index administration operations (optimize, purge).
 
@@ -1166,6 +1195,52 @@ Get the status of long-running index administration operations (optimize, purge)
 Ask Claude: "What's the status of the index optimization?"
 Ask Claude: "Is the purge operation complete?"
 ```
+
+---
+
+## Tool Exposure Configuration
+
+Control which MCP tools are exposed using two environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `LUCENE_TOOLS_INCLUDE` | `*` (all tools) | Comma-separated tool names or group shorthands to expose |
+| `LUCENE_TOOLS_EXCLUDE` | (empty) | Comma-separated tool names or group shorthands to hide; **always wins** over include |
+
+### Tool Groups
+
+| Group | Tools |
+|---|---|
+| `search` | simpleSearch, extendedSearch |
+| `semantic` | semanticSearch, profileSemanticSearch |
+| `debug` | profileQuery |
+| `info` | getIndexStats, listIndexedFields, getDocumentDetails |
+| `observability` | suggestTerms, getTopTerms |
+| `crawler` | startCrawl, getCrawlerStats, getCrawlerStatus, pauseCrawler, resumeCrawler, listCrawlableDirectories, addCrawlableDirectory, removeCrawlableDirectory |
+| `admin` | optimizeIndex, purgeIndex, unlockIndex, getIndexAdminStatus, indexAdmin |
+
+Individual tool names can be used in addition to group shorthands.
+
+### Examples
+
+```bash
+# Default — all tools (semantic tools require VECTOR_MODEL)
+java -jar mcpluceneserver.jar
+
+# Small LLM — search tools only
+LUCENE_TOOLS_INCLUDE=search java -jar mcpluceneserver.jar
+
+# Search + semantic search
+LUCENE_TOOLS_INCLUDE=search,semantic VECTOR_MODEL=e5-base java -jar mcpluceneserver.jar
+
+# All tools except destructive admin
+LUCENE_TOOLS_EXCLUDE=purgeIndex,unlockIndex java -jar mcpluceneserver.jar
+
+# All tools except entire admin group
+LUCENE_TOOLS_EXCLUDE=admin java -jar mcpluceneserver.jar
+```
+
+---
 
 ## Index Field Schema
 
@@ -1277,7 +1352,7 @@ Search results are optimized for MCP responses (< 1 MB) and include:
   - `matchedTerms` -- The distinct query terms that appear in this passage (extracted from the `<em>` tags). Useful for understanding which parts of a multi-term query a passage satisfies.
   - `termCoverage` -- The fraction of all query terms present in this passage (0.0-1.0). A value of 1.0 means every query term matched. LLMs can use this to prefer passages that address the full query.
   - `position` -- Location within the source document (0.0 = start, 1.0 = end), derived from the passage's character offset. Useful for citations or for understanding document structure.
-  - `source` -- Indicates how this passage was produced: `"keyword"` means the BM25 highlighter found term matches in the indexed document text; `"semantic"` means no keyword term matches were found and the best-matching vector chunk was used as the snippet instead. Semantic passages are relevant because the document was retrieved via vector similarity (hybrid search), even if the exact query words do not appear in the text.
+  - `source` -- Indicates how this passage was produced: `"keyword"` means the BM25 highlighter found term matches in the indexed document text; `"semantic"` means the best-matching vector chunk was used as the snippet (relevant because the document was retrieved via vector similarity, even if the exact query words do not appear in the text).
 
 - **Lucene Faceting:** The `facets` object uses **Lucene's SortedSetDocValues** for efficient faceted search. It shows actual facet values and document counts from the search results, not just available fields. Only facet dimensions that have values in the result set are returned.
 
@@ -1490,18 +1565,18 @@ When this is set, `addCrawlableDirectory` and `removeCrawlableDirectory` will re
 
 Since the search engine performs **exact lexical matching** without automatic synonym expansion, you need to explicitly include synonyms and word variations in your query:
 
-**❌ Basic search (might miss relevant results):**
+**Basic search (might miss relevant results):**
 ```
 query: "car"
 ```
 This will ONLY match documents containing the exact word "car", missing documents with "automobile", "vehicle", etc.
 
-**✅ Better: Include synonyms with OR:**
+**Better: Include synonyms with OR:**
 ```
 query: "(car OR automobile OR vehicle)"
 ```
 
-**✅ Best: Combine synonyms with wildcards for variations:**
+**Best: Combine synonyms with wildcards for variations:**
 ```
 query: "(car* OR automobile* OR vehicle*)"
 ```
@@ -1517,7 +1592,7 @@ This will find documents containing variations like:
 - "contract signed", "agreement executed", "deal finalized"
 - "contracts signing", "agreements execute", "deals finalizing"
 
-**💡 Tip:** Use the `facets` in the search response to discover the exact terms used in your documents, then refine your query accordingly.
+**Tip:** Use the `facets` in the search response to discover the exact terms used in your documents, then refine your query accordingly.
 
 ## Document Crawler Features
 
@@ -1869,41 +1944,47 @@ java -Dmcp.transport=http -Dmcp.http.port=9090 -jar luceneserver-0.0.1-SNAPSHOT.
 java -Dmcp.transport=http -Dmcp.http.host=127.0.0.1 -jar luceneserver-0.0.1-SNAPSHOT.jar
 ```
 
-### Vector / Hybrid Search Configuration
+### Semantic Search Configuration
 
-Semantic vector search is an optional feature activated by including `vectorsearch` in the active profiles.
+Semantic vector search is an optional feature activated by setting the `VECTOR_MODEL` environment variable.
 
-**Enabling vector search:**
+**Enabling semantic search:**
 ```bash
 java --enable-native-access=ALL-UNNAMED \
   -Xmx4g \
-  -Dspring.profiles.active=deployed,vectorsearch \
-  -Dvector.model=e5-base \
+  -Dspring.profiles.active=deployed \
   -jar luceneserver-0.0.1-SNAPSHOT.jar
 ```
 
-| JVM Property                                     | Default   | Description                                                                             |
-|--------------------------------------------------|-----------|-----------------------------------------------------------------------------------------|
-| `spring.profiles.active` includes `vectorsearch` | —         | Enables semantic vector indexing and hybrid search                                      |
-| `vector.model`                                   | `e5-base` | Embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality) |
+```bash
+# With VECTOR_MODEL set in environment:
+VECTOR_MODEL=e5-base java --enable-native-access=ALL-UNNAMED \
+  -Xmx4g \
+  -Dspring.profiles.active=deployed \
+  -jar luceneserver-0.0.1-SNAPSHOT.jar
+```
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `VECTOR_MODEL` | (none) | Embedding model: `e5-base` (768 dims, faster) or `e5-large` (1024 dims, higher quality). Set to enable semantic search tools. |
 
 See [SEMANTICSEARCH.md](SEMANTICSEARCH.md) for full architecture details, tuning guidance, and KNN scoring configuration.
 
-### Critical Note: Vector Search and the Semantic Gap
+### Note on Semantic Search and the Semantic Gap
 
-Vector search is designed to close the **semantic gap**: finding documents about "automobile" when the user searches for "car", because the embedding model maps both concepts to nearby points in vector space. This is something pure BM25/inverted-index search cannot do.
+Vector search is designed to close the **semantic gap**: finding documents about "automobile" when the user searches for "car", because the embedding model maps both concepts to nearby points in vector space.
 
 **However, when using this server with an LLM (Claude, GPT, etc.), the situation changes fundamentally.**
 
-An LLM already bridges the semantic gap as part of its reasoning process. Before calling the `search` tool, a well-prompted LLM can rewrite "find documents about cars" into an explicit OR query: `(car OR automobile OR vehicle OR sedan)`. This means the LLM handles synonym expansion and query reformulation — exactly the problem vector search is designed to solve.
+An LLM already bridges the semantic gap as part of its reasoning process. Before calling the search tool, a well-prompted LLM can rewrite "find documents about cars" into an explicit OR query: `(car OR automobile OR vehicle OR sedan)`. This means the LLM handles synonym expansion and query reformulation — exactly the problem vector search is designed to solve.
 
-**When vector search adds genuine value:**
+**When semantic search adds genuine value:**
 - Direct user-facing search UIs with no LLM in the loop
 - Batch or automated pipelines without LLM query reformulation
 - Queries involving domain-specific jargon where synonyms are not obvious
 - Conceptual queries where the exact wording of relevant documents is unknown
 
-**When vector search adds marginal value (LLM-based use cases):**
+**When semantic search adds marginal value (LLM-based use cases):**
 - The LLM client expands queries with synonyms before calling the tool
 - The LLM reformulates vague queries into precise Lucene expressions
 - The search corpus uses consistent terminology that BM25 handles well
@@ -1911,18 +1992,17 @@ An LLM already bridges the semantic gap as part of its reasoning process. Before
 **Trade-offs to consider:**
 - Embedding computation adds latency (~31ms/doc during indexing, ~5ms/query for e5-base)
 - ONNX models require ~100-200MB of disk space and additional RAM
-- Index complexity doubles (parent documents + child chunk documents via Block Join)
-- RRF score merging can sometimes promote weaker semantic matches over strong lexical matches
-
-**Recommendation:** When the LLM is handling query expansion and reformulation (the typical MCP use case), consider disabling vector search with `useVectorSearch=false` for lower latency and simpler results. Enable vector search for direct search scenarios or when the query pipeline does not include an LLM step.
+- Index complexity increases (parent documents + child chunk documents via Block Join)
 
 ### Environment Variables
 
-| Environment Variable | Default                                | Description |
-|---------------------|----------------------------------------|-------------|
-| `LUCENE_INDEX_PATH` | `${user.home}/.mcplucene/luceneindex}` | Path to the Lucene index directory |
-| `LUCENE_CRAWLER_DIRECTORIES` | none                                   | Comma-separated list of directories to crawl (overrides config file) |
-| `SPRING_PROFILES_ACTIVE` | none (default)                         | Set to `deployed` for production use |
+| Environment Variable | Default | Description |
+|---|---|---|
+| `LUCENE_INDEX_PATH` | `${user.home}/.mcplucene/luceneindex` | Path to the Lucene index directory |
+| `LUCENE_CRAWLER_DIRECTORIES` | (none) | Comma-separated list of directories to crawl (overrides config file) |
+| `VECTOR_MODEL` | (none) | Embedding model (`e5-base` or `e5-large`). Set to enable semantic search. |
+| `LUCENE_TOOLS_INCLUDE` | `*` (all) | Comma-separated tool names or group shorthands to expose |
+| `LUCENE_TOOLS_EXCLUDE` | (empty) | Comma-separated tool names or group shorthands to hide |
 
 **Note on `LUCENE_CRAWLER_DIRECTORIES`:**
 When this environment variable is set, it takes precedence over `~/.mcplucene/config.yaml` and `application.yaml`. The MCP configuration tools (`addCrawlableDirectory`, `removeCrawlableDirectory`) will refuse to modify configuration while this override is active. To use runtime configuration, remove this environment variable.
@@ -2112,9 +2192,9 @@ java -jar target/luceneserver-0.0.1-SNAPSHOT.jar
 ```
 
 This gives you:
-- ✅ Complete logging output for debugging
-- ✅ Configuration loaded from classpath and user config
-- ✅ All debug information visible in console
+- Complete logging output for debugging
+- Configuration loaded from classpath and user config
+- All debug information visible in console
 
 **For production/Claude Desktop deployment:**
 ```bash
