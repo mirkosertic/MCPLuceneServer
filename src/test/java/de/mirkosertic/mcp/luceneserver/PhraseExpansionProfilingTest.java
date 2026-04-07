@@ -113,7 +113,7 @@ class PhraseExpansionProfilingTest {
                 false, // analyzeDocumentScoring
                 false, // analyzeFacetCost
                 null, // maxDocExplanations
-                null  // useVectorSearch
+                null  // queryMode
         );
 
         // When: Profiling the query
@@ -179,7 +179,7 @@ class PhraseExpansionProfilingTest {
                 true, // analyzeDocumentScoring = true
                 false,
                 3, // maxDocExplanations
-                null  // useVectorSearch
+                null  // queryMode
         );
 
         // When: Profiling the query
@@ -246,7 +246,7 @@ class PhraseExpansionProfilingTest {
                 true,
                 false,
                 3,
-                null  // useVectorSearch
+                null  // queryMode
         );
 
         // When: Profiling the query
@@ -285,7 +285,7 @@ class PhraseExpansionProfilingTest {
                 false,
                 false,
                 null,
-                null  // useVectorSearch
+                null  // queryMode
         );
 
         // When: Profiling the query
@@ -327,7 +327,7 @@ class PhraseExpansionProfilingTest {
                 false,
                 false,
                 null,
-                null  // useVectorSearch
+                null  // queryMode
         );
 
         // When: Profiling the query
@@ -364,7 +364,7 @@ class PhraseExpansionProfilingTest {
                 false,
                 false,
                 null,
-                null  // useVectorSearch
+                null  // queryMode
         );
 
         // When: Profiling the query

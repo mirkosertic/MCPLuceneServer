@@ -31,8 +31,7 @@ import static org.mockito.Mockito.when;
 /**
  * Integration tests for {@code profileQuery} after removal of vector search debug.
  *
- * <p>Verifies that {@code profileQuery} succeeds and returns a null {@code vectorSearchDebug}
- * field (since {@code buildVectorSearchDebug} has been removed), regardless of whether an
+ * <p>Verifies that {@code profileQuery} succeeds regardless of whether an
  * ONNX service is present.</p>
  */
 @DisplayName("profileQuery integration tests (vector search debug removed)")
@@ -138,7 +137,7 @@ class VectorSearchDebugIntegrationTest {
     // ==================== Tests ====================
 
     @Test
-    @DisplayName("profileQuery with onnxService present succeeds and returns null vectorSearchDebug")
+    @DisplayName("profileQuery with onnxService present succeeds")
     void testProfileQuerySucceedsWithVectorService() throws Exception {
         final ProfileQueryRequest request = ProfileQueryRequest.fromMap(Map.of(
                 "query", "Vertrag"
@@ -147,13 +146,10 @@ class VectorSearchDebugIntegrationTest {
         final ProfileQueryResponse response = indexServiceWithVector.profileQuery(request);
 
         assertThat(response.success()).isTrue();
-        assertThat(response.vectorSearchDebug())
-                .as("vectorSearchDebug should be null — buildVectorSearchDebug has been removed")
-                .isNull();
     }
 
     @Test
-    @DisplayName("profileQuery without onnxService succeeds and returns null vectorSearchDebug")
+    @DisplayName("profileQuery without onnxService succeeds")
     void testProfileQuerySucceedsWithoutVectorService() throws Exception {
         final ProfileQueryRequest request = ProfileQueryRequest.fromMap(Map.of(
                 "query", "Vertrag"
@@ -162,9 +158,6 @@ class VectorSearchDebugIntegrationTest {
         final ProfileQueryResponse response = indexServiceNoVector.profileQuery(request);
 
         assertThat(response.success()).isTrue();
-        assertThat(response.vectorSearchDebug())
-                .as("vectorSearchDebug should be null — buildVectorSearchDebug has been removed")
-                .isNull();
     }
 
     @Test
@@ -175,7 +168,6 @@ class VectorSearchDebugIntegrationTest {
         final ProfileQueryResponse response = indexServiceWithVector.profileQuery(request);
 
         assertThat(response.success()).isTrue();
-        assertThat(response.vectorSearchDebug()).isNull();
     }
 
     @Test

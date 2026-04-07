@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.mcp.dto;
 
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.mcp.Description;
 import org.jspecify.annotations.Nullable;
 
@@ -44,8 +45,8 @@ public record ProfileQueryRequest(
         Integer maxDocExplanations,
 
         @Nullable
-        @Description("Enable vector (semantic) search combined with BM25 via RRF. Only effective when the vectorsearch profile is active. Default: true")
-        Boolean useVectorSearch
+        @Description("Query mode: SIMPLE (plain text, special characters treated as literals) or EXTENDED (full Lucene syntax). Default: EXTENDED")
+        String queryMode
 ) {
     /**
      * Create a ProfileQueryRequest from a Map of arguments.
@@ -73,15 +74,19 @@ public record ProfileQueryRequest(
                 (Boolean) args.get("analyzeDocumentScoring"),
                 (Boolean) args.get("analyzeFacetCost"),
                 args.get("maxDocExplanations") != null ? ((Number) args.get("maxDocExplanations")).intValue() : null,
-                (Boolean) args.get("useVectorSearch")
+                (String) args.get("queryMode")
         );
     }
 
     /**
-     * Whether vector search should be used. Defaults to true when not specified.
+     * Get the effective query mode. Returns SIMPLE when "SIMPLE" is specified (case-insensitive),
+     * otherwise defaults to EXTENDED.
      */
-    public boolean effectiveUseVectorSearch() {
-        return useVectorSearch == null || useVectorSearch;
+    public LuceneIndexService.QueryMode effectiveQueryMode() {
+        if (queryMode != null && "SIMPLE".equalsIgnoreCase(queryMode)) {
+            return LuceneIndexService.QueryMode.SIMPLE;
+        }
+        return LuceneIndexService.QueryMode.EXTENDED;
     }
 
     /**

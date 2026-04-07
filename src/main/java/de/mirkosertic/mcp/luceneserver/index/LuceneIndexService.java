@@ -838,12 +838,16 @@ public class LuceneIndexService {
             if (request.effectiveQuery() == null || request.effectiveQuery().isBlank()) {
                 mainQuery = new MatchAllDocsQuery();
             } else {
+                // In SIMPLE mode, escape special Lucene characters so the query is treated as literals.
+                final String effectiveQueryString = request.effectiveQueryMode() == QueryMode.SIMPLE
+                        ? QueryParser.escape(request.effectiveQuery())
+                        : request.effectiveQuery();
                 final QueryParser parser = new ProximityExpandingQueryParser("content", queryAnalyzer);
                 parser.setAllowLeadingWildcard(true);
-                final Query parsed = parser.parse(request.effectiveQuery());
+                final Query parsed = parser.parse(effectiveQueryString);
                 final Query contentQuery = rewriteLeadingWildcards(parsed);
                 final String languageHint = extractLanguageHint(request.effectiveFilters());
-                mainQuery = buildStemmedQuery(contentQuery, request.effectiveQuery(), languageHint);
+                mainQuery = buildStemmedQuery(contentQuery, effectiveQueryString, languageHint);
             }
 
             // Level 1: Fast analysis (always included)
@@ -877,7 +881,7 @@ public class LuceneIndexService {
 
             return ProfileQueryResponse.success(
                     queryAnalysis, searchMetrics, filterImpact,
-                    docExplanations, facetCost, recommendations, null);
+                    docExplanations, facetCost, recommendations);
 
         } finally {
             searcherManager.release(searcher);
