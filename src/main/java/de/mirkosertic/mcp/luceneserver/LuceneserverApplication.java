@@ -118,7 +118,7 @@ public class LuceneserverApplication {
 
         final QueryRuntimeStats queryRuntimeStats = new QueryRuntimeStats();
 
-        this.searchTools = new SearchTools(indexService, queryRuntimeStats);
+        this.searchTools = new SearchTools(indexService, queryRuntimeStats, config);
         this.crawlerTools = new CrawlerTools(crawlerService, configManager);
         this.indexInfoTools = new IndexInfoTools(indexService, queryRuntimeStats);
         this.indexAdminTools = new IndexAdminTools(indexService, crawlerService);

@@ -1,16 +1,22 @@
 package de.mirkosertic.mcp.luceneserver.tools;
 
+import de.mirkosertic.mcp.luceneserver.config.ApplicationConfig;
 import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.index.QueryRuntimeStats;
+import de.mirkosertic.mcp.luceneserver.index.SemanticSearchResult;
 import de.mirkosertic.mcp.luceneserver.mcp.SchemaGenerator;
 import de.mirkosertic.mcp.luceneserver.mcp.ToolResultHelper;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ExtendedSearchRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.GetTopTermsRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.GetTopTermsResponse;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryResponse;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileSemanticSearchRequest;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileSemanticSearchResponse;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
-import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchResponse;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SemanticSearchRequest;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SimpleSearchRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SuggestTermsRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SuggestTermsResponse;
 import io.modelcontextprotocol.server.McpServerFeatures;
@@ -26,58 +32,97 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * MCP tools for search operations: search, profileQuery, suggestTerms, getTopTerms.
+ * MCP tools for search operations: simpleSearch, extendedSearch, semanticSearch,
+ * profileSemanticSearch, profileQuery, suggestTerms, getTopTerms.
  */
 public class SearchTools implements McpToolProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(SearchTools.class);
 
-    private static final String SEARCH_DESCRIPTION =
-            "Search documents using Lucene query syntax with Snowball stemming for German and English " +
-            "(morphological variants found automatically, e.g. 'Vertrag' matches 'Verträge'/'Vertrages'). Exact matches rank highest.\n\n" +
-            "SYNTAX:\n" +
-            "- Terms: 'hello world' → AND (implicit); phrases: \"exact phrase\"\n" +
-            "- Boolean: AND, OR, NOT, grouping with ()\n" +
-            "- Wildcards: word* (suffix, BM25 if >=4 chars prefix), ? (single char), *word (leading, fast via reversed field), *word* (contains, constant score)\n" +
-            "- Fuzzy: term~2; Proximity: \"phrase\"~5\n" +
-            "- Multi-word phrases auto-expanded: \"Domain Design\" → exact(2x boost) OR near(slop=3)\n" +
-            "- Field-specific: field:value\n\n" +
-            "FILTERS (metadata, use 'filters' array):\n" +
-            "- operators: eq (default), in, not, not_in, range\n" +
-            "- faceted fields (DrillSideways, OR within same field): language, file_extension, file_type, author\n" +
-            "- string fields (exact match): file_path, content_hash\n" +
-            "- numeric/date fields (range supported): file_size, created_date, modified_date, indexed_date\n" +
-            "- dates: ISO-8601 (2024-01-15 / 2024-01-15T10:30:00 / 2024-01-15T10:30:00Z)\n" +
-            "- logic: different fields=AND, same faceted field=OR, not/not_in=MUST_NOT\n\n" +
-            "SORT: sortBy=_score (default), modified_date, created_date, file_size; sortOrder=desc (default), asc\n\n" +
-            "BEST PRACTICES:\n" +
-            "- Synonyms: use OR — (contract OR agreement), not automatic\n" +
-            "- German compounds: use *vertrag (finds Arbeitsvertrag, Mietvertrag, etc.)\n" +
-            "- Multilingual: (contract OR Vertrag OR contrat)\n" +
-            "- ICU folding active: Müller≈Muller, café≈cafe\n" +
-            "- Irregular verbs: use OR — (run OR running OR ran)\n\n" +
-            "NOT SUPPORTED: automatic synonyms, phonetic matching, semantic search, stemming for non-DE/EN languages";
+    private static final String SIMPLE_SEARCH_DESCRIPTION =
+            "Search documents using plain text keywords. Special characters are treated as literals (no Lucene syntax). " +
+            "Supports filters, pagination, and sorting. Uses BM25 with stemming for German and English.\n\n" +
+            "FILTERS: use 'filters' array with operators: eq, in, not, not_in, range\n" +
+            "- faceted fields: language, file_extension, file_type, author\n" +
+            "- date fields (ISO-8601): created_date, modified_date, indexed_date\n" +
+            "- numeric: file_size\n\n" +
+            "SORT: sortBy=_score (default), modified_date, created_date, file_size; sortOrder=desc/asc";
+
+    private static final String EXTENDED_SEARCH_DESCRIPTION =
+            "Search documents using full Lucene query syntax. Supports Boolean operators (AND, OR, NOT), " +
+            "wildcards (*word, word*, *word*), fuzzy (~), proximity (\"phrase\"~5), field-specific queries, " +
+            "and phrase matching. Uses BM25 with stemming.\n\n" +
+            "SYNTAX: AND/OR/NOT, grouping (), phrases \"...\", wildcards *, ?, fuzzy~, proximity\"\"~N, field:value\n\n" +
+            "FILTERS and SORT: same as simpleSearch";
+
+    private static final String SEMANTIC_SEARCH_DESCRIPTION =
+            "Search documents using natural language semantic similarity (pure KNN embedding search). " +
+            "Finds documents that are semantically related to the query even when exact keywords don't match. " +
+            "Results are ordered by cosine similarity — no BM25, no sort options.\n\n" +
+            "Requires VECTOR_MODEL to be configured.\n\n" +
+            "similarityThreshold (0.0–1.0, default 0.70): lower values return more results with broader semantic match; " +
+            "higher values return only closely matching documents.";
+
+    private static final String PROFILE_SEMANTIC_SEARCH_DESCRIPTION =
+            "Debug and profile semantic search queries. Shows embedding time, cosine scores, matched chunk text, " +
+            "and how many candidates passed the similarity threshold. Use this to tune similarityThreshold and " +
+            "understand why certain documents are or are not returned.\n\n" +
+            "Returns: embeddingDurationMs, rawCandidateCount, filteredCandidateCount, cosineCutoff, " +
+            "topCandidates (with cosineScore and matchedChunkText), and the actual search results.";
 
     private final LuceneIndexService indexService;
     private final QueryRuntimeStats queryRuntimeStats;
+    private final ApplicationConfig config;
 
-    public SearchTools(final LuceneIndexService indexService, final QueryRuntimeStats queryRuntimeStats) {
+    public SearchTools(final LuceneIndexService indexService, final QueryRuntimeStats queryRuntimeStats,
+            final ApplicationConfig config) {
         this.indexService = indexService;
         this.queryRuntimeStats = queryRuntimeStats;
+        this.config = config;
     }
 
     @Override
     public List<McpServerFeatures.SyncToolSpecification> getToolSpecifications() {
         final List<McpServerFeatures.SyncToolSpecification> tools = new ArrayList<>();
 
-        // Search tool
+        // Simple search tool
         tools.add(McpServerFeatures.SyncToolSpecification.builder()
                 .tool(McpSchema.Tool.builder()
-                        .name("search")
-                        .description(SEARCH_DESCRIPTION)
-                        .inputSchema(SchemaGenerator.generateSchema(SearchRequest.class))
+                        .name("simpleSearch")
+                        .description(SIMPLE_SEARCH_DESCRIPTION)
+                        .inputSchema(SchemaGenerator.generateSchema(SimpleSearchRequest.class))
                         .build())
-                .callHandler((exchange, request) -> search(request.arguments()))
+                .callHandler((exchange, request) -> simpleSearch(request.arguments()))
+                .build());
+
+        // Extended search tool
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("extendedSearch")
+                        .description(EXTENDED_SEARCH_DESCRIPTION)
+                        .inputSchema(SchemaGenerator.generateSchema(ExtendedSearchRequest.class))
+                        .build())
+                .callHandler((exchange, request) -> extendedSearch(request.arguments()))
+                .build());
+
+        // Semantic search tool
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("semanticSearch")
+                        .description(SEMANTIC_SEARCH_DESCRIPTION)
+                        .inputSchema(SchemaGenerator.generateSchema(SemanticSearchRequest.class))
+                        .build())
+                .callHandler((exchange, request) -> semanticSearch(request.arguments()))
+                .build());
+
+        // Profile semantic search tool
+        tools.add(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder()
+                        .name("profileSemanticSearch")
+                        .description(PROFILE_SEMANTIC_SEARCH_DESCRIPTION)
+                        .inputSchema(SchemaGenerator.generateSchema(ProfileSemanticSearchRequest.class))
+                        .build())
+                .callHandler((exchange, request) -> profileSemanticSearch(request.arguments()))
                 .build());
 
         // Profile query tool
@@ -128,23 +173,23 @@ public class SearchTools implements McpToolProvider {
         return tools;
     }
 
-    private McpSchema.CallToolResult search(final Map<String, Object> args) {
-        final SearchRequest request = SearchRequest.fromMap(args);
+    private McpSchema.CallToolResult simpleSearch(final Map<String, Object> args) {
+        final SimpleSearchRequest request = SimpleSearchRequest.fromMap(args);
         final List<SearchFilter> effectiveFilters = request.effectiveFilters();
 
         // Validate sort parameters
-        String sortError = SearchRequest.validateSortBy(request.sortBy());
+        String sortError = SimpleSearchRequest.validateSortBy(request.sortBy());
         if (sortError != null) {
             logger.warn("Invalid sortBy parameter: {}", sortError);
             return ToolResultHelper.createResult(SearchResponse.error(sortError));
         }
-        sortError = SearchRequest.validateSortOrder(request.sortOrder());
+        sortError = SimpleSearchRequest.validateSortOrder(request.sortOrder());
         if (sortError != null) {
             logger.warn("Invalid sortOrder parameter: {}", sortError);
             return ToolResultHelper.createResult(SearchResponse.error(sortError));
         }
 
-        logger.info("Search request: query='{}', filters={}, page={}, pageSize={}, sortBy={}, sortOrder={}",
+        logger.info("SimpleSearch request: query='{}', filters={}, page={}, pageSize={}, sortBy={}, sortOrder={}",
                 request.query(), effectiveFilters.size(), request.page(), request.pageSize(),
                 request.effectiveSortBy(), request.effectiveSortOrder());
 
@@ -157,12 +202,11 @@ public class SearchTools implements McpToolProvider {
                     request.effectivePageSize(),
                     request.effectiveSortBy(),
                     request.effectiveSortOrder(),
-                    LuceneIndexService.QueryMode.EXTENDED);
+                    LuceneIndexService.QueryMode.SIMPLE);
             final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
             queryRuntimeStats.recordQuery(durationMs, result.totalHits(),
                     result.facetTotalDurationMicros(), result.facetFieldDurationMicros());
 
-            // Convert facets to DTO format
             final Map<String, List<SearchResponse.FacetValue>> facets = result.facets().entrySet().stream()
                     .collect(Collectors.toMap(
                             Map.Entry::getKey,
@@ -184,7 +228,7 @@ public class SearchTools implements McpToolProvider {
                     durationMs
             );
 
-            logger.info("Search completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions, {} active filters",
+            logger.info("SimpleSearch completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions, {} active filters",
                     durationMs, result.totalHits(), result.page(), result.totalPages(),
                     result.facets().size(), result.activeFilters().size());
 
@@ -199,6 +243,169 @@ public class SearchTools implements McpToolProvider {
         } catch (final IOException e) {
             logger.error("Search error", e);
             return ToolResultHelper.createResult(SearchResponse.error("Search error: " + e.getMessage()));
+        }
+    }
+
+    private McpSchema.CallToolResult extendedSearch(final Map<String, Object> args) {
+        final ExtendedSearchRequest request = ExtendedSearchRequest.fromMap(args);
+        final List<SearchFilter> effectiveFilters = request.effectiveFilters();
+
+        // Validate sort parameters
+        String sortError = ExtendedSearchRequest.validateSortBy(request.sortBy());
+        if (sortError != null) {
+            logger.warn("Invalid sortBy parameter: {}", sortError);
+            return ToolResultHelper.createResult(SearchResponse.error(sortError));
+        }
+        sortError = ExtendedSearchRequest.validateSortOrder(request.sortOrder());
+        if (sortError != null) {
+            logger.warn("Invalid sortOrder parameter: {}", sortError);
+            return ToolResultHelper.createResult(SearchResponse.error(sortError));
+        }
+
+        logger.info("ExtendedSearch request: query='{}', filters={}, page={}, pageSize={}, sortBy={}, sortOrder={}",
+                request.query(), effectiveFilters.size(), request.page(), request.pageSize(),
+                request.effectiveSortBy(), request.effectiveSortOrder());
+
+        try {
+            final long startTime = System.nanoTime();
+            final LuceneIndexService.SearchResult result = indexService.search(
+                    request.effectiveQuery(),
+                    effectiveFilters,
+                    request.effectivePage(),
+                    request.effectivePageSize(),
+                    request.effectiveSortBy(),
+                    request.effectiveSortOrder(),
+                    LuceneIndexService.QueryMode.EXTENDED);
+            final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+            queryRuntimeStats.recordQuery(durationMs, result.totalHits(),
+                    result.facetTotalDurationMicros(), result.facetFieldDurationMicros());
+
+            final Map<String, List<SearchResponse.FacetValue>> facets = result.facets().entrySet().stream()
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey,
+                            e -> e.getValue().stream()
+                                    .map(fv -> new SearchResponse.FacetValue(fv.value(), fv.count()))
+                                    .collect(Collectors.toList())
+                    ));
+
+            final SearchResponse response = SearchResponse.success(
+                    result.documents(),
+                    result.totalHits(),
+                    result.page(),
+                    result.pageSize(),
+                    result.totalPages(),
+                    result.hasNextPage(),
+                    result.hasPreviousPage(),
+                    facets,
+                    result.activeFilters(),
+                    durationMs
+            );
+
+            logger.info("ExtendedSearch completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions, {} active filters",
+                    durationMs, result.totalHits(), result.page(), result.totalPages(),
+                    result.facets().size(), result.activeFilters().size());
+
+            return ToolResultHelper.createResult(response);
+
+        } catch (final IllegalArgumentException e) {
+            logger.warn("Invalid filter: {}", e.getMessage());
+            return ToolResultHelper.createResult(SearchResponse.error("Invalid filter: " + e.getMessage()));
+        } catch (final ParseException e) {
+            logger.warn("Invalid query syntax: {}", e.getMessage());
+            return ToolResultHelper.createResult(SearchResponse.error("Invalid query syntax: " + e.getMessage()));
+        } catch (final IOException e) {
+            logger.error("Search error", e);
+            return ToolResultHelper.createResult(SearchResponse.error("Search error: " + e.getMessage()));
+        }
+    }
+
+    private McpSchema.CallToolResult semanticSearch(final Map<String, Object> args) {
+        final SemanticSearchRequest request = SemanticSearchRequest.fromMap(args);
+        final String thresholdError = request.validateSimilarityThreshold();
+        if (thresholdError != null) {
+            logger.warn("Invalid similarityThreshold: {}", thresholdError);
+            return ToolResultHelper.createResult(SearchResponse.error(thresholdError));
+        }
+
+        logger.info("SemanticSearch request: query='{}', filters={}, page={}, pageSize={}, threshold={}",
+                request.query(), request.effectiveFilters().size(), request.effectivePage(),
+                request.effectivePageSize(), request.effectiveSimilarityThreshold());
+
+        try {
+            final SemanticSearchResult result = indexService.semanticSearch(
+                    request.effectiveQuery() != null ? request.effectiveQuery() : "",
+                    request.effectiveFilters(),
+                    request.effectivePage(),
+                    request.effectivePageSize(),
+                    request.effectiveSimilarityThreshold());
+
+            // Build a minimal SearchResponse from the semantic results
+            // Semantic search returns Passages; wrap them in a simple response without facets
+            final SearchResponse response = SearchResponse.success(
+                    List.of(),
+                    result.totalHits(),
+                    request.effectivePage(),
+                    request.effectivePageSize(),
+                    result.totalHits() > 0
+                            ? (int) Math.ceil((double) result.totalHits() / request.effectivePageSize())
+                            : 0,
+                    (request.effectivePage() + 1) * request.effectivePageSize() < result.totalHits(),
+                    request.effectivePage() > 0,
+                    Map.of(),
+                    List.of(),
+                    result.embeddingDurationMs()
+            );
+
+            logger.info("SemanticSearch completed in {}ms: {} total hits (above threshold={})",
+                    result.embeddingDurationMs(), result.totalHits(), request.effectiveSimilarityThreshold());
+
+            return ToolResultHelper.createResult(response);
+
+        } catch (final IllegalStateException e) {
+            logger.warn("Semantic search not available: {}", e.getMessage());
+            return ToolResultHelper.createResult(SearchResponse.error(e.getMessage()));
+        } catch (final IOException e) {
+            logger.error("Semantic search error", e);
+            return ToolResultHelper.createResult(SearchResponse.error("Semantic search failed: " + e.getMessage()));
+        }
+    }
+
+    private McpSchema.CallToolResult profileSemanticSearch(final Map<String, Object> args) {
+        final ProfileSemanticSearchRequest request = ProfileSemanticSearchRequest.fromMap(args);
+
+        logger.info("ProfileSemanticSearch request: query='{}', filters={}, threshold={}",
+                request.query(), request.effectiveFilters().size(), request.effectiveSimilarityThreshold());
+
+        try {
+            final SemanticSearchResult result = indexService.semanticSearch(
+                    request.query() != null ? request.query() : "",
+                    request.effectiveFilters(),
+                    0,
+                    10,
+                    request.effectiveSimilarityThreshold());
+
+            final int filteredCandidateCount = result.totalHits();
+
+            final ProfileSemanticSearchResponse response = ProfileSemanticSearchResponse.success(
+                    result.embeddingDurationMs(),
+                    result.rawCandidateCount(),
+                    filteredCandidateCount,
+                    result.cosineCutoff(),
+                    result.topCandidates(),
+                    result
+            );
+
+            logger.info("ProfileSemanticSearch completed in {}ms: rawCandidates={}, filtered={}",
+                    result.embeddingDurationMs(), result.rawCandidateCount(), filteredCandidateCount);
+
+            return ToolResultHelper.createResult(response);
+
+        } catch (final IllegalStateException e) {
+            logger.warn("Semantic search not available: {}", e.getMessage());
+            return ToolResultHelper.createResult(ProfileSemanticSearchResponse.error(e.getMessage()));
+        } catch (final IOException e) {
+            logger.error("Profile semantic search error", e);
+            return ToolResultHelper.createResult(ProfileSemanticSearchResponse.error("Profile semantic search failed: " + e.getMessage()));
         }
     }
 
