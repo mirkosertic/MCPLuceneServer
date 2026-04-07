@@ -21,7 +21,7 @@ Accept: application/json, text/event-stream
   }
 }
 
-### --- Search Tools ---
+### --- Search Tools (group: search) ---
 
 # Simple keyword search
 POST http://localhost:9000/mcp/message
@@ -33,7 +33,7 @@ Accept: application/json, text/event-stream
   "id": 2,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": "Mietvertrag"
     }
@@ -52,7 +52,7 @@ Accept: application/json, text/event-stream
   "id": 3,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": "\"domain driven design\""
     }
@@ -71,7 +71,7 @@ Accept: application/json, text/event-stream
   "id": 4,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "extendedSearch",
     "arguments": {
       "query": "(contract OR Vertrag) AND payment"
     }
@@ -90,7 +90,7 @@ Accept: application/json, text/event-stream
   "id": 5,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "extendedSearch",
     "arguments": {
       "query": "report*"
     }
@@ -109,7 +109,7 @@ Accept: application/json, text/event-stream
   "id": 6,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "extendedSearch",
     "arguments": {
       "query": "*vertrag"
     }
@@ -128,7 +128,7 @@ Accept: application/json, text/event-stream
   "id": 7,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": "Arbeitsvertrag",
       "filters": [
@@ -150,7 +150,7 @@ Accept: application/json, text/event-stream
   "id": 8,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": "invoice",
       "filters": [
@@ -172,7 +172,7 @@ Accept: application/json, text/event-stream
   "id": 9,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": "Bericht",
       "filters": [
@@ -195,7 +195,7 @@ Accept: application/json, text/event-stream
   "id": 10,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": "annual report",
       "filters": [
@@ -217,7 +217,7 @@ Accept: application/json, text/event-stream
   "id": 11,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": "project plan",
       "page": 1,
@@ -238,7 +238,7 @@ Accept: application/json, text/event-stream
   "id": 12,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": "meeting notes",
       "sortBy": "modified_date",
@@ -259,7 +259,7 @@ Accept: application/json, text/event-stream
   "id": 13,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "simpleSearch",
     "arguments": {
       "query": null,
       "pageSize": 20
@@ -269,7 +269,7 @@ Accept: application/json, text/event-stream
 
 ###
 
-# Search with useVectorSearch disabled — BM25 only
+# Extended search — BM25 with Lucene query syntax (no vector search)
 POST http://localhost:9000/mcp/message
 Content-Type: application/json
 Accept: application/json, text/event-stream
@@ -279,15 +279,73 @@ Accept: application/json, text/event-stream
   "id": 14,
   "method": "tools/call",
   "params": {
-    "name": "search",
+    "name": "extendedSearch",
     "arguments": {
-      "query": "software architecture",
-      "useVectorSearch": false
+      "query": "software architecture"
     }
   }
 }
 
-### --- Profile Query Tools ---
+### --- Semantic Search Tools (group: semantic) ---
+
+# Semantic search — natural language query (vector similarity)
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 50,
+  "method": "tools/call",
+  "params": {
+    "name": "semanticSearch",
+    "arguments": {
+      "query": "what happens when a rental agreement is terminated early"
+    }
+  }
+}
+
+###
+
+# Semantic search — with custom similarity threshold
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 51,
+  "method": "tools/call",
+  "params": {
+    "name": "semanticSearch",
+    "arguments": {
+      "query": "lease termination",
+      "similarityThreshold": 0.55
+    }
+  }
+}
+
+###
+
+# Semantic search — with language filter
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 52,
+  "method": "tools/call",
+  "params": {
+    "name": "semanticSearch",
+    "arguments": {
+      "query": "payment obligations",
+      "filters": [{ "field": "language", "operator": "eq", "value": "de" }]
+    }
+  }
+}
+
+### --- Debug Tools (group: debug) ---
 
 # profileQuery — Level 1 only (fast, query structure and term stats)
 POST http://localhost:9000/mcp/message
@@ -301,7 +359,8 @@ Accept: application/json, text/event-stream
   "params": {
     "name": "profileQuery",
     "arguments": {
-      "query": "Mietvertrag Kündigung"
+      "query": "Mietvertrag Kündigung",
+      "queryMode": "EXTENDED"
     }
   }
 }
@@ -321,6 +380,7 @@ Accept: application/json, text/event-stream
     "name": "profileQuery",
     "arguments": {
       "query": "invoice payment",
+      "queryMode": "EXTENDED",
       "filters": [
         { "field": "language", "operator": "eq", "value": "en" }
       ],
@@ -334,7 +394,7 @@ Accept: application/json, text/event-stream
 
 ###
 
-# profileQuery — with vector search disabled
+# profileQuery — scoring analysis for a keyword query
 POST http://localhost:9000/mcp/message
 Content-Type: application/json
 Accept: application/json, text/event-stream
@@ -347,13 +407,33 @@ Accept: application/json, text/event-stream
     "name": "profileQuery",
     "arguments": {
       "query": "domain driven design",
-      "analyzeDocumentScoring": true,
-      "useVectorSearch": false
+      "queryMode": "EXTENDED",
+      "analyzeDocumentScoring": true
     }
   }
 }
 
-### --- Index Stats ---
+###
+
+# profileSemanticSearch — vector search diagnostics
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 53,
+  "method": "tools/call",
+  "params": {
+    "name": "profileSemanticSearch",
+    "arguments": {
+      "query": "lease termination penalty",
+      "similarityThreshold": 0.70
+    }
+  }
+}
+
+### --- Index Info Tools (group: info) ---
 
 # getIndexStats — document count, schema version, query metrics, facet timing
 POST http://localhost:9000/mcp/message
@@ -370,188 +450,26 @@ Accept: application/json, text/event-stream
   }
 }
 
-### --- Crawler Tools ---
+###
 
-# startCrawl — incremental crawl (new/changed files only)
+# getDocumentDetails — retrieve all stored fields and content by file path
 POST http://localhost:9000/mcp/message
 Content-Type: application/json
 Accept: application/json, text/event-stream
 
 {
   "jsonrpc": "2.0",
-  "id": 19,
+  "id": 37,
   "method": "tools/call",
   "params": {
-    "name": "startCrawl",
+    "name": "getDocumentDetails",
     "arguments": {
-      "fullReindex": false
+      "filePath": "/userdata/documents/contracts/mietvertrag-2024.pdf"
     }
   }
 }
 
-###
-
-# startCrawl — full reindex (purge and reindex all documents)
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 20,
-  "method": "tools/call",
-  "params": {
-    "name": "startCrawl",
-    "arguments": {
-      "fullReindex": true
-    }
-  }
-}
-
-###
-
-# getCrawlerStats — real-time throughput and per-directory progress
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 21,
-  "method": "tools/call",
-  "params": {
-    "name": "getCrawlerStats",
-    "arguments": {}
-  }
-}
-
-###
-
-# pauseCrawler — pause an ongoing crawl
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 22,
-  "method": "tools/call",
-  "params": {
-    "name": "pauseCrawler",
-    "arguments": {}
-  }
-}
-
-###
-
-# resumeCrawler — resume a paused crawl
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 23,
-  "method": "tools/call",
-  "params": {
-    "name": "resumeCrawler",
-    "arguments": {}
-  }
-}
-
-###
-
-# getCrawlerStatus — current state: IDLE, CRAWLING, PAUSED, or WATCHING
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 24,
-  "method": "tools/call",
-  "params": {
-    "name": "getCrawlerStatus",
-    "arguments": {}
-  }
-}
-
-### --- Directory Configuration ---
-
-# listCrawlableDirectories — show all configured directories
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 25,
-  "method": "tools/call",
-  "params": {
-    "name": "listCrawlableDirectories",
-    "arguments": {}
-  }
-}
-
-###
-
-# addCrawlableDirectory — add directory without immediate crawl
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 26,
-  "method": "tools/call",
-  "params": {
-    "name": "addCrawlableDirectory",
-    "arguments": {
-      "path": "/userdata/documents/reports"
-    }
-  }
-}
-
-###
-
-# addCrawlableDirectory — add directory and crawl immediately
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 27,
-  "method": "tools/call",
-  "params": {
-    "name": "addCrawlableDirectory",
-    "arguments": {
-      "path": "/userdata/documents/contracts",
-      "crawlNow": true
-    }
-  }
-}
-
-###
-
-# removeCrawlableDirectory — remove a directory from the crawler config
-POST http://localhost:9000/mcp/message
-Content-Type: application/json
-Accept: application/json, text/event-stream
-
-{
-  "jsonrpc": "2.0",
-  "id": 28,
-  "method": "tools/call",
-  "params": {
-    "name": "removeCrawlableDirectory",
-    "arguments": {
-      "path": "/userdata/documents/reports"
-    }
-  }
-}
-
-### --- Index Field Tools ---
+### --- Observability Tools (group: observability) ---
 
 # listIndexedFields — all field names in the Lucene index
 POST http://localhost:9000/mcp/message
@@ -707,26 +625,188 @@ Accept: application/json, text/event-stream
   }
 }
 
-### --- Document Details ---
+### --- Crawler Tools (group: crawler) ---
 
-# getDocumentDetails — retrieve all stored fields and content by file path
+# startCrawl — incremental crawl (new/changed files only)
 POST http://localhost:9000/mcp/message
 Content-Type: application/json
 Accept: application/json, text/event-stream
 
 {
   "jsonrpc": "2.0",
-  "id": 37,
+  "id": 19,
   "method": "tools/call",
   "params": {
-    "name": "getDocumentDetails",
+    "name": "startCrawl",
     "arguments": {
-      "filePath": "/userdata/documents/contracts/mietvertrag-2024.pdf"
+      "fullReindex": false
     }
   }
 }
 
-### --- Index Administration ---
+###
+
+# startCrawl — full reindex (purge and reindex all documents)
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 20,
+  "method": "tools/call",
+  "params": {
+    "name": "startCrawl",
+    "arguments": {
+      "fullReindex": true
+    }
+  }
+}
+
+###
+
+# getCrawlerStats — real-time throughput and per-directory progress
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 21,
+  "method": "tools/call",
+  "params": {
+    "name": "getCrawlerStats",
+    "arguments": {}
+  }
+}
+
+###
+
+# pauseCrawler — pause an ongoing crawl
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 22,
+  "method": "tools/call",
+  "params": {
+    "name": "pauseCrawler",
+    "arguments": {}
+  }
+}
+
+###
+
+# resumeCrawler — resume a paused crawl
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 23,
+  "method": "tools/call",
+  "params": {
+    "name": "resumeCrawler",
+    "arguments": {}
+  }
+}
+
+###
+
+# getCrawlerStatus — current state: IDLE, CRAWLING, PAUSED, or WATCHING
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 24,
+  "method": "tools/call",
+  "params": {
+    "name": "getCrawlerStatus",
+    "arguments": {}
+  }
+}
+
+###
+
+# listCrawlableDirectories — show all configured directories
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 25,
+  "method": "tools/call",
+  "params": {
+    "name": "listCrawlableDirectories",
+    "arguments": {}
+  }
+}
+
+###
+
+# addCrawlableDirectory — add directory without immediate crawl
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 26,
+  "method": "tools/call",
+  "params": {
+    "name": "addCrawlableDirectory",
+    "arguments": {
+      "path": "/userdata/documents/reports"
+    }
+  }
+}
+
+###
+
+# addCrawlableDirectory — add directory and crawl immediately
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 27,
+  "method": "tools/call",
+  "params": {
+    "name": "addCrawlableDirectory",
+    "arguments": {
+      "path": "/userdata/documents/contracts",
+      "crawlNow": true
+    }
+  }
+}
+
+###
+
+# removeCrawlableDirectory — remove a directory from the crawler config
+POST http://localhost:9000/mcp/message
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 28,
+  "method": "tools/call",
+  "params": {
+    "name": "removeCrawlableDirectory",
+    "arguments": {
+      "path": "/userdata/documents/reports"
+    }
+  }
+}
+
+### --- Index Admin Tools (group: admin) ---
 
 # unlockIndex — remove write.lock (dangerous recovery, requires explicit confirmation)
 POST http://localhost:9000/mcp/message
