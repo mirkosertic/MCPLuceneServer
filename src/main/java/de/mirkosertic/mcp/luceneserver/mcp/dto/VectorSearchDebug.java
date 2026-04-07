@@ -27,7 +27,6 @@ public record VectorSearchDebug(
             float luceneScore,
             float cosineScore,
             boolean passedThreshold,
-            int vectorRank,
-            float rrfContribution
+            int vectorRank
     ) {}
 }

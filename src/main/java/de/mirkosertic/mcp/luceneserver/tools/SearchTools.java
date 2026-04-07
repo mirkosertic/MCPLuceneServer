@@ -157,7 +157,7 @@ public class SearchTools implements McpToolProvider {
                     request.effectivePageSize(),
                     request.effectiveSortBy(),
                     request.effectiveSortOrder(),
-                    request.effectiveUseVectorSearch());
+                    LuceneIndexService.QueryMode.EXTENDED);
             final long durationMs = (System.nanoTime() - startTime) / 1_000_000;
             queryRuntimeStats.recordQuery(durationMs, result.totalHits(),
                     result.facetTotalDurationMicros(), result.facetFieldDurationMicros());
