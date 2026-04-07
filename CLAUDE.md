@@ -24,13 +24,16 @@ For user-facing documentation, see **README.md**.
 
 | Component | File | Responsibility |
 |-----------|------|----------------|
-| **LuceneSearchTools** | `LuceneSearchTools.java` | MCP tool endpoints, request/response handling |
-| **LuceneIndexService** | `LuceneIndexService.java` | Lucene IndexWriter/Searcher, NRT, admin ops |
-| **DocumentCrawlerService** | `DocumentCrawlerService.java` | Directory walking, batch processing, state management |
-| **FileContentExtractor** | `FileContentExtractor.java` | Apache Tika integration, metadata extraction |
-| **DocumentIndexer** | `DocumentIndexer.java` | Lucene document creation, field schema |
-| **CrawlerConfigurationManager** | `CrawlerConfigurationManager.java` | Config file persistence (`~/.mcplucene/config.yaml`) |
-| **DirectoryWatcherService** | `DirectoryWatcherService.java` | File system monitoring for real-time updates |
+| **SearchTools** | `tools/SearchTools.java` | simpleSearch, extendedSearch, semanticSearch, profileQuery, profileSemanticSearch, suggestTerms, getTopTerms |
+| **CrawlerTools** | `tools/CrawlerTools.java` | startCrawl, getCrawlerStats/Status, pause/resume, directory management |
+| **IndexInfoTools** | `tools/IndexInfoTools.java` | getIndexStats, listIndexedFields, getDocumentDetails |
+| **IndexAdminTools** | `tools/IndexAdminTools.java` | indexAdmin, optimizeIndex, purgeIndex, unlockIndex, getIndexAdminStatus, UiResource |
+| **LuceneIndexService** | `index/LuceneIndexService.java` | Lucene IndexWriter/Searcher, NRT, admin ops, semantic search |
+| **DocumentCrawlerService** | `crawler/DocumentCrawlerService.java` | Directory walking, batch processing, state management |
+| **FileContentExtractor** | `crawler/FileContentExtractor.java` | Apache Tika integration, metadata extraction |
+| **DocumentIndexer** | `crawler/DocumentIndexer.java` | Lucene document creation, field schema |
+| **CrawlerConfigurationManager** | `crawler/CrawlerConfigurationManager.java` | Config file persistence (`~/.mcplucene/config.yaml`) |
+| **DirectoryWatcherService** | `crawler/DirectoryWatcherService.java` | File system monitoring for real-time updates |
 
 ---
 
