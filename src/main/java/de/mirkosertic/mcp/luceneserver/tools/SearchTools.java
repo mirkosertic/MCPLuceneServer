@@ -376,20 +376,20 @@ public class SearchTools implements McpToolProvider {
                     request.effectiveSimilarityThreshold());
 
             final SearchResponse response = SearchResponse.success(
-                    result.searchResult().documents(),
-                    result.searchResult().totalHits(),
-                    result.searchResult().page(),
-                    result.searchResult().pageSize(),
-                    result.searchResult().totalPages(),
-                    result.searchResult().hasNextPage(),
-                    result.searchResult().hasPreviousPage(),
+                    result.documents(),
+                    result.totalHits(),
+                    result.page(),
+                    result.pageSize(),
+                    result.totalPages(),
+                    result.hasNextPage(),
+                    result.hasPreviousPage(),
                     Map.of(),
-                    result.searchResult().activeFilters(),
+                    List.of(),
                     result.embeddingDurationMs()
             );
 
             logger.info("SemanticSearch completed in {}ms: {} total hits (above threshold={})",
-                    result.embeddingDurationMs(), result.searchResult().totalHits(), request.effectiveSimilarityThreshold());
+                    result.embeddingDurationMs(), result.totalHits(), request.effectiveSimilarityThreshold());
 
             return ToolResultHelper.createResult(response);
 
@@ -409,26 +409,20 @@ public class SearchTools implements McpToolProvider {
                 request.query(), request.effectiveFilters().size(), request.effectiveSimilarityThreshold());
 
         try {
-            final SemanticSearchResult result = indexService.semanticSearch(
-                    request.query() != null ? request.query() : "",
-                    request.effectiveFilters(),
-                    0,
-                    10,
-                    request.effectiveSimilarityThreshold());
+            final LuceneIndexService.SemanticSearchWithDebugResult debugResult =
+                    indexService.semanticSearchWithDebug(
+                            request.query() != null ? request.query() : "",
+                            request.effectiveFilters(),
+                            0,
+                            10,
+                            request.effectiveSimilarityThreshold());
 
-            final int filteredCandidateCount = (int) result.searchResult().totalHits();
-
-            final ProfileSemanticSearchResponse response = ProfileSemanticSearchResponse.success(
-                    result.embeddingDurationMs(),
-                    result.rawCandidateCount(),
-                    filteredCandidateCount,
-                    result.cosineCutoff(),
-                    result.topCandidates(),
-                    result
-            );
+            final ProfileSemanticSearchResponse response = ProfileSemanticSearchResponse.success(debugResult);
 
             logger.info("ProfileSemanticSearch completed in {}ms: rawCandidates={}, filtered={}",
-                    result.embeddingDurationMs(), result.rawCandidateCount(), filteredCandidateCount);
+                    debugResult.searchResult().embeddingDurationMs(),
+                    debugResult.searchResult().rawCandidateCount(),
+                    (int) debugResult.searchResult().totalHits());
 
             return ToolResultHelper.createResult(response);
 

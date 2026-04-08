@@ -135,8 +135,8 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        assertThat(result.searchResult().documents()).hasSize(1);
-        assertThat(result.searchResult().documents().get(0).passages()).hasSize(1);
+        assertThat(result.documents()).hasSize(1);
+        assertThat(result.documents().get(0).passages()).hasSize(1);
     }
 
     @Test
@@ -152,8 +152,8 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        assertThat(result.searchResult().documents()).hasSize(1);
-        assertThat(result.searchResult().documents().get(0).passages()).hasSize(2);
+        assertThat(result.documents()).hasSize(1);
+        assertThat(result.documents().get(0).passages()).hasSize(2);
     }
 
     @Test
@@ -170,7 +170,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        final List<Passage> passages = result.searchResult().documents().get(0).passages();
+        final List<Passage> passages = result.documents().get(0).passages();
         assertThat(passages).hasSizeGreaterThanOrEqualTo(2);
         assertThat(passages.get(0).score())
                 .as("First passage should have score >= second passage score")
@@ -190,7 +190,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        final List<Passage> passages = result.searchResult().documents().get(0).passages();
+        final List<Passage> passages = result.documents().get(0).passages();
         final List<Integer> chunkIndices = passages.stream()
                 .map(Passage::chunkIndex)
                 .sorted()
@@ -212,7 +212,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        final double score = result.searchResult().documents().get(0).passages().get(0).score();
+        final double score = result.documents().get(0).passages().get(0).score();
         assertThat(score)
                 .as("Passage score should be in [0.0, 1.0]")
                 .isGreaterThanOrEqualTo(0.0)
@@ -232,7 +232,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        final List<Passage> passages = result.searchResult().documents().get(0).passages();
+        final List<Passage> passages = result.documents().get(0).passages();
         assertThat(passages).isNotEmpty();
         assertThat(passages).allMatch(p -> "semantic".equals(p.source()));
     }
@@ -250,7 +250,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        final double position = result.searchResult().documents().get(0).passages().get(0).position();
+        final double position = result.documents().get(0).passages().get(0).position();
         assertThat(position).isEqualTo(0.0);
     }
 
@@ -267,7 +267,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        final List<Passage> passages = result.searchResult().documents().get(0).passages();
+        final List<Passage> passages = result.documents().get(0).passages();
         assertThat(passages).hasSizeGreaterThanOrEqualTo(2);
 
         final Passage chunk0 = passages.stream()
@@ -297,7 +297,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        final SearchDocument doc = result.searchResult().documents().get(0);
+        final SearchDocument doc = result.documents().get(0);
         assertThat(doc.filePath())
                 .as("filePath should not be null or blank")
                 .isNotNull()
@@ -324,7 +324,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        final SearchDocument doc = result.searchResult().documents().get(0);
+        final SearchDocument doc = result.documents().get(0);
         assertThat(doc.score())
                 .as("Document score should equal the score of the first (top) passage")
                 .isEqualTo(doc.passages().get(0).score());
@@ -368,16 +368,16 @@ class SemanticSearchDocumentGroupingTest {
         indexFileWithContent(file3, "Third document for pagination test.");
 
         final SemanticSearchResult page0 = indexService.semanticSearch("query", null, 0, 2, 0.0f);
-        assertThat(page0.searchResult().documents())
+        assertThat(page0.documents())
                 .as("Page 0 with pageSize=2 should return 2 documents")
                 .hasSize(2);
 
         final SemanticSearchResult page1 = indexService.semanticSearch("query", null, 1, 2, 0.0f);
-        assertThat(page1.searchResult().documents())
+        assertThat(page1.documents())
                 .as("Page 1 with pageSize=2 should return the remaining 1 document")
                 .hasSize(1);
 
-        assertThat(page0.searchResult().totalHits())
+        assertThat(page0.totalHits())
                 .as("Total hits should be 3 (distinct parents)")
                 .isEqualTo(3);
     }
@@ -397,7 +397,7 @@ class SemanticSearchDocumentGroupingTest {
 
         final SemanticSearchResult result = indexService.semanticSearch("query", null, 0, 10, 0.0f);
 
-        assertThat(result.searchResult().totalHits())
+        assertThat(result.totalHits())
                 .as("totalHits should be 2 (distinct parent documents), not 4 (chunks)")
                 .isEqualTo(2);
     }

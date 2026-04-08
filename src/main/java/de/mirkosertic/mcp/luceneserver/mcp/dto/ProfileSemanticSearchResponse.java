@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.mcp.dto;
 
+import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.index.SemanticSearchResult;
 import org.jspecify.annotations.Nullable;
 
@@ -15,22 +16,23 @@ public record ProfileSemanticSearchResponse(
         int rawCandidateCount,
         int filteredCandidateCount,
         float cosineCutoff,
-        @Nullable List<VectorSearchDebug.VectorCandidateInfo> topCandidates,
+        @Nullable List<VectorSearchDebug.VectorCandidateInfo> knnDebugCandidates,
         @Nullable SemanticSearchResult searchResults
 ) {
     /**
-     * Create a successful profile semantic search response.
+     * Create a successful profile semantic search response from a debug result.
      */
     public static ProfileSemanticSearchResponse success(
-            final long embeddingDurationMs,
-            final int rawCandidateCount,
-            final int filteredCandidateCount,
-            final float cosineCutoff,
-            final @Nullable List<VectorSearchDebug.VectorCandidateInfo> topCandidates,
-            final @Nullable SemanticSearchResult searchResults) {
+            final LuceneIndexService.SemanticSearchWithDebugResult debugResult) {
+        final SemanticSearchResult r = debugResult.searchResult();
         return new ProfileSemanticSearchResponse(
-                true, null, embeddingDurationMs, rawCandidateCount,
-                filteredCandidateCount, cosineCutoff, topCandidates, searchResults
+                true, null,
+                r.embeddingDurationMs(),
+                r.rawCandidateCount(),
+                (int) r.totalHits(),
+                r.cosineCutoff(),
+                debugResult.knnCandidates(),
+                r
         );
     }
 
