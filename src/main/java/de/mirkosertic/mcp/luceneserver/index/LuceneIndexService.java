@@ -1717,37 +1717,6 @@ public class LuceneIndexService {
      * Scan {@code text} for occurrences of each query term (case-insensitive, unicode-aware)
      * and wrap the first occurrence of each term in {@code **markdown bold**} markers.
      * This is used for semantic passages where Lucene's term-vector-based highlighter
-     * could not find matches.
-     *
-     * @param text       the raw chunk text
-     * @param queryTerms terms to highlight (may be empty or null)
-     * @return text with first occurrence of each matched query term wrapped in {@code **...**};
-     *         original text unchanged if no terms or no matches found
-     */
-    private static String applySimpleTermBolding(final String text, final Set<String> queryTerms) {
-        if (text == null || queryTerms == null || queryTerms.isEmpty()) {
-            return text;
-        }
-        String result = text;
-        for (final String qt : queryTerms) {
-            if (qt == null || qt.length() < 2) {
-                continue;
-            }
-            final java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
-                    java.util.regex.Pattern.quote(qt),
-                    java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
-            final java.util.regex.Matcher matcher = pattern.matcher(result);
-            if (matcher.find()) {
-                result = result.substring(0, matcher.start())
-                        + "**"
-                        + result.substring(matcher.start(), matcher.end())
-                        + "**"
-                        + result.substring(matcher.end());
-            }
-        }
-        return result;
-    }
-
     /**
      * Extract all terms wrapped in {@code **markdown bold**} markers from a highlighted passage.
      * Duplicates are removed (case-insensitive); order follows first appearance.
@@ -3353,33 +3322,34 @@ public class LuceneIndexService {
         final IndexSearcher searcher = searcherManager.acquire();
         try {
             // Retrieve top-50 nearest-neighbour child chunk documents.
-            // NOTE: User filters (language, file_extension, etc.) must NOT be applied as a KNN
-            // pre-filter here, because those fields only exist on *parent* documents, not on
-            // child chunk documents. A pre-filter would match zero child docs and return empty
-            // results. Instead we apply filters as a post-filter during parent document lookup.
+            // NOTE: User filters must NOT be applied as KNN pre-filter here because
+            // filter fields only exist on parent documents, not on child chunk documents.
             final int knnCandidates = 50;
             final KnnFloatVectorQuery knnQuery = new KnnFloatVectorQuery("embedding", queryVector, knnCandidates);
-
             final TopDocs vectorTopDocs = searcher.search(knnQuery, knnCandidates);
             final int rawCandidateCount = vectorTopDocs.scoreDocs.length;
 
-            // Group by file_path — keep best-scoring chunk per parent document
-            final Map<String, Float> bestScoreByPath = new LinkedHashMap<>();
-            final Map<String, String> bestChunkTextByPath = new LinkedHashMap<>();
+            // Local record to hold per-chunk match data
+            record ChunkMatch(int chunkIndex, String chunkText, float cosineScore, float position) {}
+
+            // Group ALL chunks that pass the threshold by parent file_path
+            final Map<String, List<ChunkMatch>> chunksByPath = new LinkedHashMap<>();
 
             // Collect top candidate debug info (all raw candidates, before threshold)
             final List<VectorSearchDebug.VectorCandidateInfo> topCandidates = new ArrayList<>();
 
-            // TODO: This is off and maybe also wrong here
             for (int candidateIdx = 0; candidateIdx < vectorTopDocs.scoreDocs.length; candidateIdx++) {
                 final ScoreDoc scoreDoc = vectorTopDocs.scoreDocs[candidateIdx];
-                final float cosineScoreRaw = 2.0f * scoreDoc.score - 1.0f;
+                final float cosineScore = 2.0f * scoreDoc.score - 1.0f;
                 final Document childDoc = searcher.storedFields().document(scoreDoc.doc);
                 final String filePath = childDoc.get("file_path");
                 final String chunkText = childDoc.get("chunk_text");
                 final int chunkIndex = childDoc.getField("chunk_index") != null
                         ? childDoc.getField("chunk_index").numericValue().intValue()
                         : candidateIdx;
+                final float chunkPosition = childDoc.getField("chunk_position") != null
+                        ? childDoc.getField("chunk_position").numericValue().floatValue()
+                        : 0.0f;
                 final boolean passedThreshold = scoreDoc.score >= luceneScoreThreshold;
 
                 topCandidates.add(new VectorSearchDebug.VectorCandidateInfo(
@@ -3387,47 +3357,35 @@ public class LuceneIndexService {
                         chunkIndex,
                         chunkText,
                         scoreDoc.score,
-                        cosineScoreRaw,
+                        cosineScore,
                         passedThreshold,
                         candidateIdx + 1
                 ));
 
-                // Apply cosine similarity threshold (Lucene score = (1 + cosine) / 2)
-                if (!passedThreshold) {
+                if (!passedThreshold || filePath == null) {
                     continue;
                 }
 
-                if (filePath == null) {
-                    continue;
-                }
-
-                // Convert Lucene DOT_PRODUCT score back to cosine similarity
-                final float cosineScore = cosineScoreRaw;
-
-                if (!bestScoreByPath.containsKey(filePath) || cosineScore > bestScoreByPath.get(filePath)) {
-                    bestScoreByPath.put(filePath, cosineScore);
-                    bestChunkTextByPath.put(filePath, chunkText != null ? chunkText : "");
-                }
+                chunksByPath.computeIfAbsent(filePath, k -> new ArrayList<>())
+                        .add(new ChunkMatch(chunkIndex, chunkText != null ? chunkText : "", cosineScore, chunkPosition));
             }
 
-            // Sort paths by descending cosine score
-            final List<String> sortedPaths = bestScoreByPath.entrySet().stream()
-                    .sorted(Map.Entry.<String, Float>comparingByValue().reversed())
+            // Sort parents by their best chunk cosine score (descending)
+            final List<String> sortedPaths = chunksByPath.entrySet().stream()
+                    .sorted(Comparator.comparingDouble(
+                            e -> -e.getValue().stream().mapToDouble(ChunkMatch::cosineScore).max().orElse(0)))
                     .map(Map.Entry::getKey)
                     .toList();
 
-            // Apply pagination
+            // Apply pagination over parents
             final int startIdx = page * pageSize;
             final int endIdx = Math.min(startIdx + pageSize, sortedPaths.size());
 
-            final List<Passage> results = new ArrayList<>();
+            final List<SearchDocument> documents = new ArrayList<>();
             for (int i = startIdx; i < endIdx; i++) {
                 final String filePath = sortedPaths.get(i);
 
-                // Look up the parent document for metadata, applying user filters as a post-filter.
-                // Filters are evaluated here (against parent documents) rather than as a KNN
-                // pre-filter, because filter fields (language, file_extension, author, etc.)
-                // only exist on parent documents, not on child chunk documents.
+                // Look up the parent document, applying user filters as a post-filter.
                 final BooleanQuery.Builder parentQueryBuilder = new BooleanQuery.Builder()
                         .add(new TermQuery(new Term("file_path", filePath)), BooleanClause.Occur.MUST)
                         .add(new TermQuery(new Term(DocumentIndexer.DOC_TYPE_FIELD, DocumentIndexer.DOC_TYPE_PARENT)),
@@ -3442,19 +3400,56 @@ public class LuceneIndexService {
                     continue;
                 }
 
-                final float cosineScore = bestScoreByPath.get(filePath);
-                final String chunkText = bestChunkTextByPath.get(filePath);
+                final Document parentDoc = searcher.storedFields().document(parentDocs.scoreDocs[0].doc);
 
-                // Build a semantic Passage using the best-matching chunk text.
-                // Position is 0.0 (sentinel) since chunk offset within parent is not stored.
-                final double normalizedScore = Math.round((double) cosineScore * 100.0) / 100.0;
-                final String cleanedText = chunkText != null && !chunkText.isBlank()
-                        ? TextCleaner.clean(chunkText)
-                        : "";
-                results.add(new Passage(cleanedText, normalizedScore, List.of(), 0.0, 0.0, "semantic", null));
+                // Sort this parent's matching chunks by cosine score descending
+                final List<ChunkMatch> chunks = new ArrayList<>(chunksByPath.get(filePath));
+                chunks.sort(Comparator.comparingDouble(ChunkMatch::cosineScore).reversed());
+
+                // Build one Passage per matching chunk
+                final List<Passage> passages = chunks.stream()
+                        .map(c -> new Passage(
+                                TextCleaner.clean(c.chunkText()),
+                                Math.round((double) c.cosineScore() * 100.0) / 100.0,
+                                List.of(),
+                                0.0,
+                                c.position(),
+                                "semantic",
+                                c.chunkIndex()
+                        ))
+                        .toList();
+
+                final SearchDocument searchDoc = SearchDocument.builder()
+                        .score(passages.get(0).score())
+                        .filePath(parentDoc.get("file_path"))
+                        .fileName(parentDoc.get("file_name"))
+                        .title(parentDoc.get("title"))
+                        .author(parentDoc.get("author"))
+                        .creator(parentDoc.get("creator"))
+                        .subject(parentDoc.get("subject"))
+                        .language(parentDoc.get("language"))
+                        .fileExtension(parentDoc.get("file_extension"))
+                        .fileType(parentDoc.get("file_type"))
+                        .fileSize(parentDoc.get("file_size"))
+                        .createdDate(parentDoc.get("created_date"))
+                        .modifiedDate(parentDoc.get("modified_date"))
+                        .indexedDate(parentDoc.get("indexed_date"))
+                        .passages(passages)
+                        .build();
+                documents.add(searchDoc);
             }
 
-            return new SemanticSearchResult(results, bestScoreByPath.size(), embeddingDurationMs, similarityThreshold, rawCandidateCount, topCandidates);
+            final SearchResult searchResult = new SearchResult(
+                    documents,
+                    chunksByPath.size(),
+                    page,
+                    pageSize,
+                    Map.of(),
+                    List.of(),
+                    Map.of(),
+                    0L
+            );
+            return new SemanticSearchResult(searchResult, embeddingDurationMs, similarityThreshold, rawCandidateCount, topCandidates);
         } finally {
             searcherManager.release(searcher);
         }

@@ -375,25 +375,21 @@ public class SearchTools implements McpToolProvider {
                     request.effectivePageSize(),
                     request.effectiveSimilarityThreshold());
 
-            // Build a minimal SearchResponse from the semantic results
-            // Semantic search returns Passages; wrap them in a simple response without facets
             final SearchResponse response = SearchResponse.success(
-                    List.of(),
-                    result.totalHits(),
-                    request.effectivePage(),
-                    request.effectivePageSize(),
-                    result.totalHits() > 0
-                            ? (int) Math.ceil((double) result.totalHits() / request.effectivePageSize())
-                            : 0,
-                    (request.effectivePage() + 1) * request.effectivePageSize() < result.totalHits(),
-                    request.effectivePage() > 0,
+                    result.searchResult().documents(),
+                    result.searchResult().totalHits(),
+                    result.searchResult().page(),
+                    result.searchResult().pageSize(),
+                    result.searchResult().totalPages(),
+                    result.searchResult().hasNextPage(),
+                    result.searchResult().hasPreviousPage(),
                     Map.of(),
-                    List.of(),
+                    result.searchResult().activeFilters(),
                     result.embeddingDurationMs()
             );
 
             logger.info("SemanticSearch completed in {}ms: {} total hits (above threshold={})",
-                    result.embeddingDurationMs(), result.totalHits(), request.effectiveSimilarityThreshold());
+                    result.embeddingDurationMs(), result.searchResult().totalHits(), request.effectiveSimilarityThreshold());
 
             return ToolResultHelper.createResult(response);
 
@@ -420,7 +416,7 @@ public class SearchTools implements McpToolProvider {
                     10,
                     request.effectiveSimilarityThreshold());
 
-            final int filteredCandidateCount = result.totalHits();
+            final int filteredCandidateCount = (int) result.searchResult().totalHits();
 
             final ProfileSemanticSearchResponse response = ProfileSemanticSearchResponse.success(
                     result.embeddingDurationMs(),

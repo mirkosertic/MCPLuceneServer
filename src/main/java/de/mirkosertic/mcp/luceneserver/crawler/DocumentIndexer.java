@@ -47,8 +47,9 @@ public class DocumentIndexer {
      * Version 8: Added TypeTokenFilter and CompoundLemmaSplittingFilter to OpenNLPLemmatizingAnalyzer chain
      *            to filter punctuation tokens and split German compound lemmas (e.g., "in+der" → "in", "der").
      * Version 9: Added _doc_type field to parent documents and child document support with KNN vector embeddings.
+     * Version 10: Added chunk_position stored field to child documents (normalized position 0.0–1.0).
      */
-    public static final int SCHEMA_VERSION = 9;
+    public static final int SCHEMA_VERSION = 10;
 
     /** Field name used to distinguish parent documents from child (chunk) documents. */
     public static final String DOC_TYPE_FIELD = "_doc_type";
@@ -224,12 +225,15 @@ public class DocumentIndexer {
      */
     public List<Document> createChildDocuments(final String filePath, final List<float[]> embeddings, final List<String> chunkTexts) {
         final List<Document> children = new ArrayList<>(embeddings.size());
-        for (int i = 0; i < embeddings.size(); i++) {
+        final int total = embeddings.size();
+        for (int i = 0; i < total; i++) {
             final Document child = new Document();
             child.add(new StringField(DOC_TYPE_FIELD, DOC_TYPE_CHILD, Field.Store.YES));
             child.add(new StringField("file_path", filePath, Field.Store.YES));
             child.add(new StoredField("chunk_index", i));
             child.add(new StoredField("chunk_text", chunkTexts.get(i)));
+            final float chunkPosition = total <= 1 ? 0.0f : (float) i / (total - 1);
+            child.add(new StoredField("chunk_position", chunkPosition));
             child.add(new KnnFloatVectorField("embedding", embeddings.get(i), VectorSimilarityFunction.DOT_PRODUCT));
             children.add(child);
         }
