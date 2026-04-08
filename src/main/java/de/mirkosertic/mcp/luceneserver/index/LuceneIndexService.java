@@ -28,7 +28,6 @@ import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreComponent;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoreDetails;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ScoringBreakdown;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
-import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorMatchInfo;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.VectorSearchDebug;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchMetrics;
@@ -768,7 +767,6 @@ public class LuceneIndexService {
 
             // 8. Collect results for the requested page (BM25 only — hybrid RRF removed)
             final ScoreDoc[] scoreDocs = topDocs.scoreDocs;
-            final Map<Integer, VectorMatchInfo> vectorMatchInfoByDocId = Map.of();
             final List<SearchDocument> results = new ArrayList<>();
 
             for (int i = startIndex; i < scoreDocs.length && i < maxResults; i++) {
@@ -776,10 +774,8 @@ public class LuceneIndexService {
 
                 logger.debug("Query for highlighting: {}", highlightQuery);
                 final String content = doc.get("content");
-                //alsdkaskdjask
-                final VectorMatchInfo vectorMatchInfo = vectorMatchInfoByDocId.get(scoreDocs[i].doc);
                 final List<Passage> passages = createPassages(
-                        content, highlightQuery, highlighter, maxPassages, maxPassageCharLength, queryTerms, scoreDocs[i], vectorMatchInfo);
+                        content, highlightQuery, highlighter, maxPassages, maxPassageCharLength, queryTerms, scoreDocs[i]);
 
                 final SearchDocument searchDoc = SearchDocument.builder()
                         .score(scoreDocs[i].score)
@@ -797,7 +793,6 @@ public class LuceneIndexService {
                         .modifiedDate(doc.get("modified_date"))
                         .indexedDate(doc.get("indexed_date"))
                         .passages(passages)
-                        .vectorMatchInfo(vectorMatchInfo)
                         .build();
 
                 results.add(searchDoc);
@@ -1634,8 +1629,7 @@ public class LuceneIndexService {
                                          final int maxPassages,
                                          final int maxPassageCharLength,
                                          final Set<String> queryTerms,
-                                         final ScoreDoc scoreDoc,
-                                         final VectorMatchInfo vectorMatchInfo) {
+                                         final ScoreDoc scoreDoc) {
         // Null or empty content -- nothing to extract
         if (content == null || content.isEmpty()) {
             return List.of();
@@ -1653,25 +1647,9 @@ public class LuceneIndexService {
             logger.warn("Highlighting failed for doc {}; synthesising fallback passage", scoreDoc.doc, e);
         }
 
-        // Fallback: synthesise a single passage from the start of the content,
-        // or from the best-matching vector chunk if available (more relevant for semantic hits)
+        // Fallback: synthesise a single passage from the start of the content
         if (formattedPassages == null || formattedPassages.isEmpty()) {
-            if (hasUsableChunkText(vectorMatchInfo)) {
-                return List.of(createSemanticPassage(
-                        vectorMatchInfo.matchedChunkText(), queryTerms,
-                        vectorMatchInfo.vectorScore(), maxPassageCharLength));
-            }
             return List.of(createFallbackPassage(content));
-        }
-
-        // If the highlighter returned passages but none had actual term matches, the document was
-        // found via vector similarity only. Prefer the matched chunk text as a semantic passage
-        // since it is more relevant than an arbitrary sentence from the document.
-        final boolean noTermMatchesAtAll = formattedPassages.stream().allMatch(fp -> fp.numMatches() == 0);
-        if (noTermMatchesAtAll && hasUsableChunkText(vectorMatchInfo)) {
-            return List.of(createSemanticPassage(
-                    vectorMatchInfo.matchedChunkText(), queryTerms,
-                    vectorMatchInfo.vectorScore(), maxPassageCharLength));
         }
 
         // Find the maximum passage score for normalisation to [0, 1]
@@ -1716,11 +1694,6 @@ public class LuceneIndexService {
 
         // If all passages were blank (unlikely but defensive), return a fallback
         if (passages.isEmpty()) {
-            if (hasUsableChunkText(vectorMatchInfo)) {
-                return List.of(createSemanticPassage(
-                        vectorMatchInfo.matchedChunkText(), queryTerms,
-                        vectorMatchInfo.vectorScore(), maxPassageCharLength));
-            }
             return List.of(createFallbackPassage(content));
         }
 
@@ -1738,47 +1711,6 @@ public class LuceneIndexService {
         // Remove broken/invalid characters from fallback passage
         final String cleanedFallbackText = TextCleaner.clean(fallbackText);
         return new Passage(cleanedFallbackText, 0.0, List.of(), 0.0, 0.0, "keyword");
-    }
-
-    /**
-     * Create a passage from the best-matching vector chunk when the BM25 highlighter
-     * found no term matches.  Query terms are highlighted by simple case-insensitive
-     * string scanning, mirroring the fallback in {@link #extractMatchedTerms}.
-     *
-     * @param chunkText          the stored chunk_text for the best-matching child document (non-null)
-     * @param queryTerms         query terms to scan for and bold
-     * @param vectorScore        raw Lucene dot-product similarity score (0.0–1.0)
-     * @param maxPassageCharLength maximum allowed passage length in characters
-     * @return a single Passage with source="semantic"
-     */
-    private static Passage createSemanticPassage(final String chunkText,
-                                                  final Set<String> queryTerms,
-                                                  final float vectorScore,
-                                                  final int maxPassageCharLength) {
-        // Apply simple term bolding via string scan (no term vectors needed)
-        final String bolded = applySimpleTermBolding(chunkText, queryTerms);
-        final String cleaned = TextCleaner.clean(cleanPassageText(bolded));
-        if (cleaned == null || cleaned.isBlank()) {
-            // Extreme edge case: return chunk text as-is with sentinel values
-            return new Passage(chunkText, 0.0, List.of(), 0.0, 0.0, "semantic");
-        }
-        final String truncated = truncatePassage(cleaned, maxPassageCharLength);
-        final List<String> matchedTerms = extractMatchedTerms(truncated, queryTerms);
-        final double termCoverage = calculateTermCoverage(matchedTerms, queryTerms);
-        // Normalize vector score to 2 decimal places for consistency with keyword path
-        final double normalizedScore = Math.round((double) vectorScore * 100.0) / 100.0;
-        // position=0.0 is a sentinel: chunk offset within parent document is not stored
-        return new Passage(truncated, normalizedScore, matchedTerms, termCoverage, 0.0, "semantic");
-    }
-
-    /**
-     * Returns true when the given {@link VectorMatchInfo} contains usable chunk text
-     * that can serve as a semantic passage fallback.
-     */
-    private static boolean hasUsableChunkText(final VectorMatchInfo vmi) {
-        return vmi != null && vmi.matchedViaVector()
-                && vmi.matchedChunkText() != null
-                && !vmi.matchedChunkText().isBlank();
     }
 
     /**
@@ -3438,6 +3370,7 @@ public class LuceneIndexService {
             // Collect top candidate debug info (all raw candidates, before threshold)
             final List<VectorSearchDebug.VectorCandidateInfo> topCandidates = new ArrayList<>();
 
+            // TODO: This is off and maybe also wrong here
             for (int candidateIdx = 0; candidateIdx < vectorTopDocs.scoreDocs.length; candidateIdx++) {
                 final ScoreDoc scoreDoc = vectorTopDocs.scoreDocs[candidateIdx];
                 final float cosineScoreRaw = 2.0f * scoreDoc.score - 1.0f;
@@ -3445,7 +3378,7 @@ public class LuceneIndexService {
                 final String filePath = childDoc.get("file_path");
                 final String chunkText = childDoc.get("chunk_text");
                 final int chunkIndex = childDoc.getField("chunk_index") != null
-                        ? Integer.parseInt(childDoc.get("chunk_index"))
+                        ? childDoc.getField("chunk_index").numericValue().intValue()
                         : candidateIdx;
                 final boolean passedThreshold = scoreDoc.score >= luceneScoreThreshold;
 
