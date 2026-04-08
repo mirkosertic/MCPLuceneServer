@@ -3369,6 +3369,7 @@ public class LuceneIndexService {
             throw new IOException("Failed to embed query string: " + e.getMessage(), e);
         }
         final long embeddingDurationMs = (System.nanoTime() - embeddingStart) / 1_000_000;
+        logger.info("Embedding computation took {} ms", embeddingDurationMs);
 
         // Convert cosine similarity threshold to Lucene DOT_PRODUCT score threshold.
         // Lucene stores DOT_PRODUCT scores in [0,1] as (1 + cosine) / 2.
@@ -3382,6 +3383,7 @@ public class LuceneIndexService {
             final int knnCandidates = 50;
             final KnnFloatVectorQuery knnQuery = new KnnFloatVectorQuery("embedding", queryVector, knnCandidates);
             final TopDocs vectorTopDocs = searcher.search(knnQuery, knnCandidates);
+            logger.info("Found {} nearest-neighbour candidates, checking for threshold {}", vectorTopDocs.scoreDocs.length, luceneScoreThreshold);
             final int rawCandidateCount = vectorTopDocs.scoreDocs.length;
 
             // Local record to hold per-chunk match data
@@ -3403,6 +3405,7 @@ public class LuceneIndexService {
                         ? childDoc.getField("chunk_position").numericValue().floatValue()
                         : 0.0f;
                 final boolean passedThreshold = scoreDoc.score >= luceneScoreThreshold;
+                logger.debug("Candidate {}: score={}, cosineScore={}, position={}, passedThreshold={}", candidateIdx, scoreDoc.score, cosineScore, scoreDoc.doc, passedThreshold);
 
                 // Only allocate debug info when the caller wants it
                 if (debugCandidatesOut != null) {
