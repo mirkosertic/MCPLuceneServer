@@ -77,6 +77,7 @@ import org.apache.lucene.search.uhighlight.UnifiedHighlighter;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -3277,6 +3278,15 @@ public class LuceneIndexService {
     }
 
     /**
+     * Extended result of a semantic search that also carries raw KNN debug candidates.
+     * Only produced by the profiling/debug code path; never returned to MCP clients directly.
+     */
+    public record SemanticSearchWithDebugResult(
+            SemanticSearchResult searchResult,
+            List<VectorSearchDebug.VectorCandidateInfo> knnCandidates
+    ) {}
+
+    /**
      * Perform a pure KNN semantic search using the ONNX embedding model.
      *
      * <p>The query string is embedded using the query prefix and used to find the
@@ -3285,12 +3295,12 @@ public class LuceneIndexService {
      * documents are resolved via a secondary lookup and paged according to {@code page}
      * and {@code pageSize}.</p>
      *
-     * @param queryString        the natural-language query to embed
-     * @param filters            optional filters to apply as a post-filter on parent documents
-     * @param page               zero-based page number
-     * @param pageSize           number of results per page
+     * @param queryString         the natural-language query to embed
+     * @param filters             optional filters to apply as a post-filter on parent documents
+     * @param page                zero-based page number
+     * @param pageSize            number of results per page
      * @param similarityThreshold cosine similarity threshold (0.0–1.0); candidates below this are dropped
-     * @return a {@link SemanticSearchResult} with paged passages, total hit count,
+     * @return a flat {@link SemanticSearchResult} with paged passages, total hit count,
      *         embedding latency, and the effective cosine cutoff applied
      * @throws IOException           if reading from the index fails
      * @throws IllegalStateException if the ONNX service is not configured
@@ -3301,6 +3311,51 @@ public class LuceneIndexService {
             final int page,
             final int pageSize,
             final float similarityThreshold) throws IOException {
+        return doSemanticSearch(queryString, filters, page, pageSize, similarityThreshold, null);
+    }
+
+    /**
+     * Perform a semantic search and also collect raw KNN debug candidates for profiling.
+     *
+     * <p>This is the debug/profiling variant of {@link #semanticSearch}. It behaves
+     * identically but additionally populates the {@code knnCandidates} list in the
+     * returned {@link SemanticSearchWithDebugResult} with all raw KNN hits before
+     * threshold filtering.</p>
+     *
+     * @param queryString         the natural-language query to embed
+     * @param filters             optional filters to apply as a post-filter on parent documents
+     * @param page                zero-based page number
+     * @param pageSize            number of results per page
+     * @param similarityThreshold cosine similarity threshold (0.0–1.0); candidates below this are dropped
+     * @return a {@link SemanticSearchWithDebugResult} containing the search result and raw KNN candidates
+     * @throws IOException           if reading from the index fails
+     * @throws IllegalStateException if the ONNX service is not configured
+     */
+    public SemanticSearchWithDebugResult semanticSearchWithDebug(
+            final String queryString,
+            final List<SearchFilter> filters,
+            final int page,
+            final int pageSize,
+            final float similarityThreshold) throws IOException {
+        final List<VectorSearchDebug.VectorCandidateInfo> knnCandidates = new ArrayList<>();
+        final SemanticSearchResult result = doSemanticSearch(
+                queryString, filters, page, pageSize, similarityThreshold, knnCandidates);
+        return new SemanticSearchWithDebugResult(result, knnCandidates);
+    }
+
+    /**
+     * Private implementation that drives both {@link #semanticSearch} and
+     * {@link #semanticSearchWithDebug}.
+     *
+     * @param debugCandidatesOut when non-null, all raw KNN candidates are added to this list
+     */
+    private SemanticSearchResult doSemanticSearch(
+            final String queryString,
+            final List<SearchFilter> filters,
+            final int page,
+            final int pageSize,
+            final float similarityThreshold,
+            final @Nullable List<VectorSearchDebug.VectorCandidateInfo> debugCandidatesOut) throws IOException {
 
         if (onnxService == null) {
             throw new IllegalStateException("Semantic search requires VECTOR_MODEL to be configured");
@@ -3335,9 +3390,6 @@ public class LuceneIndexService {
             // Group ALL chunks that pass the threshold by parent file_path
             final Map<String, List<ChunkMatch>> chunksByPath = new LinkedHashMap<>();
 
-            // Collect top candidate debug info (all raw candidates, before threshold)
-            final List<VectorSearchDebug.VectorCandidateInfo> topCandidates = new ArrayList<>();
-
             for (int candidateIdx = 0; candidateIdx < vectorTopDocs.scoreDocs.length; candidateIdx++) {
                 final ScoreDoc scoreDoc = vectorTopDocs.scoreDocs[candidateIdx];
                 final float cosineScore = 2.0f * scoreDoc.score - 1.0f;
@@ -3352,15 +3404,18 @@ public class LuceneIndexService {
                         : 0.0f;
                 final boolean passedThreshold = scoreDoc.score >= luceneScoreThreshold;
 
-                topCandidates.add(new VectorSearchDebug.VectorCandidateInfo(
-                        filePath != null ? filePath : "",
-                        chunkIndex,
-                        chunkText,
-                        scoreDoc.score,
-                        cosineScore,
-                        passedThreshold,
-                        candidateIdx + 1
-                ));
+                // Only allocate debug info when the caller wants it
+                if (debugCandidatesOut != null) {
+                    debugCandidatesOut.add(new VectorSearchDebug.VectorCandidateInfo(
+                            filePath != null ? filePath : "",
+                            chunkIndex,
+                            chunkText,
+                            scoreDoc.score,
+                            cosineScore,
+                            passedThreshold,
+                            candidateIdx + 1
+                    ));
+                }
 
                 if (!passedThreshold || filePath == null) {
                     continue;
@@ -3439,17 +3494,15 @@ public class LuceneIndexService {
                 documents.add(searchDoc);
             }
 
-            final SearchResult searchResult = new SearchResult(
+            return new SemanticSearchResult(
                     documents,
                     chunksByPath.size(),
                     page,
                     pageSize,
-                    Map.of(),
-                    List.of(),
-                    Map.of(),
-                    0L
+                    embeddingDurationMs,
+                    similarityThreshold,
+                    rawCandidateCount
             );
-            return new SemanticSearchResult(searchResult, embeddingDurationMs, similarityThreshold, rawCandidateCount, topCandidates);
         } finally {
             searcherManager.release(searcher);
         }

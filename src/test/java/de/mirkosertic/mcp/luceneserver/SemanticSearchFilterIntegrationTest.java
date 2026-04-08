@@ -130,7 +130,7 @@ class SemanticSearchFilterIntegrationTest {
         final SemanticSearchResult result = indexService.semanticSearch(
                 "some query", null, 0, 10, 0.0f);
 
-        assertThat(result.searchResult().documents())
+        assertThat(result.documents())
                 .as("Without filters both documents should be returned")
                 .hasSize(2);
     }
@@ -148,12 +148,12 @@ class SemanticSearchFilterIntegrationTest {
         final SemanticSearchResult result = indexService.semanticSearch(
                 "some query", List.of(langFilter), 0, 10, 0.0f);
 
-        assertThat(result.searchResult().documents())
+        assertThat(result.documents())
                 .as("With language=de filter, only the German document should be returned")
                 .hasSize(1);
 
         // The passage text should contain content from the German document
-        final String passageText = result.searchResult().documents().get(0).passages().get(0).text();
+        final String passageText = result.documents().get(0).passages().get(0).text();
         assertThat(passageText)
                 .as("The returned passage should be from the German document")
                 .contains("Deutsch");
@@ -172,11 +172,11 @@ class SemanticSearchFilterIntegrationTest {
         final SemanticSearchResult result = indexService.semanticSearch(
                 "some query", List.of(langFilter), 0, 10, 0.0f);
 
-        assertThat(result.searchResult().documents())
+        assertThat(result.documents())
                 .as("With language=en filter, only the English document should be returned")
                 .hasSize(1);
 
-        final String passageText = result.searchResult().documents().get(0).passages().get(0).text();
+        final String passageText = result.documents().get(0).passages().get(0).text();
         assertThat(passageText)
                 .as("The returned passage should be from the English document")
                 .contains("English");
@@ -193,7 +193,7 @@ class SemanticSearchFilterIntegrationTest {
         final SemanticSearchResult result = indexService.semanticSearch(
                 "some query", List.of(langFilter), 0, 10, 0.0f);
 
-        assertThat(result.searchResult().documents())
+        assertThat(result.documents())
                 .as("Filter for non-existent language should return no results")
                 .isEmpty();
     }
@@ -214,11 +214,11 @@ class SemanticSearchFilterIntegrationTest {
         final SemanticSearchResult result = indexService.semanticSearch(
                 "some query", List.of(extFilter), 0, 10, 0.0f);
 
-        assertThat(result.searchResult().documents())
+        assertThat(result.documents())
                 .as("With file_extension=txt filter, only the .txt document should be returned")
                 .hasSize(1);
 
-        final String passageText = result.searchResult().documents().get(0).passages().get(0).text();
+        final String passageText = result.documents().get(0).passages().get(0).text();
         assertThat(passageText)
                 .as("The returned passage should be from the .txt document")
                 .contains("plain text");
@@ -243,14 +243,14 @@ class SemanticSearchFilterIntegrationTest {
         // Page 0, size 2: should return 2 German documents
         final SemanticSearchResult page0 = indexService.semanticSearch(
                 "some query", List.of(langFilter), 0, 2, 0.0f);
-        assertThat(page0.searchResult().documents())
+        assertThat(page0.documents())
                 .as("Page 0 with size 2 should return 2 German documents")
                 .hasSize(2);
 
         // Page 1, size 2: should return the remaining 1 German document
         final SemanticSearchResult page1 = indexService.semanticSearch(
                 "some query", List.of(langFilter), 1, 2, 0.0f);
-        assertThat(page1.searchResult().documents())
+        assertThat(page1.documents())
                 .as("Page 1 with size 2 should return 1 remaining German document")
                 .hasSize(1);
     }
