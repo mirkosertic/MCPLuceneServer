@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver.mcp.dto;
 
 import de.mirkosertic.mcp.luceneserver.mcp.Description;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 
@@ -15,8 +16,7 @@ public record Passage(
         @Description("The highlighted passage text. Query terms that matched are wrapped in **markdown bold** syntax.")
         String text,
 
-        @Description("Passage relevance score normalised to the 0.0-1.0 range. " +
-                "Derived from the highlighter's passage ordering: the first (best) passage receives the highest score.")
+        @Description("Passage relevance score in the 0.0–1.0 range. For keyword passages: normalised rank from the BM25 highlighter (1.0 = best passage). For semantic passages: cosine similarity between this chunk and the query embedding.")
         double score,
 
         @Description("Query terms that were found in this passage, extracted from the text between markdown bold markers (**). " +
@@ -27,13 +27,14 @@ public record Passage(
                 "A value of 1.0 means every query term is present; useful for filtering passages that cover the full query.")
         double termCoverage,
 
-        @Description("Approximate position of this passage within the source document " +
-                "(0.0 = very start, 1.0 = very end). Helpful for understanding document structure " +
-                "and for citations that need to reference a location.")
+        @Description("Normalised position within the source document (0.0 = first chunk / start, 1.0 = last chunk / end). For keyword passages computed from byte offset; for semantic passages stored at index time.")
         double position,
 
-        @Description("Passage source: 'keyword' = BM25 highlighter found term matches in the indexed document; " +
-                "'semantic' = no keyword term matches were found, best-matching vector chunk used as snippet instead.")
-        String source
+        @Description("'keyword' = BM25 term-match passage extracted by the highlighter; 'semantic' = chunk retrieved by KNN vector similarity.")
+        String source,
+
+        @Description("Zero-based index of the embedding chunk within the source document. " +
+                     "Present only for semantic passages; null for keyword passages.")
+        @Nullable Integer chunkIndex
 ) {
 }

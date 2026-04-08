@@ -1689,7 +1689,7 @@ public class LuceneIndexService {
             // (content is guaranteed non-empty by the early return at the top of this method)
             final double position = Math.round((double) fp.startOffset() / content.length() * 100.0) / 100.0;
 
-            passages.add(new Passage(cleanedPassageText, normalizedScore, matchedTerms, termCoverage, position, "keyword"));
+            passages.add(new Passage(cleanedPassageText, normalizedScore, matchedTerms, termCoverage, position, "keyword", null));
         }
 
         // If all passages were blank (unlikely but defensive), return a fallback
@@ -1710,7 +1710,7 @@ public class LuceneIndexService {
                 (content.length() > fallbackLength ? "..." : ""));
         // Remove broken/invalid characters from fallback passage
         final String cleanedFallbackText = TextCleaner.clean(fallbackText);
-        return new Passage(cleanedFallbackText, 0.0, List.of(), 0.0, 0.0, "keyword");
+        return new Passage(cleanedFallbackText, 0.0, List.of(), 0.0, 0.0, "keyword", null);
     }
 
     /**
@@ -3451,7 +3451,7 @@ public class LuceneIndexService {
                 final String cleanedText = chunkText != null && !chunkText.isBlank()
                         ? TextCleaner.clean(chunkText)
                         : "";
-                results.add(new Passage(cleanedText, normalizedScore, List.of(), 0.0, 0.0, "semantic"));
+                results.add(new Passage(cleanedText, normalizedScore, List.of(), 0.0, 0.0, "semantic", null));
             }
 
             return new SemanticSearchResult(results, bestScoreByPath.size(), embeddingDurationMs, similarityThreshold, rawCandidateCount, topCandidates);
