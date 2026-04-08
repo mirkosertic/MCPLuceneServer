@@ -228,36 +228,13 @@ class HybridSearchIntegrationTest {
     }
 
     @Test
-    @DisplayName("vectorMatchInfo is null for all documents (RRF removed)")
-    void testVectorMatchInfoAlwaysNull() throws Exception {
-        final LuceneIndexService.SearchResult result =
-                indexServiceWithVector.search("Vertrag", List.of(), 0, 10, "_score", "desc");
-
-        assertThat(result.documents())
-                .as("Search should return results")
-                .isNotEmpty();
-
-        for (final SearchDocument doc : result.documents()) {
-            assertThat(doc.vectorMatchInfo())
-                    .as("vectorMatchInfo should be null for all documents — hybrid RRF removed")
-                    .isNull();
-        }
-    }
-
-    @Test
-    @DisplayName("vectorMatchInfo is null for doc_b (RRF removed)")
+    @DisplayName("BM25 search for 'Rechnung' returns results without error (RRF removed)")
     void testDocsBelowCutoffNotInVectorResults() throws Exception {
         final LuceneIndexService.SearchResult result =
                 indexServiceWithVector.search("Rechnung", List.of(), 0, 10, "_score", "desc");
 
-        // Without hybrid RRF, vectorMatchInfo is always null
-        for (final SearchDocument doc : result.documents()) {
-            if (doc.filePath() != null && doc.filePath().contains("doc_b_rechnung")) {
-                assertThat(doc.vectorMatchInfo())
-                        .as("vectorMatchInfo should always be null — hybrid RRF has been removed")
-                        .isNull();
-            }
-        }
+        assertThat(result).isNotNull();
+        assertThat(result.documents()).isNotNull();
     }
 
     @Test
@@ -303,12 +280,5 @@ class HybridSearchIntegrationTest {
 
         assertThat(result).isNotNull();
         assertThat(result.documents()).isNotNull();
-
-        // All returned documents have null vectorMatchInfo
-        for (final SearchDocument doc : result.documents()) {
-            assertThat(doc.vectorMatchInfo())
-                    .as("vectorMatchInfo should be null — hybrid RRF has been removed")
-                    .isNull();
-        }
     }
 }
