@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
 import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
+import de.mirkosertic.mcp.luceneserver.metadata.JdbcMetadataEnricher;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
@@ -48,8 +49,9 @@ public class DocumentIndexer {
      *            to filter punctuation tokens and split German compound lemmas (e.g., "in+der" → "in", "der").
      * Version 9: Added _doc_type field to parent documents and child document support with KNN vector embeddings.
      * Version 10: Added chunk_position stored field to child documents (normalized position 0.0–1.0).
+     * Version 11: Added JDBC metadata enrichment support (dbmeta_* fields injected at index time).
      */
-    public static final int SCHEMA_VERSION = 10;
+    public static final int SCHEMA_VERSION = 11;
 
     /** Field name used to distinguish parent documents from child (chunk) documents. */
     public static final String DOC_TYPE_FIELD = "_doc_type";
@@ -63,14 +65,39 @@ public class DocumentIndexer {
     // FacetsConfig for faceting configuration
     private final FacetsConfig facetsConfig;
 
-    public DocumentIndexer() {
+    @org.jspecify.annotations.Nullable
+    private volatile JdbcMetadataEnricher jdbcMetadataEnricher;
+
+    /**
+     * Constructor with optional JDBC metadata enricher.
+     *
+     * @param jdbcMetadataEnricher enricher to apply at document creation time, or {@code null} to skip
+     */
+    public DocumentIndexer(@org.jspecify.annotations.Nullable final JdbcMetadataEnricher jdbcMetadataEnricher) {
+        this.jdbcMetadataEnricher = jdbcMetadataEnricher;
         this.facetsConfig = new FacetsConfig();
         // Configure multi-valued facet fields
         facetsConfig.setMultiValued("author", true);
     }
 
+    /** Backward-compatible no-arg constructor (no JDBC enrichment). */
+    public DocumentIndexer() {
+        this(null);
+    }
+
     public FacetsConfig getFacetsConfig() {
         return facetsConfig;
+    }
+
+    /**
+     * Late-wire the JDBC metadata enricher after LuceneIndexService has been created.
+     * This breaks the construction-time circular dependency between DocumentIndexer and
+     * LuceneIndexService without requiring a two-phase constructor.
+     *
+     * @param enricher the enricher to use, or {@code null} to disable enrichment
+     */
+    public void setJdbcMetadataEnricher(@org.jspecify.annotations.Nullable final JdbcMetadataEnricher enricher) {
+        this.jdbcMetadataEnricher = enricher;
     }
 
     public Document createDocument(final Path filePath, final ExtractedDocument extracted) {
@@ -212,6 +239,16 @@ public class DocumentIndexer {
             }
         }
 
+        // JDBC metadata enrichment — MUST happen BEFORE facetsConfig.build() in indexDocument()
+        // so that setMultiValued() calls made by the enricher take effect.
+        if (jdbcMetadataEnricher != null) {
+            try {
+                jdbcMetadataEnricher.enrich(doc, this);
+            } catch (final Exception e) {
+                logger.warn("JDBC metadata enrichment failed for {}: {}", filePath, e.getMessage());
+            }
+        }
+
         return doc;
     }
 
@@ -232,7 +269,7 @@ public class DocumentIndexer {
             child.add(new StringField("file_path", filePath, Field.Store.YES));
             child.add(new StoredField("chunk_index", i));
             child.add(new StoredField("chunk_text", chunkTexts.get(i)));
-            final float chunkPosition = total <= 1 ? 0.0f : (float) i / (total - 1);
+            final float chunkPosition = total == 1 ? 0.0f : (float) i / (total - 1);
             child.add(new StoredField("chunk_position", chunkPosition));
             child.add(new KnnFloatVectorField("embedding", embeddings.get(i), VectorSimilarityFunction.DOT_PRODUCT));
             children.add(child);

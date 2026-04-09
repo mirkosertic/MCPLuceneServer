@@ -38,6 +38,13 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - File type and size information
 - SHA-256 content hashing for change detection
 
+**JDBC Metadata Enrichment**
+- Load additional metadata from PostgreSQL, MySQL, or any JDBC-compatible database at index time
+- JSON-based metadata with explicit field types (keyword, text, int, long, date)
+- Multi-value field support, automatic facet registration
+- Background sync job for incremental metadata updates (configurable interval)
+- All DB-sourced fields prefixed with `dbmeta_` to avoid schema collisions
+
 **Text Normalization**
 - Automatic removal of broken/invalid characters (replacement chars, control chars, zero-width chars)
 - Whitespace normalization (multiple spaces collapsed to single space)
@@ -77,6 +84,7 @@ A Model Context Protocol (MCP) server that exposes Apache Lucene fulltext search
 - [Security Considerations](#security-considerations)
 - [Configuration Options](#configuration-options)
   - [Document Crawler Configuration](#document-crawler-configuration)
+- [JDBC Metadata Enrichment](#jdbc-metadata-enrichment)
 - [Development](#development)
   - [Running for Development](#running-for-development)
   - [Debugging with MCP Inspector](#debugging-with-mcp-inspector)
@@ -2177,6 +2185,272 @@ lucene:
     # No content limit (index full documents)
     max-content-length: -1
 ```
+
+## JDBC Metadata Enrichment
+
+The server can enrich indexed documents with additional metadata loaded from a relational database at index time. This is useful when business metadata (e.g. customer IDs, project codes, tags) is stored in a database rather than in the files themselves.
+
+### How It Works
+
+1. For each document during crawling, the enricher executes a configurable SQL query.
+2. The query result is a single row with a JSON column containing the metadata payload.
+3. The JSON payload is parsed and typed fields are added to the Lucene document.
+4. A background sync job re-indexes files when their DB metadata changes.
+
+### Field Naming
+
+All JDBC-sourced fields are prefixed with `dbmeta_` to avoid collisions with the base document schema.
+
+| JSON field name | Lucene field name    |
+|-----------------|----------------------|
+| `customer_id`   | `dbmeta_customer_id` |
+| `tags`          | `dbmeta_tags`        |
+| `department`    | `dbmeta_department`  |
+
+### JSON Metadata Format
+
+The database query must return a column (configurable via `json.columnName`) containing JSON in this format:
+
+```json
+{
+  "fields": [
+    {
+      "name": "customer_id",
+      "type": "keyword",
+      "value": "C-42",
+      "faceted": true
+    },
+    {
+      "name": "tags",
+      "type": "keyword",
+      "values": ["invoice", "2024", "urgent"],
+      "faceted": true
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "value": "Some free-text description"
+    },
+    {
+      "name": "amount",
+      "type": "long",
+      "value": 9999,
+      "faceted": true
+    },
+    {
+      "name": "doc_date",
+      "type": "date",
+      "value": "2024-01-15T00:00:00Z"
+    }
+  ]
+}
+```
+
+**Field types:**
+
+| Type      | Lucene storage          | Facetable | Notes                                             |
+|-----------|-------------------------|-----------|---------------------------------------------------|
+| `keyword` | StringField             | Yes       | Exact match; use for IDs, codes, categories       |
+| `text`    | TextField               | No        | Analyzed fulltext; suitable for long descriptions |
+| `int`     | IntPoint + StoredField  | Yes       | 32-bit integer; range queries supported           |
+| `long`    | LongPoint + StoredField | Yes       | 64-bit integer; range queries supported           |
+| `date`    | LongPoint + StoredField | No        | ISO-8601 string → epoch millis                    |
+
+**Optional per-field flags:**
+
+| Flag         | Default | Description                                              |
+|--------------|---------|----------------------------------------------------------|
+| `faceted`    | `false` | Expose as search facet (keyword/long only)               |
+| `stored`     | `true`  | Store the value so it is retrievable from search results |
+| `searchable` | `true`  | Index the field for querying                             |
+
+### Configuration
+
+Add the following section to `~/.mcplucene/config.yaml`:
+
+```yaml
+lucene:
+  crawler:
+    directories:
+      - /path/to/your/documents
+  metadata:
+    jdbc:
+      enabled: true
+      url: "jdbc:postgresql://localhost:5432/mydb"
+      username: "myuser"
+      password: "${DB_PASSWORD}"   # env-var substitution supported
+      poolSize: 5
+      connectionTimeout: 30000    # ms
+      queryTimeout: 5000          # ms
+      query: >
+        SELECT metadata_json
+        FROM document_metadata
+        WHERE file_path = :file_path
+      parameters:
+        - name: file_path
+          sourceField: file_path   # Lucene field to use as query parameter
+      json:
+        columnName: metadata_json  # Column in the result set containing the JSON
+
+      # Optional: background sync when DB metadata changes
+      sync:
+        enabled: true
+        intervalMinutes: 5
+        query: >
+          SELECT file_path, updated_at
+          FROM document_metadata
+          WHERE updated_at > :last_sync_timestamp
+        filePathColumn: file_path
+        timestampColumn: updated_at
+```
+
+### Advanced Example: Building Metadata Dynamically from a Table (MySQL)
+
+Metadata is often not stored as pre-built JSON but spread across normalized tables. MySQL's `JSON_OBJECT()` / `JSON_ARRAY()` / `JSON_ARRAYAGG()` functions let you assemble the metadata payload directly in the SQL query — no separate materialized view or ETL job required.
+
+#### Scenario
+
+Documents are freelancer profile PDFs. File names follow the pattern `.../ABC-1234_Profile.pdf`, where `ABC-1234` is a unique freelancer code. The relevant tables:
+
+```sql
+-- Master data
+CREATE TABLE freelancer (
+    id               BIGINT PRIMARY KEY,
+    code             VARCHAR(20) UNIQUE,   -- e.g. "ABC-1234"
+    salary_per_day   DECIMAL(10, 2)
+);
+
+-- n:m tags
+CREATE TABLE freelancer_tags (
+    freelancer_id    BIGINT,
+    tag_id           BIGINT
+);
+```
+
+#### Configuration
+
+```yaml
+lucene:
+  metadata:
+    jdbc:
+      enabled: true
+      url: "jdbc:mysql://localhost:3306/mydb"
+      username: "myuser"
+      password: "${DB_PASSWORD}"
+      poolSize: 5
+      connectionTimeout: 30000
+      queryTimeout: 5000
+      query: |
+        SELECT JSON_OBJECT(
+                      'fields', JSON_ARRAY(
+                            JSON_OBJECT('name', 'daily_rate', 'type', 'long', 'value', f.salary_per_day_long, 'faceted', CAST(FALSE AS JSON)),
+                            JSON_OBJECT('name', 'tags',       'type', 'long', 'values', (
+                                SELECT JSON_ARRAYAGG(ft.tag_id)
+                                FROM freelancer_tags ft
+                                WHERE ft.freelancer_id = f.id
+                            ), 'faceted', CAST(FALSE AS JSON))
+                      )
+              ) as metadata_json
+        FROM
+            freelancer f
+        WHERE
+            f.code = REGEXP_SUBSTR(:file_path, '[A-Z]+-[0-9]+')
+      parameters:
+        - name: file_path
+          sourceField: file_path   # Lucene field to use as query parameter
+      json:
+        columnName: metadata_json  # Column in the result set containing the JSON
+```
+
+#### How It Works Step by Step
+
+**1. Parameter binding — the file path as a lookup key**
+
+During crawling, the indexer stores the absolute file path in the Lucene field `file_path` (e.g. `/docs/profiles/ABC-1234_Profile.pdf`). Via `parameters.sourceField: file_path`, that value is passed as the named parameter `:file_path` to the SQL query.
+
+**2. Extracting the freelancer code with a regex**
+
+Because the full file path is passed to the database, the code must be extracted there. `REGEXP_SUBSTR(:file_path, '[A-Z]+-[0-9]+')` pulls `ABC-1234` out of `/docs/profiles/ABC-1234_Profile.pdf` and matches it against `freelancer.code`. The database needs no knowledge of directory structures — the regex runs entirely inside the DB engine.
+
+**3. Assembling the JSON payload in SQL**
+
+`JSON_OBJECT(...)` produces a JSON object. Inside it, a `JSON_ARRAY(...)` contains one element per metadata field:
+
+- **`daily_rate`** (type `long`): a single scalar value from `f.salary_per_day_long`
+- **`tags`** (type `long`, multi-value): an array produced by a correlated subquery — `JSON_ARRAYAGG(ft.tag_id)` aggregates all tag IDs for the freelancer into a JSON array
+
+The query returns a single row with a single column `metadata_json`:
+
+```json
+{
+  "fields": [
+    { "name": "daily_rate", "type": "long", "value": 850,              "faceted": false },
+    { "name": "tags",       "type": "long", "values": [12, 47, 103],   "faceted": false }
+  ]
+}
+```
+
+**4. Processing by the indexer**
+
+`JdbcMetadataEnricher` reads this JSON response and adds fields to the Lucene document:
+
+- `dbmeta_daily_rate` → `LongPoint(850)` + `StoredField(850)` (searchable and retrievable)
+- `dbmeta_tags` → three `LongPoint` entries for values `12`, `47`, `103` (multi-valued)
+
+Because `faceted: false`, no `SortedSetDocValuesFacetField` entries are created. The fields are available for targeted queries and range filters without adding overhead to the facet computation on every search request.
+
+**5. Querying at runtime**
+
+After crawling, these fields can be used as filters in `extendedSearch`:
+
+```json
+{
+  "query": "Java developer",
+  "filters": [
+    { "field": "dbmeta_daily_rate", "operator": "range", "from": "500", "to": "1000" },
+    { "field": "dbmeta_tags",       "operator": "in",    "values": ["47", "103"] }
+  ]
+}
+```
+
+#### Note on `CAST(FALSE AS JSON)`
+
+MySQL has no native JSON boolean literal. `CAST(FALSE AS JSON)` produces the JSON value `false`, which `JsonMetadataParser` correctly interprets as `faceted: false`. Use `CAST(TRUE AS JSON)` for `faceted: true`.
+
+---
+
+### Supported Databases
+
+| Database   | Driver dependency           | Notes                            |
+|------------|-----------------------------|----------------------------------|
+| PostgreSQL | included (optional runtime) | `jdbc:postgresql://...`          |
+| MySQL      | included (optional runtime) | `jdbc:mysql://...`               |
+| H2         | test scope only             | `jdbc:h2:...` (for tests)        |
+| Any JDBC   | Add to classpath            | Set `driverClassName` explicitly |
+
+### Facet Integration
+
+Fields declared with `"faceted": true` are automatically registered as dynamic facet dimensions. They appear alongside the built-in facets (`language`, `file_extension`, `file_type`, `author`) in search results and can be used as filter values.
+
+Multi-valued fields (using `"values": [...]`) are automatically configured as multi-valued facet dimensions.
+
+### Background Sync
+
+When `sync.enabled: true`, the server runs a background job every `intervalMinutes` minutes that:
+1. Queries the database for records modified since the last sync.
+2. Re-indexes affected files with the latest metadata.
+3. Removes index entries for files that no longer exist on disk.
+
+The last sync timestamp is persisted in `~/.mcplucene/metadata-sync-state.yaml`.
+
+### Error Handling
+
+The enricher follows a "skip and warn" resilience pattern:
+- DB connection failures: document is indexed without enrichment, warning is logged.
+- Query errors: same skip-and-warn behavior.
+- Invalid JSON payloads: parsing errors are logged, field is skipped.
+- NULL values: silently ignored per field.
+- Field name collisions with base schema: error logged, field skipped.
 
 ## Development
 

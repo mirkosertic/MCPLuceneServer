@@ -372,6 +372,34 @@ public class DocumentCrawlerService implements FileChangeListener {
         }
     }
 
+    /**
+     * Re-index a single file (used by the metadata sync service to pick up fresh DB metadata).
+     *
+     * <p>Concurrency warning: this method is NOT thread-safe with an ongoing crawl.
+     * Call it only when no crawl is active, or accept the risk of a duplicate index entry
+     * (idempotent but slightly wasteful).</p>
+     *
+     * @param file path to the file to re-index
+     * @throws IOException if extraction or indexing fails
+     */
+    public void reindexSingleFile(final Path file) throws IOException {
+        logger.info("Re-indexing file (metadata sync): {}", file);
+        final String filePath = file.toString();
+        if (!Files.exists(file)) {
+            logger.warn("reindexSingleFile called for non-existent file: {}", file);
+            return;
+        }
+        final ExtractedDocument extracted = contentExtractor.extract(file);
+        if (extracted.content() == null || extracted.content().isBlank()) {
+            logger.debug("Skipping re-index of file with no extractable content: {}", file);
+            documentIndexer.deleteDocument(indexService.getIndexWriter(), filePath);
+            return;
+        }
+        final Document document = documentIndexer.createDocument(file, extracted);
+        documentIndexer.indexDocument(document, extracted.content(), indexService);
+        // Caller (MetadataSyncService) is responsible for calling commit() after the batch.
+    }
+
     private void startCommitTimer() {
         final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
             final Thread t = new Thread(r, "commit-timer");

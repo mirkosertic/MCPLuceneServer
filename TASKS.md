@@ -19,12 +19,6 @@ Use for implementation the `implement-review-loop`-agent (see CLAUDE.md).
   the tools are available at localhost:9000. There are no security requirements for the tools. Creste
   variants as need if the tools api allows different parameters and usages. Document each tool call
   and its intention in the .http file.
-- [ ] Restructure the God Tool Class into separate Modules (Index Admin, Crawler Config, Search)
-  allow each module to be enabled independently. Only MCP tools of enabled modules
-  are exposed. The project Java package structure should mirror the module structure.
-  All modules are enabled by default, but the list if enabled modules can be defined
-  using the known profiles environment variable and its mechanism.
-  Separateo Tools for the different search functionalities: regular, expert and semantic.
-  Add an additional profile Tool for the semantic search.
 - [ ] Fair Assesment: Lucene vs. PostgreSQL vs. MySQL for Fulltextsearch based on the current
   indexing pipeline documented in PIPELINE.md
+- [ ] OpenNLP vs HuggingFace for Lemmatization, which one is better?

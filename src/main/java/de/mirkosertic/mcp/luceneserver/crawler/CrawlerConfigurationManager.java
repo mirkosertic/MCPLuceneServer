@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
+import de.mirkosertic.mcp.luceneserver.metadata.JdbcMetadataConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.DumperOptions;
@@ -13,9 +14,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Manages persistent storage of crawler configuration in ~/.mcplucene/config.yaml
@@ -276,6 +279,119 @@ public class CrawlerConfigurationManager {
      */
     public Path getCrawlStatePath() {
         return Paths.get(System.getProperty("user.home"), CONFIG_DIR, CRAWL_STATE_FILE);
+    }
+
+    /**
+     * Load JDBC metadata enrichment configuration from {@code ~/.mcplucene/config.yaml}.
+     * <p>
+     * The configuration is expected under the path {@code lucene.metadata.jdbc}.
+     * Returns {@code Optional.empty()} if the section is absent, disabled, or cannot be parsed.
+     *
+     * @return optional JDBC config
+     */
+    @SuppressWarnings("unchecked")
+    public synchronized Optional<JdbcMetadataConfig> loadJdbcMetadataConfig() {
+        final Path configPath = getConfigPath();
+        if (!Files.exists(configPath)) {
+            logger.debug("Config file does not exist, no JDBC metadata config: {}", configPath);
+            return Optional.empty();
+        }
+
+        try (final Reader reader = Files.newBufferedReader(configPath)) {
+            final Map<String, Object> root = yaml.load(reader);
+            if (root == null) {
+                return Optional.empty();
+            }
+
+            final Map<String, Object> lucene = (Map<String, Object>) root.get("lucene");
+            if (lucene == null) {
+                return Optional.empty();
+            }
+
+            final Map<String, Object> metadata = (Map<String, Object>) lucene.get("metadata");
+            if (metadata == null) {
+                return Optional.empty();
+            }
+
+            final Map<String, Object> jdbc = (Map<String, Object>) metadata.get("jdbc");
+            if (jdbc == null) {
+                return Optional.empty();
+            }
+
+            final boolean enabled = Boolean.TRUE.equals(jdbc.getOrDefault("enabled", false));
+            if (!enabled) {
+                logger.info("JDBC metadata enrichment is disabled");
+                return Optional.empty();
+            }
+
+            final JdbcMetadataConfig config = parseJdbcConfig(jdbc);
+            logger.info("Loaded JDBC metadata config: url={}", config.url());
+            return Optional.of(config);
+
+        } catch (final IOException e) {
+            logger.error("Failed to read config file {}: {}", configPath, e.getMessage());
+            return Optional.empty();
+        } catch (final ClassCastException | IllegalArgumentException e) {
+            logger.error("Failed to parse JDBC metadata config from {}: {}", configPath, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private JdbcMetadataConfig parseJdbcConfig(final Map<String, Object> jdbc) {
+        final boolean enabled = Boolean.TRUE.equals(jdbc.getOrDefault("enabled", false));
+        final String url = (String) jdbc.get("url");
+        if (url == null || url.isBlank()) {
+            throw new IllegalArgumentException("jdbc.url is required");
+        }
+        final String username = (String) jdbc.get("username");
+        final String password = (String) jdbc.get("password");
+        final String driverClassName = (String) jdbc.get("driverClassName");
+        final int poolSize = ((Number) jdbc.getOrDefault("poolSize", 5)).intValue();
+        final int connectionTimeout = ((Number) jdbc.getOrDefault("connectionTimeout", 30000)).intValue();
+        final int queryTimeout = ((Number) jdbc.getOrDefault("queryTimeout", 5000)).intValue();
+
+        final String query = (String) jdbc.get("query");
+        if (query == null || query.isBlank()) {
+            throw new IllegalArgumentException("jdbc.query is required");
+        }
+
+        // Parameters mapping
+        final List<JdbcMetadataConfig.ParameterMapping> parameters = new ArrayList<>();
+        final Object paramsObj = jdbc.get("parameters");
+        if (paramsObj instanceof List) {
+            for (final Object item : (List<?>) paramsObj) {
+                if (item instanceof Map) {
+                    final Map<String, Object> p = (Map<String, Object>) item;
+                    final String name = (String) p.get("name");
+                    final String sourceField = (String) p.get("sourceField");
+                    if (name != null && sourceField != null) {
+                        parameters.add(new JdbcMetadataConfig.ParameterMapping(name, sourceField));
+                    }
+                }
+            }
+        }
+
+        // JSON column config
+        final Map<String, Object> jsonMap = (Map<String, Object>) jdbc.getOrDefault("json", Map.of());
+        final String columnName = (String) jsonMap.getOrDefault("columnName", "metadata");
+        final JdbcMetadataConfig.JsonConfig jsonConfig = new JdbcMetadataConfig.JsonConfig(columnName);
+
+        // Sync config
+        final Map<String, Object> syncMap = (Map<String, Object>) jdbc.getOrDefault("sync", Map.of());
+        final boolean syncEnabled = Boolean.TRUE.equals(syncMap.getOrDefault("enabled", false));
+        final int intervalMinutes = ((Number) syncMap.getOrDefault("intervalMinutes", 5)).intValue();
+        final String syncQuery = (String) syncMap.get("query");
+        final String filePathColumn = (String) syncMap.get("filePathColumn");
+        final String timestampColumn = (String) syncMap.get("timestampColumn");
+        final JdbcMetadataConfig.SyncConfig syncConfig = new JdbcMetadataConfig.SyncConfig(
+                syncEnabled, intervalMinutes, syncQuery, filePathColumn, timestampColumn);
+
+        return new JdbcMetadataConfig(
+                enabled, url, username, password, driverClassName,
+                poolSize, connectionTimeout, queryTimeout,
+                query, Collections.unmodifiableList(parameters),
+                jsonConfig, syncConfig);
     }
 
     /**

@@ -35,6 +35,7 @@ import de.mirkosertic.mcp.luceneserver.mcp.dto.TermStatistics;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper;
 import org.apache.lucene.document.Document;
+import org.apache.lucene.document.IntPoint;
 import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.facet.DrillDownQuery;
 import org.apache.lucene.facet.DrillSideways;
@@ -172,6 +173,12 @@ public class LuceneIndexService {
         COMPLETED,
         FAILED
     }
+
+    /** Dynamically registered facet fields from JDBC metadata enrichment. */
+    private final Set<String> dynamicFacetedFields = new java.util.concurrent.CopyOnWriteArraySet<>();
+    final Set<String> dynamicLongPointFields = new java.util.concurrent.CopyOnWriteArraySet<>();
+    final Set<String> dynamicIntPointFields = new java.util.concurrent.CopyOnWriteArraySet<>();
+    final Set<String> dynamicDateFields = new java.util.concurrent.CopyOnWriteArraySet<>();
 
     private final ApplicationConfig config;
     private final String indexPath;
@@ -605,6 +612,7 @@ public class LuceneIndexService {
             final List<SearchFilter> rangeFilters = new ArrayList<>();
             final List<SearchFilter> stringTermFilters = new ArrayList<>();
             final List<SearchFilter> longPointEqFilters = new ArrayList<>();
+            final List<SearchFilter> intPointEqFilters = new ArrayList<>();
 
             for (final SearchFilter f : filters) {
                 final String op = f.effectiveOperator();
@@ -614,10 +622,12 @@ public class LuceneIndexService {
                     case "not", "not_in" -> negativeFilters.add(f);
                     case "range" -> rangeFilters.add(f);
                     case "eq", "in" -> {
-                        if (FACETED_FIELDS.contains(field)) {
+                        if (FACETED_FIELDS.contains(field) || dynamicFacetedFields.contains(field)) {
                             positiveFacetFilters.add(f);
-                        } else if (LONG_POINT_FIELDS.contains(field)) {
+                        } else if (isLongPointField(field)) {
                             longPointEqFilters.add(f);
+                        } else if (isIntPointField(field)) {
+                            intPointEqFilters.add(f);
                         } else if (STRING_FIELDS.contains(field)) {
                             stringTermFilters.add(f);
                         }
@@ -632,28 +642,42 @@ public class LuceneIndexService {
 
             // Range filters
             for (final SearchFilter rf : rangeFilters) {
-                final long fromVal = rf.from() != null ? parseLongFilterValue(rf.field(), rf.from()) : Long.MIN_VALUE;
-                final long toVal = rf.to() != null ? parseLongFilterValue(rf.field(), rf.to()) : Long.MAX_VALUE;
-                baseBuilder.add(LongPoint.newRangeQuery(rf.field(), fromVal, toVal), BooleanClause.Occur.FILTER);
+                if (isIntPointField(rf.field())) {
+                    final int fromVal = rf.from() != null ? parseIntFilterValue(rf.field(), rf.from()) : Integer.MIN_VALUE;
+                    final int toVal = rf.to() != null ? parseIntFilterValue(rf.field(), rf.to()) : Integer.MAX_VALUE;
+                    baseBuilder.add(IntPoint.newRangeQuery(rf.field(), fromVal, toVal), BooleanClause.Occur.FILTER);
+                } else {
+                    final long fromVal = rf.from() != null ? parseLongFilterValue(rf.field(), rf.from()) : Long.MIN_VALUE;
+                    final long toVal = rf.to() != null ? parseLongFilterValue(rf.field(), rf.to()) : Long.MAX_VALUE;
+                    baseBuilder.add(LongPoint.newRangeQuery(rf.field(), fromVal, toVal), BooleanClause.Occur.FILTER);
+                }
             }
 
             // Negative filters
             for (final SearchFilter nf : negativeFilters) {
                 final String op = nf.effectiveOperator();
                 if ("not".equals(op) && nf.value() != null) {
-                    if (FACETED_FIELDS.contains(nf.field()) || STRING_FIELDS.contains(nf.field())) {
+                    if (FACETED_FIELDS.contains(nf.field()) || STRING_FIELDS.contains(nf.field())
+                            || dynamicFacetedFields.contains(nf.field())) {
                         baseBuilder.add(new TermQuery(new Term(nf.field(), nf.value())), BooleanClause.Occur.MUST_NOT);
-                    } else if (LONG_POINT_FIELDS.contains(nf.field())) {
+                    } else if (isLongPointField(nf.field())) {
                         final long val = parseLongFilterValue(nf.field(), nf.value());
                         baseBuilder.add(LongPoint.newExactQuery(nf.field(), val), BooleanClause.Occur.MUST_NOT);
+                    } else if (isIntPointField(nf.field())) {
+                        final int val = parseIntFilterValue(nf.field(), nf.value());
+                        baseBuilder.add(IntPoint.newExactQuery(nf.field(), val), BooleanClause.Occur.MUST_NOT);
                     }
                 } else if ("not_in".equals(op) && nf.values() != null) {
                     for (final String v : nf.values()) {
-                        if (FACETED_FIELDS.contains(nf.field()) || STRING_FIELDS.contains(nf.field())) {
+                        if (FACETED_FIELDS.contains(nf.field()) || STRING_FIELDS.contains(nf.field())
+                                || dynamicFacetedFields.contains(nf.field())) {
                             baseBuilder.add(new TermQuery(new Term(nf.field(), v)), BooleanClause.Occur.MUST_NOT);
-                        } else if (LONG_POINT_FIELDS.contains(nf.field())) {
+                        } else if (isLongPointField(nf.field())) {
                             final long val = parseLongFilterValue(nf.field(), v);
                             baseBuilder.add(LongPoint.newExactQuery(nf.field(), val), BooleanClause.Occur.MUST_NOT);
+                        } else if (isIntPointField(nf.field())) {
+                            final int val = parseIntFilterValue(nf.field(), v);
+                            baseBuilder.add(IntPoint.newExactQuery(nf.field(), val), BooleanClause.Occur.MUST_NOT);
                         }
                     }
                 }
@@ -683,6 +707,20 @@ public class LuceneIndexService {
                         vals[i] = parseLongFilterValue(lf.field(), lf.values().get(i));
                     }
                     baseBuilder.add(LongPoint.newSetQuery(lf.field(), vals), BooleanClause.Occur.FILTER);
+                }
+            }
+
+            // IntPoint exact/in filters
+            for (final SearchFilter inf : intPointEqFilters) {
+                if ("eq".equals(inf.effectiveOperator()) && inf.value() != null) {
+                    final int val = parseIntFilterValue(inf.field(), inf.value());
+                    baseBuilder.add(IntPoint.newExactQuery(inf.field(), val), BooleanClause.Occur.FILTER);
+                } else if ("in".equals(inf.effectiveOperator()) && inf.values() != null) {
+                    final int[] vals = new int[inf.values().size()];
+                    for (int i = 0; i < inf.values().size(); i++) {
+                        vals[i] = parseIntFilterValue(inf.field(), inf.values().get(i));
+                    }
+                    baseBuilder.add(IntPoint.newSetQuery(inf.field(), vals), BooleanClause.Occur.FILTER);
                 }
             }
 
@@ -899,8 +937,78 @@ public class LuceneIndexService {
         logger.info("NRT refresh interval changed to {}ms", intervalMs);
     }
 
+    /**
+     * Register a dynamically created facet field (e.g. from JDBC metadata enrichment).
+     * The field will be included in facet computations for all subsequent searches.
+     *
+     * @param fieldName the fully-qualified Lucene field name (e.g. "dbmeta_customer_id")
+     */
+    public void registerFacetField(final String fieldName) {
+        dynamicFacetedFields.add(fieldName);
+        logger.debug("Registered dynamic facet field: {}", fieldName);
+    }
+
+    /**
+     * Register a dynamically created LongPoint field (e.g. a LONG-type JDBC metadata field).
+     * The field will be treated as a numeric point field for filter query construction.
+     *
+     * @param fieldName the fully-qualified Lucene field name (e.g. "dbmeta_amount")
+     */
+    public void registerLongPointField(final String fieldName) {
+        dynamicLongPointFields.add(fieldName);
+        logger.debug("Registered dynamic LongPoint field: {}", fieldName);
+    }
+
+    /**
+     * Register a dynamically created date field (e.g. a DATE-type JDBC metadata field).
+     * The field will be treated as a date point field, supporting ISO-8601 value parsing.
+     *
+     * @param fieldName the fully-qualified Lucene field name (e.g. "dbmeta_created_at")
+     */
+    public void registerDateField(final String fieldName) {
+        dynamicLongPointFields.add(fieldName);
+        dynamicDateFields.add(fieldName);
+        logger.debug("Registered dynamic date field: {}", fieldName);
+    }
+
+    private boolean isLongPointField(final String field) {
+        return LONG_POINT_FIELDS.contains(field) || dynamicLongPointFields.contains(field);
+    }
+
+    /**
+     * Register a dynamically created IntPoint field (e.g. an INT-type JDBC metadata field).
+     * The field will be treated as a 32-bit numeric point field for filter query construction.
+     *
+     * @param fieldName the fully-qualified Lucene field name (e.g. "dbmeta_count")
+     */
+    public void registerIntPointField(final String fieldName) {
+        dynamicIntPointFields.add(fieldName);
+        logger.debug("Registered dynamic IntPoint field: {}", fieldName);
+    }
+
+    private boolean isIntPointField(final String field) {
+        return dynamicIntPointFields.contains(field);
+    }
+
+    private boolean isDateField(final String field) {
+        return DATE_FIELDS.contains(field) || dynamicDateFields.contains(field);
+    }
+
     public void commit() throws IOException {
         indexWriter.commit();
+    }
+
+    /**
+     * Delete all index documents whose {@code file_path} field matches the given path.
+     * Used by the metadata sync service when a file has been removed from disk but its
+     * metadata entry still exists in the database.
+     *
+     * @param filePath the file path to remove from the index
+     * @throws IOException if the deletion fails
+     */
+    public void deleteDocumentByPath(final String filePath) throws IOException {
+        indexWriter.deleteDocuments(new Term("file_path", filePath));
+        logger.debug("Deleted document from index: {}", filePath);
     }
 
     /**
@@ -950,7 +1058,7 @@ public class LuceneIndexService {
         if (field == null || field.isBlank()) {
             return "Field name is required";
         }
-        if (LONG_POINT_FIELDS.contains(field)) {
+        if (isLongPointField(field) || isIntPointField(field)) {
             return "Field '" + field + "' is a numeric/date point field and does not support term enumeration. " +
                     "Use getIndexStats for date field ranges, or filter with range queries.";
         }
@@ -2248,7 +2356,7 @@ public class LuceneIndexService {
     /**
      * Validate a filter and return an error message, or null if valid.
      */
-    static String validateFilter(final SearchFilter filter) {
+    String validateFilter(final SearchFilter filter) {
         if (filter.field() == null || filter.field().isBlank()) {
             return "Filter field must not be blank";
         }
@@ -2267,8 +2375,8 @@ public class LuceneIndexService {
                     + "' — use query syntax instead (e.g. field:value in the query string)";
         }
 
-        // Range is only valid on LONG_POINT_FIELDS
-        if ("range".equals(op) && !LONG_POINT_FIELDS.contains(filter.field())) {
+        // Range is only valid on LONG_POINT_FIELDS or INT_POINT_FIELDS
+        if ("range".equals(op) && !isLongPointField(filter.field()) && !isIntPointField(filter.field())) {
             return "Range filter is only supported on numeric/date fields: " + LONG_POINT_FIELDS;
         }
 
@@ -2316,8 +2424,8 @@ public class LuceneIndexService {
     /**
      * Parse a filter value to a long — uses ISO-8601 parsing for date fields, Long.parseLong otherwise.
      */
-    static long parseLongFilterValue(final String field, final String value) {
-        if (DATE_FIELDS.contains(field)) {
+    long parseLongFilterValue(final String field, final String value) {
+        if (isDateField(field)) {
             return parseIso8601ToEpochMillis(value);
         }
         try {
@@ -2329,13 +2437,28 @@ public class LuceneIndexService {
     }
 
     /**
+     * Parse a filter value to an int — uses Integer.parseInt.
+     */
+    int parseIntFilterValue(final String field, final String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (final NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "Cannot parse value '" + value + "' as integer for field '" + field + "'");
+        }
+    }
+
+    /**
      * Build facets map from DrillSideways result.
      */
     private FacetBuildResult buildFacetsFromDrillSideways(final Facets facetsResult) {
         final Map<String, List<FacetValue>> facets = new HashMap<>();
         final Map<String, Long> perFieldDurationMicros = new LinkedHashMap<>();
         final long overallStart = System.nanoTime();
-        for (final String dimension : FACETED_FIELDS) {
+        final List<String> allDimensions = java.util.stream.Stream
+                .concat(FACETED_FIELDS.stream(), dynamicFacetedFields.stream())
+                .toList();
+        for (final String dimension : allDimensions) {
             final long fieldStart = System.nanoTime();
             try {
                 final FacetResult facetResult = facetsResult.getTopChildren(100, dimension);
@@ -2345,6 +2468,10 @@ public class LuceneIndexService {
                         values.add(new FacetValue(lv.label, lv.value.intValue()));
                     }
                     facets.put(dimension, values);
+                    if ("author".equals(dimension) && facetResult.labelValues.length > 500) {
+                        logger.warn("author facet has {} unique values - consider whether faceting is appropriate for this corpus size",
+                                facetResult.labelValues.length);
+                    }
                 }
             } catch (final Exception e) {
                 logger.debug("Facet dimension {} not available in DrillSideways result", dimension);
@@ -2378,7 +2505,8 @@ public class LuceneIndexService {
     private long lookupCountInFacetMap(final Map<String, List<FacetValue>> facets, final SearchFilter filter) {
         final String op = filter.effectiveOperator();
         // Only faceted eq/in can be looked up
-        if (!FACETED_FIELDS.contains(filter.field()) || "range".equals(op)) {
+        if ((!FACETED_FIELDS.contains(filter.field()) && !dynamicFacetedFields.contains(filter.field()))
+                || "range".equals(op)) {
             return -1;
         }
         final List<FacetValue> dimValues = facets.get(filter.field());
@@ -2461,8 +2589,11 @@ public class LuceneIndexService {
             // Create facet counts
             final Facets facetsResult = new SortedSetDocValuesFacetCounts(state, facetsCollector);
 
-            // Retrieve top facets for each dimension
-            for (final String dimension : FACETED_FIELDS) {
+            // Retrieve top facets for each dimension (static + dynamically registered)
+            final List<String> allFacetDimensions = java.util.stream.Stream
+                    .concat(FACETED_FIELDS.stream(), dynamicFacetedFields.stream())
+                    .toList();
+            for (final String dimension : allFacetDimensions) {
                 final long fieldStart = System.nanoTime();
                 try {
                     final FacetResult facetResult = facetsResult.getTopChildren(100, dimension);
@@ -2472,6 +2603,10 @@ public class LuceneIndexService {
                             values.add(new FacetValue(lv.label, lv.value.intValue()));
                         }
                         facets.put(dimension, values);
+                        if ("author".equals(dimension) && facetResult.labelValues.length > 500) {
+                            logger.warn("author facet has {} unique values - consider whether faceting is appropriate for this corpus size",
+                                    facetResult.labelValues.length);
+                        }
                     }
                 } catch (final IllegalArgumentException e) {
                     // Dimension doesn't exist in index - skip it
@@ -2910,52 +3045,74 @@ public class LuceneIndexService {
         switch (op) {
             case "not" -> {
                 if (f.value() != null) {
-                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)) {
+                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)
+                            || dynamicFacetedFields.contains(field)) {
                         builder.add(new TermQuery(new Term(field, f.value())), BooleanClause.Occur.MUST_NOT);
-                    } else if (LONG_POINT_FIELDS.contains(field)) {
+                    } else if (isLongPointField(field)) {
                         builder.add(LongPoint.newExactQuery(field, parseLongFilterValue(field, f.value())), BooleanClause.Occur.MUST_NOT);
+                    } else if (isIntPointField(field)) {
+                        builder.add(IntPoint.newExactQuery(field, parseIntFilterValue(field, f.value())), BooleanClause.Occur.MUST_NOT);
                     }
                 }
             }
             case "not_in" -> {
                 if (f.values() != null) {
                     for (final String v : f.values()) {
-                        if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)) {
+                        if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)
+                                || dynamicFacetedFields.contains(field)) {
                             builder.add(new TermQuery(new Term(field, v)), BooleanClause.Occur.MUST_NOT);
-                        } else if (LONG_POINT_FIELDS.contains(field)) {
+                        } else if (isLongPointField(field)) {
                             builder.add(LongPoint.newExactQuery(field, parseLongFilterValue(field, v)), BooleanClause.Occur.MUST_NOT);
+                        } else if (isIntPointField(field)) {
+                            builder.add(IntPoint.newExactQuery(field, parseIntFilterValue(field, v)), BooleanClause.Occur.MUST_NOT);
                         }
                     }
                 }
             }
             case "range" -> {
-                final long fromVal = f.from() != null ? parseLongFilterValue(field, f.from()) : Long.MIN_VALUE;
-                final long toVal = f.to() != null ? parseLongFilterValue(field, f.to()) : Long.MAX_VALUE;
-                builder.add(LongPoint.newRangeQuery(field, fromVal, toVal), BooleanClause.Occur.FILTER);
+                if (isIntPointField(field)) {
+                    final int fromVal = f.from() != null ? parseIntFilterValue(field, f.from()) : Integer.MIN_VALUE;
+                    final int toVal = f.to() != null ? parseIntFilterValue(field, f.to()) : Integer.MAX_VALUE;
+                    builder.add(IntPoint.newRangeQuery(field, fromVal, toVal), BooleanClause.Occur.FILTER);
+                } else {
+                    final long fromVal = f.from() != null ? parseLongFilterValue(field, f.from()) : Long.MIN_VALUE;
+                    final long toVal = f.to() != null ? parseLongFilterValue(field, f.to()) : Long.MAX_VALUE;
+                    builder.add(LongPoint.newRangeQuery(field, fromVal, toVal), BooleanClause.Occur.FILTER);
+                }
             }
             case "eq" -> {
                 if (f.value() != null) {
-                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)) {
+                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)
+                            || dynamicFacetedFields.contains(field)) {
                         builder.add(new TermQuery(new Term(field, f.value())), BooleanClause.Occur.FILTER);
-                    } else if (LONG_POINT_FIELDS.contains(field)) {
+                    } else if (isLongPointField(field)) {
                         builder.add(LongPoint.newExactQuery(field, parseLongFilterValue(field, f.value())), BooleanClause.Occur.FILTER);
+                    } else if (isIntPointField(field)) {
+                        builder.add(IntPoint.newExactQuery(field, parseIntFilterValue(field, f.value())), BooleanClause.Occur.FILTER);
                     }
                 }
             }
             case "in" -> {
                 if (f.values() != null) {
-                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)) {
+                    if (FACETED_FIELDS.contains(field) || STRING_FIELDS.contains(field)
+                            || dynamicFacetedFields.contains(field)) {
                         final BooleanQuery.Builder orBuilder = new BooleanQuery.Builder();
                         for (final String v : f.values()) {
                             orBuilder.add(new TermQuery(new Term(field, v)), BooleanClause.Occur.SHOULD);
                         }
                         builder.add(orBuilder.build(), BooleanClause.Occur.FILTER);
-                    } else if (LONG_POINT_FIELDS.contains(field)) {
+                    } else if (isLongPointField(field)) {
                         final long[] vals = new long[f.values().size()];
                         for (int i = 0; i < f.values().size(); i++) {
                             vals[i] = parseLongFilterValue(field, f.values().get(i));
                         }
                         builder.add(LongPoint.newSetQuery(field, vals), BooleanClause.Occur.FILTER);
+                    } else if (isIntPointField(field)) {
+                        final int[] vals = new int[f.values().size()];
+                        for (int i = 0; i < f.values().size(); i++) {
+                            vals[i] = parseIntFilterValue(field, f.values().get(i));
+                        }
+                        builder.add(IntPoint.newSetQuery(field, vals), BooleanClause.Occur.FILTER);
                     }
                 }
             }
@@ -3150,7 +3307,10 @@ public class LuceneIndexService {
                     searcher.getIndexReader(), documentIndexer.getFacetsConfig());
             final Facets facets = new SortedSetDocValuesFacetCounts(state, result.facetsCollector());
 
-            for (final String dimension : FACETED_FIELDS) {
+            final List<String> allProfileDimensions = java.util.stream.Stream
+                    .concat(FACETED_FIELDS.stream(), dynamicFacetedFields.stream())
+                    .toList();
+            for (final String dimension : allProfileDimensions) {
                 final long dimStart = System.nanoTime();
                 try {
                     final FacetResult fr = facets.getTopChildren(100, dimension);
@@ -3169,9 +3329,8 @@ public class LuceneIndexService {
             }
         } catch (final IllegalStateException e) {
             // No facet data in index at all
-            for (final String dimension : FACETED_FIELDS) {
-                dimensions.put(dimension, new FacetDimensionCost(dimension, 0, 0, 0.0));
-            }
+            java.util.stream.Stream.concat(FACETED_FIELDS.stream(), dynamicFacetedFields.stream())
+                    .forEach(dimension -> dimensions.put(dimension, new FacetDimensionCost(dimension, 0, 0, 0.0)));
         }
 
         final double overheadPercent = baseTimeMs > 0 ? (overheadMs * 100.0 / baseTimeMs) : 0;
@@ -3478,7 +3637,7 @@ public class LuceneIndexService {
                         .toList();
 
                 final SearchDocument searchDoc = SearchDocument.builder()
-                        .score(passages.get(0).score())
+                        .score(passages.getFirst().score())
                         .filePath(parentDoc.get("file_path"))
                         .fileName(parentDoc.get("file_name"))
                         .title(parentDoc.get("title"))

@@ -6,6 +6,13 @@ import de.mirkosertic.mcp.luceneserver.config.BuildInfo;
 import de.mirkosertic.mcp.luceneserver.config.LoggingConfigurator;
 import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.index.QueryRuntimeStats;
+import de.mirkosertic.mcp.luceneserver.metadata.JdbcConnectionPool;
+import de.mirkosertic.mcp.luceneserver.metadata.JdbcMetadataConfig;
+import de.mirkosertic.mcp.luceneserver.metadata.JdbcMetadataEnricher;
+import de.mirkosertic.mcp.luceneserver.metadata.JsonMetadataParser;
+import de.mirkosertic.mcp.luceneserver.metadata.MetadataSyncScheduler;
+import de.mirkosertic.mcp.luceneserver.metadata.MetadataSyncService;
+import de.mirkosertic.mcp.luceneserver.metadata.SqlTemplateParser;
 import de.mirkosertic.mcp.luceneserver.onnx.ONNXService;
 import de.mirkosertic.mcp.luceneserver.util.NotificationService;
 import de.mirkosertic.mcp.luceneserver.crawler.CrawlExecutorService;
@@ -56,6 +63,8 @@ public class LuceneserverApplication {
     private final IndexInfoTools indexInfoTools;
     private final IndexAdminTools indexAdminTools;
     private final ONNXService onnxService;
+    private final JdbcConnectionPool jdbcConnectionPool;
+    private final MetadataSyncScheduler metadataSyncScheduler;
     private McpSyncServer mcpSyncServer;
     private McpSyncServer mcpStreamableSyncServer;
     private TransportFactory.HttpTransportWrapper httpTransport;
@@ -63,8 +72,18 @@ public class LuceneserverApplication {
     public LuceneserverApplication(final ApplicationConfig config) {
         this.config = config;
 
-        // Initialize services in dependency order
-        // DocumentIndexer must be created first as LuceneIndexService depends on it
+        // Initialize services in dependency order.
+        //
+        // Dependency cycle: DocumentIndexer → JdbcMetadataEnricher → LuceneIndexService
+        //                                                                      ↑
+        //                   LuceneIndexService → DocumentIndexer ──────────────┘
+        //
+        // Resolution: create DocumentIndexer first (enricher=null), then LuceneIndexService,
+        // then JdbcMetadataEnricher, then late-wire the enricher into DocumentIndexer via
+        // DocumentIndexer.setJdbcMetadataEnricher(). Both LuceneIndexService and the crawler
+        // share the SAME DocumentIndexer instance, so the FacetsConfig is consistent.
+
+        // Step 1: DocumentIndexer (enricher not yet available)
         final DocumentIndexer documentIndexer = new DocumentIndexer();
 
         // Initialize ONNXService here so its hidden_size is available to LuceneIndexService
@@ -115,6 +134,34 @@ public class LuceneserverApplication {
                 configManager
         );
 
+        // Step 3: Optional JDBC metadata enrichment
+        // LuceneIndexService and crawlerService are now available, so we can wire the enricher.
+        final java.util.Optional<JdbcMetadataConfig> jdbcConfigOpt =
+                configManager.loadJdbcMetadataConfig();
+
+        if (jdbcConfigOpt.isPresent()) {
+            final JdbcMetadataConfig jdbcConfig = jdbcConfigOpt.get();
+            this.jdbcConnectionPool = new JdbcConnectionPool(jdbcConfig);
+            final JdbcMetadataEnricher enricher = new JdbcMetadataEnricher(
+                    jdbcConfig,
+                    jdbcConnectionPool,
+                    new SqlTemplateParser(),
+                    new JsonMetadataParser(),
+                    indexService);
+            // Late-wire the enricher into DocumentIndexer (same instance used by LuceneIndexService)
+            documentIndexer.setJdbcMetadataEnricher(enricher);
+            logger.info("JDBC metadata enrichment enabled: url={}", jdbcConfig.url());
+
+            final MetadataSyncService syncService = new MetadataSyncService(
+                    jdbcConfig, jdbcConnectionPool, new SqlTemplateParser(),
+                    crawlerService, indexService);
+            this.metadataSyncScheduler = new MetadataSyncScheduler(syncService, jdbcConfig);
+        } else {
+            this.jdbcConnectionPool = null;
+            this.metadataSyncScheduler = null;
+            logger.info("JDBC metadata enrichment not configured");
+        }
+
         final QueryRuntimeStats queryRuntimeStats = new QueryRuntimeStats();
 
         this.searchTools = new SearchTools(indexService, queryRuntimeStats, config);
@@ -146,6 +193,11 @@ public class LuceneserverApplication {
         if (indexService.isSchemaUpgradeRequired()) {
             logger.warn("Schema version changed — triggering full reindex");
             crawlerService.startCrawl(true);
+        }
+
+        // Start JDBC metadata sync scheduler (if configured)
+        if (metadataSyncScheduler != null) {
+            metadataSyncScheduler.start();
         }
 
         logger.info("All services initialized successfully");
@@ -313,6 +365,22 @@ public class LuceneserverApplication {
             crawlExecutor.shutdown();
         } catch (final Exception e) {
             logger.error("Error shutting down crawl executor", e);
+        }
+
+        try {
+            if (metadataSyncScheduler != null) {
+                metadataSyncScheduler.close();
+            }
+        } catch (final Exception e) {
+            logger.error("Error closing metadata sync scheduler", e);
+        }
+
+        try {
+            if (jdbcConnectionPool != null) {
+                jdbcConnectionPool.close();
+            }
+        } catch (final Exception e) {
+            logger.error("Error closing JDBC connection pool", e);
         }
 
         try {
