@@ -420,6 +420,9 @@
 				<version>3.5.5</version>
 				<configuration>
 					<argLine>-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading</argLine>
+					<systemPropertyVariables>
+						<onnx.models.path>${project.basedir}/onnx/container/precomputed</onnx.models.path>
+					</systemPropertyVariables>
 				</configuration>
 			</plugin>
 		</plugins>

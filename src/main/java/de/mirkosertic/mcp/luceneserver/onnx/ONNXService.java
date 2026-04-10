@@ -12,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.LongBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -68,29 +70,20 @@ public class ONNXService implements AutoCloseable {
 
         opts.setMemoryPatternOptimization(true);
 
-        final String modelResource = "/onnxmodels/" + modelName + "/model_quantized.onnx";
-        try (final var stream = ONNXService.class
-                .getResourceAsStream(modelResource)) {
-            if (stream == null) {
-                throw new RuntimeException("Model not found in classpath: " + modelResource);
-            }
-            logger.info("Loading ONNX Model from classpath: {}", modelResource);
-            final byte[] modelBytes = stream.readAllBytes();
-            final long start = System.currentTimeMillis();
-            session = env.createSession(modelBytes, opts);
-            logger.info("ONNX Model loaded in {} ms", System.currentTimeMillis() - start);
-        }
+        final Path modelPath = resolveModelsBasePath().resolve(modelName).resolve("model_quantized.onnx");
+        logger.info("Loading ONNX Model from filesystem: {}", modelPath);
+        final byte[] modelBytes = Files.readAllBytes(modelPath);
+        final long start = System.currentTimeMillis();
+        session = env.createSession(modelBytes, opts);
+        logger.info("ONNX Model loaded in {} ms", System.currentTimeMillis() - start);
 
         inputNames = session.getInputNames();
         logger.info("Model inputs: {}", this.inputNames);
 
         // Load tokenizer
-        final String tokenizerResource = "/onnxmodels/" + modelName + "/tokenizer.json";
-        try (final var tokenizerConfig = ONNXService.class.getResourceAsStream(tokenizerResource)) {
-            if (tokenizerConfig == null) {
-                throw new RuntimeException("Tokenizer not found in classpath: " + tokenizerResource);
-            }
-            tokenizer = HuggingFaceTokenizer.newInstance(tokenizerConfig, Map.of("maxLength", "512", "padding", "false", "truncation", "true"));
+        final Path tokenizerPath = resolveModelsBasePath().resolve(modelName).resolve("tokenizer.json");
+        try (final var tokenizerStream = Files.newInputStream(tokenizerPath)) {
+            tokenizer = HuggingFaceTokenizer.newInstance(tokenizerStream, Map.of("maxLength", "512", "padding", "false", "truncation", "true"));
         }
 
         // Read hidden size from the model
@@ -101,6 +94,18 @@ public class ONNXService implements AutoCloseable {
         hiddenSize = detectHiddenSize();
 
         logger.info("Model loaded. Hidden size: {}", hiddenSize);
+    }
+
+    private static Path resolveModelsBasePath() {
+        final String envPath = System.getenv("ONNX_MODELS_PATH");
+        if (envPath != null && !envPath.isBlank()) {
+            return Path.of(envPath);
+        }
+        final String sysProp = System.getProperty("onnx.models.path");
+        if (sysProp != null && !sysProp.isBlank()) {
+            return Path.of(sysProp);
+        }
+        throw new RuntimeException("ONNX models path not configured. Set ONNX_MODELS_PATH env var or -Donnx.models.path system property.");
     }
 
     private void registerBestAvailableProvider(final OrtSession.SessionOptions opts) {
