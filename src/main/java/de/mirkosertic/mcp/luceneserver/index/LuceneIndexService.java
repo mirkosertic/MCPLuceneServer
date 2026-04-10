@@ -83,6 +83,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.sql.Types;
+import java.util.Collections;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.BreakIterator;
@@ -1009,6 +1011,69 @@ public class LuceneIndexService {
     public void deleteDocumentByPath(final String filePath) throws IOException {
         indexWriter.deleteDocuments(new Term("file_path", filePath));
         logger.debug("Deleted document from index: {}", filePath);
+    }
+
+    /**
+     * Finds file_paths of all parent documents matching the given field/value.
+     * The Lucene query type is derived from jdbcType (java.sql.Types constant):
+     *   - INTEGER, SMALLINT, TINYINT → IntPoint.newExactQuery()
+     *   - BIGINT, NUMERIC, DECIMAL   → LongPoint.newExactQuery()
+     *   - all other types            → TermQuery (exact string match)
+     * The field must not be an analyzed TextField — tokenized fields will not match.
+     *
+     * @param fieldName the Lucene field name (e.g. "dbmeta_customer_id")
+     * @param rawValue  the value to search for, as a string (parsed to numeric if needed)
+     * @param jdbcType  the java.sql.Types constant describing the column type
+     * @return unmodifiable list of file_path values from matching parent documents
+     * @throws IOException if the index cannot be read
+     */
+    public List<String> findFilePathsByField(
+            final String fieldName, final String rawValue, final int jdbcType) throws IOException {
+
+        final Query fieldQuery;
+        if (isIntJdbcType(jdbcType)) {
+            fieldQuery = IntPoint.newExactQuery(fieldName, Integer.parseInt(rawValue));
+        } else if (isLongJdbcType(jdbcType)) {
+            fieldQuery = LongPoint.newExactQuery(fieldName, Long.parseLong(rawValue));
+        } else {
+            fieldQuery = new TermQuery(new Term(fieldName, rawValue));
+        }
+
+        final IndexSearcher searcher = searcherManager.acquire();
+        try {
+            final Query query = new BooleanQuery.Builder()
+                    .add(fieldQuery, BooleanClause.Occur.MUST)
+                    .add(new TermQuery(new Term(DocumentIndexer.DOC_TYPE_FIELD, DocumentIndexer.DOC_TYPE_PARENT)),
+                            BooleanClause.Occur.MUST)
+                    .build();
+            final TopDocs topDocs = searcher.search(query, 1000);
+            final List<String> filePaths = new ArrayList<>();
+            for (final ScoreDoc scoreDoc : topDocs.scoreDocs) {
+                final Document doc = searcher.storedFields().document(scoreDoc.doc);
+                final String filePath = doc.get("file_path");
+                if (filePath != null) {
+                    filePaths.add(filePath);
+                }
+            }
+            return Collections.unmodifiableList(filePaths);
+        } finally {
+            searcherManager.release(searcher);
+        }
+    }
+
+    // package-private for testing
+    static boolean isIntJdbcType(final int jdbcType) {
+        return switch (jdbcType) {
+            case Types.INTEGER, Types.SMALLINT, Types.TINYINT -> true;
+            default -> false;
+        };
+    }
+
+    static boolean isLongJdbcType(final int jdbcType) {
+        return switch (jdbcType) {
+            case Types.BIGINT, Types.NUMERIC, Types.DECIMAL -> true;
+            default -> false;
+        };
     }
 
     /**
