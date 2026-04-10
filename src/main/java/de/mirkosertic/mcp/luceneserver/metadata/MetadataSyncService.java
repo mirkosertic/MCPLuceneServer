@@ -17,6 +17,7 @@ import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -58,7 +59,7 @@ public class MetadataSyncService {
             Instant lastSync
     ) {}
 
-    private record SyncRecord(String filePath, Instant timestamp) {}
+    private record SyncRecord(String fieldName, String fieldValue, int jdbcType) {}
 
     public MetadataSyncService(
             final JdbcMetadataConfig config,
@@ -108,18 +109,33 @@ public class MetadataSyncService {
 
         for (final SyncRecord record : changes) {
             try {
-                final Path file = Paths.get(record.filePath());
-                if (!Files.exists(file)) {
-                    logger.warn("File deleted but metadata exists: {} — removing from index", record.filePath());
-                    indexService.deleteDocumentByPath(record.filePath());
-                    deleted++;
-                } else {
-                    logger.debug("Re-indexing file with updated metadata: {}", record.filePath());
-                    crawlerService.reindexSingleFile(file);
-                    reindexed++;
+                final List<String> filePaths = indexService.findFilePathsByField(
+                        record.fieldName(), record.fieldValue(), record.jdbcType());
+                if (filePaths.isEmpty()) {
+                    logger.warn("No indexed documents found for field {}={} — skipping",
+                            record.fieldName(), record.fieldValue());
+                    continue;
+                }
+                for (final String filePath : filePaths) {
+                    try {
+                        final Path file = Paths.get(filePath);
+                        if (!Files.exists(file)) {
+                            logger.warn("File deleted but metadata exists: {} — removing from index", filePath);
+                            indexService.deleteDocumentByPath(filePath);
+                            deleted++;
+                        } else {
+                            logger.debug("Re-indexing file with updated metadata: {}", filePath);
+                            crawlerService.reindexSingleFile(file);
+                            reindexed++;
+                        }
+                    } catch (final IOException e) {
+                        logger.error("Failed to sync metadata for {}: {}", filePath, e.getMessage());
+                        errors++;
+                    }
                 }
             } catch (final IOException e) {
-                logger.error("Failed to sync metadata for {}: {}", record.filePath(), e.getMessage());
+                logger.error("Failed to look up documents for field {}={}: {}",
+                        record.fieldName(), record.fieldValue(), e.getMessage());
                 errors++;
             }
         }
@@ -159,15 +175,14 @@ public class MetadataSyncService {
             }
 
             try (final ResultSet rs = stmt.executeQuery()) {
+                final ResultSetMetaData meta = rs.getMetaData();
+                final String fieldName = meta.getColumnName(1);
+                final int jdbcType = meta.getColumnType(1);
                 while (rs.next()) {
-                    final String filePath = rs.getString(1);
-
-                    if (filePath == null) {
-                        logger.warn("Sync query returned row with NULL file_path — skipping");
-                        continue;
+                    final String fieldValue = rs.getString(1);
+                    if (fieldValue != null) {
+                        results.add(new SyncRecord(fieldName, fieldValue, jdbcType));
                     }
-
-                    results.add(new SyncRecord(filePath, Instant.now()));
                 }
             }
 
