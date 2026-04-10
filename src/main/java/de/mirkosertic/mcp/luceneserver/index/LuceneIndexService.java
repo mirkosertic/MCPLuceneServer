@@ -946,8 +946,9 @@ public class LuceneIndexService {
      * @param fieldName the fully-qualified Lucene field name (e.g. "dbmeta_customer_id")
      */
     public void registerFacetField(final String fieldName) {
-        dynamicFacetedFields.add(fieldName);
-        logger.debug("Registered dynamic facet field: {}", fieldName);
+        if (dynamicFacetedFields.add(fieldName)) {
+            logger.debug("Registered dynamic facet field: {}", fieldName);
+        }
     }
 
     /**
@@ -957,8 +958,9 @@ public class LuceneIndexService {
      * @param fieldName the fully-qualified Lucene field name (e.g. "dbmeta_amount")
      */
     public void registerLongPointField(final String fieldName) {
-        dynamicLongPointFields.add(fieldName);
-        logger.debug("Registered dynamic LongPoint field: {}", fieldName);
+        if (dynamicLongPointFields.add(fieldName)) {
+            logger.debug("Registered dynamic LongPoint field: {}", fieldName);
+        }
     }
 
     /**

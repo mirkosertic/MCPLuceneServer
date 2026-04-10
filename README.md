@@ -2479,11 +2479,11 @@ sync:
 
 Here `freelancer_id` is a `BIGINT` column, so the server uses `LongPoint.newExactQuery("dbmeta_freelancer_id", …)`. The enrichment must have stored `freelancer_id` as a field of type `long` for the query to match.
 
-| SQL column type | Lucene query | Must match enrichment type |
-|---|---|---|
-| `VARCHAR` / `CHAR` | `TermQuery` | `keyword` |
-| `INTEGER` / `SMALLINT` | `IntPoint.newExactQuery()` | `int` |
-| `BIGINT` / `NUMERIC` | `LongPoint.newExactQuery()` | `long` |
+| SQL column type        | Lucene query                | Must match enrichment type |
+|------------------------|-----------------------------|----------------------------|
+| `VARCHAR` / `CHAR`     | `TermQuery`                 | `keyword`                  |
+| `INTEGER` / `SMALLINT` | `IntPoint.newExactQuery()`  | `int`                      |
+| `BIGINT` / `NUMERIC`   | `LongPoint.newExactQuery()` | `long`                     |
 
 ---
 
@@ -2516,11 +2516,11 @@ The last sync timestamp is persisted in `~/.mcplucene/metadata-sync-state.yaml`.
 
 **Supported column types:**
 
-| SQL column type | Lucene query | Compatible `dbmeta_` field type |
-|---|---|---|
-| `VARCHAR`, `CHAR`, … | `TermQuery` | `keyword` |
-| `INTEGER`, `SMALLINT`, `TINYINT` | `IntPoint.newExactQuery()` | `int` |
-| `BIGINT`, `NUMERIC`, `DECIMAL` | `LongPoint.newExactQuery()` | `long` |
+| SQL column type                  | Lucene query                | Compatible `dbmeta_` field type |
+|----------------------------------|-----------------------------|---------------------------------|
+| `VARCHAR`, `CHAR`, …             | `TermQuery`                 | `keyword`                       |
+| `INTEGER`, `SMALLINT`, `TINYINT` | `IntPoint.newExactQuery()`  | `int`                           |
+| `BIGINT`, `NUMERIC`, `DECIMAL`   | `LongPoint.newExactQuery()` | `long`                          |
 
 The query type is inferred automatically from the JDBC column type — no extra configuration needed. The SQL column type must match the Lucene field type used during enrichment (`IntPoint` and `LongPoint` are separate field types). Analyzed `text` fields are not suitable as sync keys.
 
