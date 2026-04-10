@@ -33,8 +33,6 @@ public record JdbcMetadataConfig(
     public record SyncConfig(
             boolean enabled,
             int intervalMinutes,
-            @Nullable String query,
-            @Nullable String filePathColumn,
-            @Nullable String timestampColumn
+            @Nullable String query
     ) {}
 }

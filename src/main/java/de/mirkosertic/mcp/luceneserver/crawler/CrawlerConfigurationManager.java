@@ -382,10 +382,8 @@ public class CrawlerConfigurationManager {
         final boolean syncEnabled = Boolean.TRUE.equals(syncMap.getOrDefault("enabled", false));
         final int intervalMinutes = ((Number) syncMap.getOrDefault("intervalMinutes", 5)).intValue();
         final String syncQuery = (String) syncMap.get("query");
-        final String filePathColumn = (String) syncMap.get("filePathColumn");
-        final String timestampColumn = (String) syncMap.get("timestampColumn");
         final JdbcMetadataConfig.SyncConfig syncConfig = new JdbcMetadataConfig.SyncConfig(
-                syncEnabled, intervalMinutes, syncQuery, filePathColumn, timestampColumn);
+                syncEnabled, intervalMinutes, syncQuery);
 
         return new JdbcMetadataConfig(
                 enabled, url, username, password, driverClassName,

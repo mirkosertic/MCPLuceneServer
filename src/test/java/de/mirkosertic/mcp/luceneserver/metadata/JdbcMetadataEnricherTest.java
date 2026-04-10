@@ -62,7 +62,7 @@ class JdbcMetadataEnricherTest {
                 "SELECT metadata FROM doc_metadata WHERE file_path = :file_path",
                 List.of(new JdbcMetadataConfig.ParameterMapping("file_path", "file_path")),
                 new JdbcMetadataConfig.JsonConfig("metadata"),
-                new JdbcMetadataConfig.SyncConfig(syncEnabled, 5, null, null, null));
+                new JdbcMetadataConfig.SyncConfig(syncEnabled, 5, null));
     }
 
     private JdbcConnectionPool buildPool(final JdbcMetadataConfig config) {

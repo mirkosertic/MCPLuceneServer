@@ -160,19 +160,14 @@ public class MetadataSyncService {
 
             try (final ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    final String filePathColumn = config.sync().filePathColumn();
-                    final String filePath = filePathColumn != null
-                            ? rs.getString(filePathColumn) : rs.getString(1);
-                    final String timestampColumn = config.sync().timestampColumn();
-                    final Timestamp ts = timestampColumn != null
-                            ? rs.getTimestamp(timestampColumn) : null;
+                    final String filePath = rs.getString(1);
 
                     if (filePath == null) {
                         logger.warn("Sync query returned row with NULL file_path — skipping");
                         continue;
                     }
 
-                    results.add(new SyncRecord(filePath, ts != null ? ts.toInstant() : Instant.now()));
+                    results.add(new SyncRecord(filePath, Instant.now()));
                 }
             }
 
