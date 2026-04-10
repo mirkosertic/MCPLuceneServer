@@ -27,7 +27,7 @@ pip3 install --upgrade pip
 # Core libraries for export, optimization and quantization
 pip3 install --upgrade --upgrade-strategy eager "optimum[onnx]"
 pip3 install sentence-transformers transformers torch
-pip3 install onnx onnxruntime
+pip3 install accelerate onnx onnxruntime
 ```
 
 ## Directory Structure

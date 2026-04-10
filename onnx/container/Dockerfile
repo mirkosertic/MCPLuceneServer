@@ -7,7 +7,7 @@ LABEL org.opencontainers.image.authors="Mirko Sertic<mirko.sertic@web.de>"
 RUN pip3 install --upgrade pip
 RUN pip3 install --upgrade --upgrade-strategy eager "optimum[onnx]"
 RUN pip3 install sentence-transformers transformers torch
-RUN pip3 install onnx onnxruntime
+RUN pip3 install accelerate onnx onnxruntime
 
 COPY e5-base-step1.sh /root
 RUN /root/e5-base-step1.sh
