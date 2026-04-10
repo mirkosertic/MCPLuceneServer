@@ -169,7 +169,12 @@ public class MetadataSyncService {
         try (final Connection conn = connectionPool.getConnection();
              final PreparedStatement stmt = conn.prepareStatement(template.sql())) {
 
-            stmt.setTimestamp(1, Timestamp.from(lastSync));
+            final List<String> params = template.parameterNames();
+            for (int i = 0; i < params.size(); i++) {
+                if ("last_sync_timestamp".equals(params.get(i))) {
+                    stmt.setTimestamp(i + 1, Timestamp.from(lastSync));
+                }
+            }
             if (config.queryTimeout() > 0) {
                 stmt.setQueryTimeout(config.queryTimeout() / 1000);
             }
