@@ -26,8 +26,10 @@ RUN /root/e5-large-step3.sh
 COPY e5-large-step4.sh /root
 RUN /root/e5-large-step4.sh
 
-FROM scratch
+FROM busybox
 COPY --from=builder /opt/onnxmodels/e5-base/model-final /onnxmodels/e5-base
 COPY --from=builder /opt/onnxmodels/e5-large/model-final /onnxmodels/e5-large
+
+ENTRYPOINT ["tail", "-f", "/dev/null"]
 
 
