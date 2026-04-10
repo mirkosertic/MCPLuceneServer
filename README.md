@@ -2297,11 +2297,9 @@ lucene:
         enabled: true
         intervalMinutes: 5
         query: >
-          SELECT file_path, updated_at
+          SELECT dbmeta_customer_id
           FROM document_metadata
           WHERE updated_at > :last_sync_timestamp
-        filePathColumn: file_path
-        timestampColumn: updated_at
 ```
 
 ### Advanced Example: Building Metadata Dynamically from a Table (MySQL)
@@ -2419,6 +2417,76 @@ MySQL has no native JSON boolean literal. `CAST(FALSE AS JSON)` produces the JSO
 
 ---
 
+### Advanced Example: Background Sync via Index Lookup (PostgreSQL)
+
+#### Scenario
+
+Same freelancer PDF setup as the enrichment example. When a freelancer's daily rate or tags change in the database, the server should automatically re-index the affected PDF — without the database needing to know file paths.
+
+**Prerequisite:** The enrichment query stores `customer_id` as `dbmeta_customer_id` (type `keyword`) in the Lucene index, and the `document_metadata` table also has a `customer_id` column plus an `updated_at` timestamp.
+
+#### Configuration
+
+```yaml
+sync:
+  enabled: true
+  intervalMinutes: 5
+  query: >
+    SELECT customer_id AS dbmeta_customer_id
+    FROM document_metadata
+    WHERE updated_at > :last_sync_timestamp
+```
+
+#### How It Works Step by Step
+
+**1. Timestamp filter**
+
+The `:last_sync_timestamp` parameter is bound to the last successful sync time (persisted in `~/.mcplucene/metadata-sync-state.yaml`). On first run it defaults to `1970-01-01T00:00:00Z`, so the full table is scanned.
+
+**2. Column name as Lucene field**
+
+The result set has exactly one column. Its name — `dbmeta_customer_id` (set via `AS` alias) — is read from the JDBC `ResultSetMetaData`. This becomes the Lucene field the server will search against.
+
+**3. TermQuery lookup**
+
+For each row (e.g. value `C-42`), the server executes a Lucene `TermQuery` on `dbmeta_customer_id = "C-42"` restricted to parent documents. This finds every indexed file that was enriched with that customer ID.
+
+**4. File path resolution**
+
+`file_path` is extracted from each matching Lucene document. The index — not the database — is the source of truth for the physical location of the file.
+
+**5. Re-index or delete**
+
+If the file still exists on disk it is re-crawled, which triggers the enrichment query again so the Lucene document picks up the latest metadata from the database. If the file has been removed, its index entry is deleted.
+
+**6. Timestamp advance**
+
+After a successful run, the current time is saved as the new `lastSyncTimestamp`. The next sync only returns rows modified after this point.
+
+#### Using a Numeric Join Key
+
+If the join key is a numeric database ID rather than a string code, use the appropriate SQL integer type so that the server builds the correct Lucene point query:
+
+```yaml
+sync:
+  enabled: true
+  intervalMinutes: 5
+  query: >
+    SELECT freelancer_id AS dbmeta_freelancer_id
+    FROM document_metadata
+    WHERE updated_at > :last_sync_timestamp
+```
+
+Here `freelancer_id` is a `BIGINT` column, so the server uses `LongPoint.newExactQuery("dbmeta_freelancer_id", …)`. The enrichment must have stored `freelancer_id` as a field of type `long` for the query to match.
+
+| SQL column type | Lucene query | Must match enrichment type |
+|---|---|---|
+| `VARCHAR` / `CHAR` | `TermQuery` | `keyword` |
+| `INTEGER` / `SMALLINT` | `IntPoint.newExactQuery()` | `int` |
+| `BIGINT` / `NUMERIC` | `LongPoint.newExactQuery()` | `long` |
+
+---
+
 ### Supported Databases
 
 | Database   | Driver dependency           | Notes                            |
@@ -2437,11 +2505,24 @@ Multi-valued fields (using `"values": [...]`) are automatically configured as mu
 ### Background Sync
 
 When `sync.enabled: true`, the server runs a background job every `intervalMinutes` minutes that:
-1. Queries the database for records modified since the last sync.
-2. Re-indexes affected files with the latest metadata.
-3. Removes index entries for files that no longer exist on disk.
+
+1. Queries the database for records modified since the last sync (using `:last_sync_timestamp`).
+2. Reads the result set — exactly one column, N rows. The **column name** is the Lucene field to search; the **column value** is the term to match.
+3. Executes a Lucene query per row to find matching index documents, then extracts their `file_path`.
+4. Re-indexes files that still exist on disk with the latest metadata.
+5. Removes index entries for files that no longer exist.
 
 The last sync timestamp is persisted in `~/.mcplucene/metadata-sync-state.yaml`.
+
+**Supported column types:**
+
+| SQL column type | Lucene query | Compatible `dbmeta_` field type |
+|---|---|---|
+| `VARCHAR`, `CHAR`, … | `TermQuery` | `keyword` |
+| `INTEGER`, `SMALLINT`, `TINYINT` | `IntPoint.newExactQuery()` | `int` |
+| `BIGINT`, `NUMERIC`, `DECIMAL` | `LongPoint.newExactQuery()` | `long` |
+
+The query type is inferred automatically from the JDBC column type — no extra configuration needed. The SQL column type must match the Lucene field type used during enrichment (`IntPoint` and `LongPoint` are separate field types). Analyzed `text` fields are not suitable as sync keys.
 
 ### Error Handling
 
