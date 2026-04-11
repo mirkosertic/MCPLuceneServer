@@ -42,3 +42,4 @@ node_modules
 dist
 
 lucene-data-dir
+onnx-models_data

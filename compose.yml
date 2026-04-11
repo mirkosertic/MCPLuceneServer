@@ -1,0 +1,7 @@
+services:
+  onnx:
+    image: mirkosertic42/mcpluceneserver_onnx:main
+    container_name: lucenemcp-onnx-models
+    volumes:
+      - ./onnx-models_data:/onnxmodels_src
+    entrypoint: ["sh", "-c", "cp -R /onnxmodels/* /onnxmodels_src && tail -f /dev/null"]

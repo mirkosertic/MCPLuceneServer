@@ -1,11 +1,52 @@
 package de.mirkosertic.mcp.luceneserver;
 
 import de.mirkosertic.mcp.luceneserver.onnx.ONNXService;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.BindMode;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.List;
 
 public class ONNXTest {
+
+    private static GenericContainer<?> onnxContainer;
+
+    @BeforeAll
+    static void setupOnnxModels() throws IOException {
+        final Path targetDir = Paths.get("target/onnx-temp").toAbsolutePath();
+        final Path cachedModel = targetDir.resolve("e5-base/model_quantized.onnx");
+
+        if (!Files.exists(cachedModel)) {
+            Files.createDirectories(targetDir);
+
+            onnxContainer = new GenericContainer<>("mirkosertic42/mcpluceneserver_onnx:main")
+                    .withFileSystemBind(targetDir.toString(), "/onnxmodels_dst", BindMode.READ_WRITE)
+                    .withCreateContainerCmdModifier(cmd -> cmd
+                            .withEntrypoint("sh", "-c")
+                            .withCmd("cp -R /onnxmodels/* /onnxmodels_dst && echo COPY_COMPLETE && tail -f /dev/null"))
+                    .waitingFor(Wait.forLogMessage(".*COPY_COMPLETE.*", 1).withStartupTimeout(Duration.ofMinutes(10)));
+
+            onnxContainer.start();
+            onnxContainer.stop();
+        }
+
+        System.setProperty("onnx.models.path", targetDir.toString());
+    }
+
+    @AfterAll
+    static void tearDown() {
+        if (onnxContainer != null && onnxContainer.isRunning()) {
+            onnxContainer.stop();
+        }
+    }
 
     @Test
     void testEncode() throws Exception {
