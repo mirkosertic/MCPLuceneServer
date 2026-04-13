@@ -125,8 +125,8 @@ public record SimpleSearchRequest(
                 "_score", "modified_date", "created_date", "file_size"
         );
 
-        if (!validFields.contains(sortBy)) {
-            return "Invalid sortBy field: " + sortBy + ". Valid fields: " + validFields;
+        if (!validFields.contains(sortBy) && !sortBy.startsWith("dbmeta_")) {
+            return "sortBy must be one of: _score, modified_date, created_date, file_size, or a dbmeta_* metadata field";
         }
 
         return null;  // Valid

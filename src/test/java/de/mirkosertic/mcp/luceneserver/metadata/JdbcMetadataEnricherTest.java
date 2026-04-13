@@ -4,6 +4,8 @@ import de.mirkosertic.mcp.luceneserver.crawler.DocumentIndexer;
 import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.SortedDocValuesField;
+import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.StringField;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +15,7 @@ import org.mockito.Mockito;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -208,6 +211,196 @@ class JdbcMetadataEnricherTest {
     @Test
     void testFieldPrefixConstant() {
         assertThat(JdbcMetadataEnricher.FIELD_PREFIX).isEqualTo("dbmeta_");
+    }
+
+    @Test
+    void testIntFieldHasSortedNumericDocValues() throws Exception {
+        try (final Statement stmt = h2Connection.createStatement()) {
+            stmt.execute(
+                    "INSERT INTO doc_metadata VALUES("
+                    + "'/test/int-dv.pdf',"
+                    + "'{ \"fields\": [{ \"name\": \"priority\", \"type\": \"int\", \"value\": 5, \"searchable\": true }] }'"
+                    + ")");
+        }
+
+        final JdbcMetadataConfig config = buildConfig(false);
+        final LuceneIndexService mockIndexService = Mockito.mock(LuceneIndexService.class);
+
+        try (final JdbcConnectionPool pool = buildPool(config)) {
+            final JdbcMetadataEnricher enricher = new JdbcMetadataEnricher(
+                    config, pool, new SqlTemplateParser(), new JsonMetadataParser(), mockIndexService);
+
+            final DocumentIndexer indexer = new DocumentIndexer();
+            final Document doc = new Document();
+            doc.add(new StringField("file_path", "/test/int-dv.pdf", Field.Store.YES));
+
+            enricher.enrich(doc, indexer);
+
+            // SortedNumericDocValuesField must be present for INT single-valued field
+            final boolean hasSortedNumericDv = Arrays.stream(doc.getFields("dbmeta_priority"))
+                    .anyMatch(f -> f instanceof SortedNumericDocValuesField);
+            assertThat(hasSortedNumericDv).isTrue();
+            verify(mockIndexService).registerSortableNumericField("dbmeta_priority");
+        }
+    }
+
+    @Test
+    void testLongFieldHasSortedNumericDocValues() throws Exception {
+        try (final Statement stmt = h2Connection.createStatement()) {
+            stmt.execute(
+                    "INSERT INTO doc_metadata VALUES("
+                    + "'/test/long-dv.pdf',"
+                    + "'{ \"fields\": [{ \"name\": \"bytes\", \"type\": \"long\", \"value\": 1024, \"searchable\": true }] }'"
+                    + ")");
+        }
+
+        final JdbcMetadataConfig config = buildConfig(false);
+        final LuceneIndexService mockIndexService = Mockito.mock(LuceneIndexService.class);
+
+        try (final JdbcConnectionPool pool = buildPool(config)) {
+            final JdbcMetadataEnricher enricher = new JdbcMetadataEnricher(
+                    config, pool, new SqlTemplateParser(), new JsonMetadataParser(), mockIndexService);
+
+            final DocumentIndexer indexer = new DocumentIndexer();
+            final Document doc = new Document();
+            doc.add(new StringField("file_path", "/test/long-dv.pdf", Field.Store.YES));
+
+            enricher.enrich(doc, indexer);
+
+            // SortedNumericDocValuesField must be present for LONG single-valued field
+            final boolean hasSortedNumericDv = Arrays.stream(doc.getFields("dbmeta_bytes"))
+                    .anyMatch(f -> f instanceof SortedNumericDocValuesField);
+            assertThat(hasSortedNumericDv).isTrue();
+            verify(mockIndexService).registerSortableNumericField("dbmeta_bytes");
+        }
+    }
+
+    @Test
+    void testDateFieldHasSortedNumericDocValues() throws Exception {
+        try (final Statement stmt = h2Connection.createStatement()) {
+            stmt.execute(
+                    "INSERT INTO doc_metadata VALUES("
+                    + "'/test/date-dv.pdf',"
+                    + "'{ \"fields\": [{ \"name\": \"event_date\", \"type\": \"date\", \"value\": \"2024-01-15T00:00:00Z\", \"searchable\": true }] }'"
+                    + ")");
+        }
+
+        final JdbcMetadataConfig config = buildConfig(false);
+        final LuceneIndexService mockIndexService = Mockito.mock(LuceneIndexService.class);
+
+        try (final JdbcConnectionPool pool = buildPool(config)) {
+            final JdbcMetadataEnricher enricher = new JdbcMetadataEnricher(
+                    config, pool, new SqlTemplateParser(), new JsonMetadataParser(), mockIndexService);
+
+            final DocumentIndexer indexer = new DocumentIndexer();
+            final Document doc = new Document();
+            doc.add(new StringField("file_path", "/test/date-dv.pdf", Field.Store.YES));
+
+            enricher.enrich(doc, indexer);
+
+            // SortedNumericDocValuesField must be present for DATE single-valued field
+            final boolean hasSortedNumericDv = Arrays.stream(doc.getFields("dbmeta_event_date"))
+                    .anyMatch(f -> f instanceof SortedNumericDocValuesField);
+            assertThat(hasSortedNumericDv).isTrue();
+            verify(mockIndexService).registerSortableNumericField("dbmeta_event_date");
+        }
+    }
+
+    @Test
+    void testKeywordFieldHasSortedDocValues() throws Exception {
+        try (final Statement stmt = h2Connection.createStatement()) {
+            stmt.execute(
+                    "INSERT INTO doc_metadata VALUES("
+                    + "'/test/kw-dv.pdf',"
+                    + "'{ \"fields\": [{ \"name\": \"status\", \"type\": \"keyword\", \"value\": \"active\", \"searchable\": true }] }'"
+                    + ")");
+        }
+
+        final JdbcMetadataConfig config = buildConfig(false);
+        final LuceneIndexService mockIndexService = Mockito.mock(LuceneIndexService.class);
+
+        try (final JdbcConnectionPool pool = buildPool(config)) {
+            final JdbcMetadataEnricher enricher = new JdbcMetadataEnricher(
+                    config, pool, new SqlTemplateParser(), new JsonMetadataParser(), mockIndexService);
+
+            final DocumentIndexer indexer = new DocumentIndexer();
+            final Document doc = new Document();
+            doc.add(new StringField("file_path", "/test/kw-dv.pdf", Field.Store.YES));
+
+            enricher.enrich(doc, indexer);
+
+            // SortedDocValuesField must be present for KEYWORD single-valued field
+            final boolean hasSortedDv = Arrays.stream(doc.getFields("dbmeta_status"))
+                    .anyMatch(f -> f instanceof SortedDocValuesField);
+            assertThat(hasSortedDv).isTrue();
+            verify(mockIndexService).registerSortableKeywordField("dbmeta_status");
+        }
+    }
+
+    @Test
+    void testMultiValuedIntFieldSkipsDocValues() throws Exception {
+        try (final Statement stmt = h2Connection.createStatement()) {
+            stmt.execute(
+                    "INSERT INTO doc_metadata VALUES("
+                    + "'/test/multi-int-dv.pdf',"
+                    + "'{ \"fields\": [{ \"name\": \"scores\", \"type\": \"int\","
+                    + "   \"values\": [1, 2, 3], \"searchable\": true }] }'"
+                    + ")");
+        }
+
+        final JdbcMetadataConfig config = buildConfig(false);
+        final LuceneIndexService mockIndexService = Mockito.mock(LuceneIndexService.class);
+
+        try (final JdbcConnectionPool pool = buildPool(config)) {
+            final JdbcMetadataEnricher enricher = new JdbcMetadataEnricher(
+                    config, pool, new SqlTemplateParser(), new JsonMetadataParser(), mockIndexService);
+
+            final DocumentIndexer indexer = new DocumentIndexer();
+            final Document doc = new Document();
+            doc.add(new StringField("file_path", "/test/multi-int-dv.pdf", Field.Store.YES));
+
+            enricher.enrich(doc, indexer);
+
+            // Multi-valued field: SortedNumericDocValuesField must NOT be added
+            final boolean hasSortedNumericDv = Arrays.stream(doc.getFields("dbmeta_scores"))
+                    .anyMatch(f -> f instanceof SortedNumericDocValuesField);
+            assertThat(hasSortedNumericDv).isFalse();
+            // registerSortableNumericField must NOT be called
+            verify(mockIndexService, never()).registerSortableNumericField(anyString());
+        }
+    }
+
+    @Test
+    void testMultiValuedKeywordFieldSkipsDocValues() throws Exception {
+        try (final Statement stmt = h2Connection.createStatement()) {
+            stmt.execute(
+                    "INSERT INTO doc_metadata VALUES("
+                    + "'/test/multi-kw-dv.pdf',"
+                    + "'{ \"fields\": [{ \"name\": \"roles\", \"type\": \"keyword\","
+                    + "   \"values\": [\"admin\",\"user\"], \"searchable\": true }] }'"
+                    + ")");
+        }
+
+        final JdbcMetadataConfig config = buildConfig(false);
+        final LuceneIndexService mockIndexService = Mockito.mock(LuceneIndexService.class);
+
+        try (final JdbcConnectionPool pool = buildPool(config)) {
+            final JdbcMetadataEnricher enricher = new JdbcMetadataEnricher(
+                    config, pool, new SqlTemplateParser(), new JsonMetadataParser(), mockIndexService);
+
+            final DocumentIndexer indexer = new DocumentIndexer();
+            final Document doc = new Document();
+            doc.add(new StringField("file_path", "/test/multi-kw-dv.pdf", Field.Store.YES));
+
+            enricher.enrich(doc, indexer);
+
+            // Multi-valued field: SortedDocValuesField must NOT be added
+            final boolean hasSortedDv = Arrays.stream(doc.getFields("dbmeta_roles"))
+                    .anyMatch(f -> f instanceof SortedDocValuesField);
+            assertThat(hasSortedDv).isFalse();
+            // registerSortableKeywordField must NOT be called
+            verify(mockIndexService, never()).registerSortableKeywordField(anyString());
+        }
     }
 
     @Test

@@ -161,10 +161,15 @@ public class IndexInfoTools implements McpToolProvider {
                 queryRuntimeMetrics = null;
             }
 
+            // Get sortable fields registered by JDBC metadata enrichment
+            final Map<String, String> sortableFields = indexService.getSortableFields();
+
             logger.info("Index stats: {} documents, schema v{}", documentCount, schemaVersion);
 
             return ToolResultHelper.createResult(IndexStatsResponse.success(
-                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp, dateFieldHints, lemmatizerMetrics, queryRuntimeMetrics));
+                    documentCount, indexPath, schemaVersion, softwareVersion, buildTimestamp, dateFieldHints,
+                    sortableFields.isEmpty() ? null : sortableFields,
+                    lemmatizerMetrics, queryRuntimeMetrics));
 
         } catch (final IOException e) {
             logger.error("Error getting index stats", e);

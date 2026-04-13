@@ -6,10 +6,13 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.IntPoint;
 import org.apache.lucene.document.LongPoint;
+import org.apache.lucene.document.SortedDocValuesField;
+import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.facet.sortedset.SortedSetDocValuesFacetField;
+import org.apache.lucene.util.BytesRef;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -171,8 +174,12 @@ public class JdbcMetadataEnricher {
                 luceneIndexService.registerFacetField(fieldName);
             }
 
+            final boolean singleValued = field.values().size() == 1;
+            if (!singleValued) {
+                logger.debug("Field '{}' has multiple values — DocValues skipped (only single-valued fields are sortable)", fieldName);
+            }
             for (final Object value : field.values()) {
-                addLuceneField(doc, fieldName, value, field);
+                addLuceneField(doc, fieldName, value, field, singleValued);
             }
 
             // Register as dynamic facet field so search facets include it.
@@ -186,7 +193,8 @@ public class JdbcMetadataEnricher {
             final Document doc,
             final String name,
             final Object value,
-            final JsonMetadataParser.MetadataField field) {
+            final JsonMetadataParser.MetadataField field,
+            final boolean singleValued) {
 
         switch (field.type()) {
             case INT -> {
@@ -201,6 +209,10 @@ public class JdbcMetadataEnricher {
                 if (field.faceted()) {
                     doc.add(new SortedSetDocValuesFacetField(name, String.valueOf(intValue)));
                 }
+                if (singleValued) {
+                    doc.add(new SortedNumericDocValuesField(name, intValue));
+                    luceneIndexService.registerSortableNumericField(name);
+                }
             }
             case KEYWORD -> {
                 if (field.searchable()) {
@@ -210,13 +222,17 @@ public class JdbcMetadataEnricher {
                 if (field.faceted()) {
                     doc.add(new SortedSetDocValuesFacetField(name, value.toString()));
                 }
+                if (singleValued) {
+                    doc.add(new SortedDocValuesField(name, new BytesRef(value.toString())));
+                    luceneIndexService.registerSortableKeywordField(name);
+                }
             }
             case TEXT -> {
                 if (field.searchable()) {
                     doc.add(new TextField(name, value.toString(),
                             field.stored() ? Field.Store.YES : Field.Store.NO));
                 }
-                // TEXT fields are intentionally not faceted (cardinality too high)
+                // TEXT fields are intentionally not faceted or sortable (cardinality too high)
             }
             case LONG -> {
                 final long longValue = (Long) value;
@@ -231,6 +247,10 @@ public class JdbcMetadataEnricher {
                     // Use string representation for SortedSet-based faceting
                     doc.add(new SortedSetDocValuesFacetField(name, String.valueOf(longValue)));
                 }
+                if (singleValued) {
+                    doc.add(new SortedNumericDocValuesField(name, longValue));
+                    luceneIndexService.registerSortableNumericField(name);
+                }
             }
             case DATE -> {
                 final long epochMillis = (Long) value;
@@ -240,6 +260,10 @@ public class JdbcMetadataEnricher {
                 }
                 if (field.stored()) {
                     doc.add(new StoredField(name, epochMillis));
+                }
+                if (singleValued) {
+                    doc.add(new SortedNumericDocValuesField(name, epochMillis));
+                    luceneIndexService.registerSortableNumericField(name);
                 }
                 // DATE fields use range queries; faceting is not typically useful
             }

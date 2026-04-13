@@ -7,6 +7,7 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.KnnFloatVectorField;
 import org.apache.lucene.document.LongPoint;
+import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
@@ -50,8 +51,10 @@ public class DocumentIndexer {
      * Version 9: Added _doc_type field to parent documents and child document support with KNN vector embeddings.
      * Version 10: Added chunk_position stored field to child documents (normalized position 0.0–1.0).
      * Version 11: Added JDBC metadata enrichment support (dbmeta_* fields injected at index time).
+     * Version 12: Added SortedNumericDocValuesField for file_size, created_date, modified_date, indexed_date
+     *             to enable sorting by these native numeric fields.
      */
-    public static final int SCHEMA_VERSION = 11;
+    public static final int SCHEMA_VERSION = 12;
 
     /** Field name used to distinguish parent documents from child (chunk) documents. */
     public static final String DOC_TYPE_FIELD = "_doc_type";
@@ -163,9 +166,10 @@ public class DocumentIndexer {
             doc.add(new SortedSetDocValuesFacetField("file_type", extracted.fileType()));
         }
 
-        // file_size (numeric, stored)
+        // file_size (numeric, stored, sortable)
         doc.add(new LongPoint("file_size", extracted.fileSize()));
         doc.add(new StoredField("file_size", extracted.fileSize()));
+        doc.add(new SortedNumericDocValuesField("file_size", extracted.fileSize()));
 
         // Timestamps
         try {
@@ -177,12 +181,15 @@ public class DocumentIndexer {
 
             doc.add(new LongPoint("created_date", createdDate));
             doc.add(new StoredField("created_date", createdDate));
+            doc.add(new SortedNumericDocValuesField("created_date", createdDate));
 
             doc.add(new LongPoint("modified_date", modifiedDate));
             doc.add(new StoredField("modified_date", modifiedDate));
+            doc.add(new SortedNumericDocValuesField("modified_date", modifiedDate));
 
             doc.add(new LongPoint("indexed_date", indexedDate));
             doc.add(new StoredField("indexed_date", indexedDate));
+            doc.add(new SortedNumericDocValuesField("indexed_date", indexedDate));
         } catch (final IOException e) {
             logger.warn("Failed to read file timestamps for: {}", filePath, e);
         }

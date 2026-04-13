@@ -13,6 +13,7 @@ public record IndexStatsResponse(
         String softwareVersion,
         String buildTimestamp,
         Map<String, DateFieldHint> dateFieldHints,
+        Map<String, String> sortableFields,
         Map<String, LemmatizerCacheMetrics> lemmatizerCacheMetrics,
         QueryRuntimeMetrics queryRuntimeMetrics,
         String error
@@ -59,13 +60,14 @@ public record IndexStatsResponse(
                                               final int schemaVersion, final String softwareVersion,
                                               final String buildTimestamp,
                                               final Map<String, DateFieldHint> dateFieldHints,
+                                              final Map<String, String> sortableFields,
                                               final Map<String, LemmatizerCacheMetrics> lemmatizerCacheMetrics,
                                               final QueryRuntimeMetrics queryRuntimeMetrics) {
         return new IndexStatsResponse(true, documentCount, indexPath, schemaVersion, softwareVersion,
-                buildTimestamp, dateFieldHints, lemmatizerCacheMetrics, queryRuntimeMetrics, null);
+                buildTimestamp, dateFieldHints, sortableFields, lemmatizerCacheMetrics, queryRuntimeMetrics, null);
     }
 
     public static IndexStatsResponse error(final String errorMessage) {
-        return new IndexStatsResponse(false, 0, null, 0, null, null, null, null, null, errorMessage);
+        return new IndexStatsResponse(false, 0, null, 0, null, null, null, null, null, null, errorMessage);
     }
 }

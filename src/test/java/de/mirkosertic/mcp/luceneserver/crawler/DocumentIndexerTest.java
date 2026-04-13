@@ -1,6 +1,7 @@
 package de.mirkosertic.mcp.luceneserver.crawler;
 
 import org.apache.lucene.document.Document;
+import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -516,6 +518,75 @@ class DocumentIndexerTest {
             // FacetsConfig is used internally by DocumentIndexer for faceting
             // We verify it's properly initialized
             assertThat(documentIndexer.getFacetsConfig()).isNotNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("SortedNumericDocValuesField for native numeric fields")
+    class SortedNumericDocValuesTests {
+
+        @Test
+        @DisplayName("Should add SortedNumericDocValuesField for file_size")
+        void shouldAddSortedNumericDocValuesForFileSize() throws IOException {
+            final Path testFile = tempDir.resolve("size-test.txt");
+            Files.writeString(testFile, "content");
+            final ExtractedDocument extracted = new ExtractedDocument(
+                    "content", null, null, "text/plain", 42L
+            );
+
+            final Document doc = documentIndexer.createDocument(testFile, extracted);
+
+            final boolean hasSortedNumericDv = Arrays.stream(doc.getFields("file_size"))
+                    .anyMatch(f -> f instanceof SortedNumericDocValuesField);
+            assertThat(hasSortedNumericDv).as("file_size must have SortedNumericDocValuesField").isTrue();
+        }
+
+        @Test
+        @DisplayName("Should add SortedNumericDocValuesField for created_date")
+        void shouldAddSortedNumericDocValuesForCreatedDate() throws IOException {
+            final Path testFile = tempDir.resolve("created-test.txt");
+            Files.writeString(testFile, "content");
+            final ExtractedDocument extracted = new ExtractedDocument(
+                    "content", null, null, "text/plain", 7L
+            );
+
+            final Document doc = documentIndexer.createDocument(testFile, extracted);
+
+            final boolean hasSortedNumericDv = Arrays.stream(doc.getFields("created_date"))
+                    .anyMatch(f -> f instanceof SortedNumericDocValuesField);
+            assertThat(hasSortedNumericDv).as("created_date must have SortedNumericDocValuesField").isTrue();
+        }
+
+        @Test
+        @DisplayName("Should add SortedNumericDocValuesField for modified_date")
+        void shouldAddSortedNumericDocValuesForModifiedDate() throws IOException {
+            final Path testFile = tempDir.resolve("modified-test.txt");
+            Files.writeString(testFile, "content");
+            final ExtractedDocument extracted = new ExtractedDocument(
+                    "content", null, null, "text/plain", 7L
+            );
+
+            final Document doc = documentIndexer.createDocument(testFile, extracted);
+
+            final boolean hasSortedNumericDv = Arrays.stream(doc.getFields("modified_date"))
+                    .anyMatch(f -> f instanceof SortedNumericDocValuesField);
+            assertThat(hasSortedNumericDv).as("modified_date must have SortedNumericDocValuesField").isTrue();
+        }
+
+        @Test
+        @DisplayName("Should add SortedNumericDocValuesField for indexed_date")
+        void shouldAddSortedNumericDocValuesForIndexedDate() throws IOException {
+            final Path testFile = tempDir.resolve("indexed-test.txt");
+            Files.writeString(testFile, "content");
+            final ExtractedDocument extracted = new ExtractedDocument(
+                    "content", null, null, "text/plain", 7L
+            );
+
+            final Document doc = documentIndexer.createDocument(testFile, extracted);
+
+            final boolean hasSortedNumericDv = Arrays.stream(doc.getFields("indexed_date"))
+                    .anyMatch(f -> f instanceof SortedNumericDocValuesField);
+            assertThat(hasSortedNumericDv).as("indexed_date must have SortedNumericDocValuesField").isTrue();
         }
     }
 }

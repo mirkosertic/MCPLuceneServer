@@ -104,7 +104,7 @@ Get up and running with MCP Lucene Server in three steps.
 
 ### Prerequisites
 
-- **Java 21 or later** - Required to run the server
+- **Java 25 or later** - Required to run the server
 - Maven 3.9+ (only if building from source)
 
 ### Step 1: Get the Server
@@ -218,7 +218,7 @@ Search the Lucene fulltext index using plain text keyword search. Special charac
 - `filters` (optional): Array of structured filters for precise field-level filtering (see **Structured Filters** below)
 - `page` (optional): Page number, 0-based (default: 0)
 - `pageSize` (optional): Results per page (default: 10, max: 100)
-- `sortBy` (optional): Sort field - `_score` (default), `modified_date`, `created_date`, or `file_size`
+- `sortBy` (optional): Sort field - `_score` (default), `modified_date`, `created_date`, `file_size`, or any `dbmeta_*` metadata field (INT/LONG/DATE/KEYWORD) registered from JDBC enrichment
 - `sortOrder` (optional): Sort order - `asc` or `desc` (default: `desc`)
 
 #### `extendedSearch`
@@ -230,19 +230,20 @@ Search the Lucene fulltext index using full Lucene query syntax. Supports Boolea
 - `filters` (optional): Array of structured filters for precise field-level filtering (see **Structured Filters** below)
 - `page` (optional): Page number, 0-based (default: 0)
 - `pageSize` (optional): Results per page (default: 10, max: 100)
-- `sortBy` (optional): Sort field - `_score` (default), `modified_date`, `created_date`, or `file_size`
+- `sortBy` (optional): Sort field - `_score` (default), `modified_date`, `created_date`, `file_size`, or any `dbmeta_*` metadata field (INT/LONG/DATE/KEYWORD) registered from JDBC enrichment
 - `sortOrder` (optional): Sort order - `asc` or `desc` (default: `desc`)
 
 **Sorting Results:**
 
 By default, results are sorted by relevance score (most relevant first). You can sort by metadata fields:
 
-| Sort Field      | Description               | Default Order                  |
-|-----------------|---------------------------|--------------------------------|
-| `_score`        | Relevance score (default) | Descending (best match first)  |
-| `modified_date` | Last modified date        | Descending (most recent first) |
-| `created_date`  | Creation date             | Descending (most recent first) |
-| `file_size`     | File size in bytes        | Descending (largest first)     |
+| Sort Field      | Description                                                                 | Default Order                  |
+|-----------------|-----------------------------------------------------------------------------|--------------------------------|
+| `_score`        | Relevance score (default)                                                   | Descending (best match first)  |
+| `modified_date` | Last modified date                                                          | Descending (most recent first) |
+| `created_date`  | Creation date                                                               | Descending (most recent first) |
+| `file_size`     | File size in bytes                                                          | Descending (largest first)     |
+| `dbmeta_*`      | Any single-valued JDBC metadata field with type INT, LONG, DATE, or KEYWORD | Ascending or descending        |
 
 **Sort Examples:**
 ```jsonc
@@ -844,6 +845,7 @@ Get statistics about the Lucene index, including lemmatizer cache performance me
 - `softwareVersion`: Server software version
 - `buildTimestamp`: Server build timestamp
 - `dateFieldHints`: Min/max date ranges for date fields (`created_date`, `modified_date`, `indexed_date`) in ISO-8601 format — useful for building date range filters
+- `sortableFields`: Map of dynamically registered sortable `dbmeta_*` fields from JDBC metadata enrichment to their sort type (`"numeric"` or `"keyword"`). Null when no JDBC enrichment has registered sortable fields. Use this to discover which `dbmeta_*` fields can be passed as `sortBy`. Native fields (`file_size`, `created_date`, `modified_date`) are always sortable and not listed here.
 - `lemmatizerCacheMetrics`: Performance metrics for the OpenNLP lemmatizer caches (one per language: German and English)
   - `language`: Language code (de or en)
   - `hitRate`: Cache hit rate as a percentage (e.g., "85.3%")
@@ -1783,7 +1785,7 @@ This usually indicates STDIO communication issues:
 ### Claude Desktop doesn't show the server
 
 1. Verify the JAR file path in the configuration is correct and absolute
-2. Check that Java 21+ is installed: `java -version`
+2. Check that Java 25+ is installed: `java -version`
 3. Validate the JSON syntax in the config file
 4. Check Claude Desktop logs for error messages
 5. Try running the JAR manually to check for startup errors:
@@ -2392,10 +2394,12 @@ The query returns a single row with a single column `metadata_json`:
 
 `JdbcMetadataEnricher` reads this JSON response and adds fields to the Lucene document:
 
-- `dbmeta_daily_rate` → `LongPoint(850)` + `StoredField(850)` (searchable and retrievable)
-- `dbmeta_tags` → three `LongPoint` entries for values `12`, `47`, `103` (multi-valued)
+- `dbmeta_daily_rate` → `LongPoint(850)` + `StoredField(850)` + `SortedNumericDocValuesField(850)` (searchable, retrievable, and **sortable**)
+- `dbmeta_tags` → three `LongPoint` entries for values `12`, `47`, `103` (multi-valued — DocValues skipped, so not sortable)
 
 Because `faceted: false`, no `SortedSetDocValuesFacetField` entries are created. The fields are available for targeted queries and range filters without adding overhead to the facet computation on every search request.
+
+**Sorting by JDBC metadata fields:** Single-valued INT, LONG, and DATE fields automatically get a `SortedNumericDocValuesField`, and single-valued KEYWORD fields get a `SortedDocValuesField`. This makes them usable as `sortBy` values in search requests. Multi-valued fields skip DocValues (sorting on multi-valued fields is undefined). Use `getIndexStats` to see which `dbmeta_*` fields are currently registered as sortable via the `sortableFields` map.
 
 **5. Querying at runtime**
 

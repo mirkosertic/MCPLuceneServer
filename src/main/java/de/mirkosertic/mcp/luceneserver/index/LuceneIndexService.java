@@ -181,6 +181,8 @@ public class LuceneIndexService {
     final Set<String> dynamicLongPointFields = new java.util.concurrent.CopyOnWriteArraySet<>();
     final Set<String> dynamicIntPointFields = new java.util.concurrent.CopyOnWriteArraySet<>();
     final Set<String> dynamicDateFields = new java.util.concurrent.CopyOnWriteArraySet<>();
+    private final Set<String> dynamicSortableNumericFields = new java.util.concurrent.CopyOnWriteArraySet<>();
+    private final Set<String> dynamicSortableKeywordFields = new java.util.concurrent.CopyOnWriteArraySet<>();
 
     private final ApplicationConfig config;
     private final String indexPath;
@@ -529,12 +531,25 @@ public class LuceneIndexService {
 
         final boolean reverse = "desc".equals(sortOrder);
 
-        final SortField sortField = switch (sortBy) {
-            case "modified_date" -> new SortedNumericSortField("modified_date", SortField.Type.LONG, reverse);
-            case "created_date" -> new SortedNumericSortField("created_date", SortField.Type.LONG, reverse);
-            case "file_size" -> new SortedNumericSortField("file_size", SortField.Type.LONG, reverse);
-            default -> SortField.FIELD_SCORE;  // Fallback to score
-        };
+        final SortField sortField;
+        switch (sortBy) {
+            case "modified_date" ->
+                sortField = new SortedNumericSortField("modified_date", SortField.Type.LONG, reverse);
+            case "created_date" ->
+                sortField = new SortedNumericSortField("created_date", SortField.Type.LONG, reverse);
+            case "file_size" ->
+                sortField = new SortedNumericSortField("file_size", SortField.Type.LONG, reverse);
+            default -> {
+                if (dynamicSortableNumericFields.contains(sortBy)) {
+                    sortField = new SortedNumericSortField(sortBy, SortField.Type.LONG, reverse);
+                } else if (dynamicSortableKeywordFields.contains(sortBy)) {
+                    sortField = new org.apache.lucene.search.SortedSetSortField(sortBy, reverse);
+                } else {
+                    logger.warn("Sort field '{}' has no DocValues backing — ordering may be undefined", sortBy);
+                    sortField = SortField.FIELD_SCORE;
+                }
+            }
+        }
 
         // Always include score as secondary sort for tie-breaking
         return new Sort(sortField, SortField.FIELD_SCORE);
@@ -590,7 +605,7 @@ public class LuceneIndexService {
             final Query mainQuery;
             final Query highlightQuery;
             if (queryString == null || queryString.isBlank()) {
-                mainQuery = new MatchAllDocsQuery();
+                mainQuery = MatchAllDocsQuery.INSTANCE;
                 highlightQuery = mainQuery;
             } else {
                 // In SIMPLE mode, escape special Lucene characters so the query is treated as literals.
@@ -872,7 +887,7 @@ public class LuceneIndexService {
             // Build main query (with stemming and leading wildcard rewriting)
             final Query mainQuery;
             if (request.effectiveQuery() == null || request.effectiveQuery().isBlank()) {
-                mainQuery = new MatchAllDocsQuery();
+                mainQuery = MatchAllDocsQuery.INSTANCE;
             } else {
                 // In SIMPLE mode, escape special Lucene characters so the query is treated as literals.
                 final String effectiveQueryString = request.effectiveQueryMode() == QueryMode.SIMPLE
@@ -988,6 +1003,44 @@ public class LuceneIndexService {
     public void registerIntPointField(final String fieldName) {
         dynamicIntPointFields.add(fieldName);
         logger.debug("Registered dynamic IntPoint field: {}", fieldName);
+    }
+
+    /**
+     * Register a dynamically created sortable numeric field (backed by SortedNumericDocValuesField).
+     * The field will be available as a sort target in search requests.
+     *
+     * @param fieldName the fully-qualified Lucene field name (e.g. "dbmeta_priority")
+     */
+    public void registerSortableNumericField(final String fieldName) {
+        if (dynamicSortableNumericFields.add(fieldName)) {
+            logger.debug("Registered dynamic sortable numeric field: {}", fieldName);
+        }
+    }
+
+    /**
+     * Register a dynamically created sortable keyword field (backed by SortedDocValuesField).
+     * The field will be available as a sort target in search requests.
+     *
+     * @param fieldName the fully-qualified Lucene field name (e.g. "dbmeta_status")
+     */
+    public void registerSortableKeywordField(final String fieldName) {
+        if (dynamicSortableKeywordFields.add(fieldName)) {
+            logger.debug("Registered dynamic sortable keyword field: {}", fieldName);
+        }
+    }
+
+    /**
+     * Returns all dynamically registered sortable fields with their type ("numeric" or "keyword").
+     * Native sortable fields (modified_date, created_date, file_size) are not included here
+     * because they are always available.
+     *
+     * @return map from field name to sort type
+     */
+    public Map<String, String> getSortableFields() {
+        final Map<String, String> result = new HashMap<>();
+        dynamicSortableNumericFields.forEach(f -> result.put(f, "numeric"));
+        dynamicSortableKeywordFields.forEach(f -> result.put(f, "keyword"));
+        return result;
     }
 
     private boolean isIntPointField(final String field) {
@@ -1375,7 +1428,7 @@ public class LuceneIndexService {
         final IndexSearcher searcher = searcherManager.acquire();
         try {
             // MatchAllDocsQuery returns every document in the index
-            final TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), Integer.MAX_VALUE);
+            final TopDocs topDocs = searcher.search(MatchAllDocsQuery.INSTANCE, Integer.MAX_VALUE);
             final Map<String, Long> result = new HashMap<>(topDocs.scoreDocs.length * 2);
 
             for (final ScoreDoc scoreDoc : topDocs.scoreDocs) {
@@ -2195,7 +2248,7 @@ public class LuceneIndexService {
                 final Map<String, Long> distribution = new HashMap<>();
                 final FacetsCollectorManager fcm = new FacetsCollectorManager();
                 final FacetsCollectorManager.FacetsResult result =
-                        FacetsCollectorManager.search(searcher, new MatchAllDocsQuery(), 1, fcm);
+                        FacetsCollectorManager.search(searcher, MatchAllDocsQuery.INSTANCE, 1, fcm);
 
                 try {
                     final SortedSetDocValuesReaderState state = new DefaultSortedSetDocValuesReaderState(
