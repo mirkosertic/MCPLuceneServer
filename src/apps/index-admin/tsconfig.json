@@ -13,7 +13,8 @@
     "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "allowArbitraryExtensions": true
   },
   "include": ["src", "server.ts"]
 }
