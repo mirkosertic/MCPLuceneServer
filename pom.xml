@@ -359,7 +359,7 @@
 		<dependency>
 			<groupId>com.microsoft.onnxruntime</groupId>
 			<artifactId>onnxruntime</artifactId>
-			<version>1.24.3</version>
+			<version>1.25.0</version>
 		</dependency>
 
 		<!-- Tokenizer -->
