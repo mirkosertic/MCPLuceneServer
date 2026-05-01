@@ -1,5 +1,6 @@
 package de.mirkosertic.mcp.luceneserver.mcp.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import de.mirkosertic.mcp.luceneserver.mcp.Description;
 
 import java.util.List;
@@ -55,7 +56,11 @@ public record SearchDocument(
     Long indexedDate,
 
     @Description("Highlighted passages from the document content with quality metadata")
-    List<Passage> passages
+    List<Passage> passages,
+
+    @JsonProperty("_actions")
+    @Description("Pre-computed tool calls for fetching the full document content")
+    List<SearchAction> actions
 ) {
     /**
      * Builder for SearchDocument to simplify construction from Lucene Document.
@@ -80,6 +85,7 @@ public record SearchDocument(
         private Long modifiedDate;
         private Long indexedDate;
         private List<Passage> passages = List.of();
+        private List<SearchAction> actions = null;
 
         public Builder score(final double score) { this.score = score; return this; }
         public Builder filePath(final String filePath) { this.filePath = filePath; return this; }
@@ -112,11 +118,12 @@ public record SearchDocument(
             return this;
         }
         public Builder passages(final List<Passage> passages) { this.passages = passages; return this; }
+        public Builder actions(final List<SearchAction> actions) { this.actions = actions; return this; }
 
         public SearchDocument build() {
             return new SearchDocument(score, filePath, fileName, title, author, creator,
                 subject, language, fileExtension, fileType, fileSize, createdDate,
-                modifiedDate, indexedDate, passages);
+                modifiedDate, indexedDate, passages, actions);
         }
     }
 }

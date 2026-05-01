@@ -261,7 +261,9 @@ public class SearchTools implements McpToolProvider {
                     result.hasPreviousPage(),
                     facets,
                     result.activeFilters(),
-                    durationMs
+                    durationMs,
+                    null,
+                    null
             );
 
             logger.info("SimpleSearch completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions, {} active filters",
@@ -334,7 +336,9 @@ public class SearchTools implements McpToolProvider {
                     result.hasPreviousPage(),
                     facets,
                     result.activeFilters(),
-                    durationMs
+                    durationMs,
+                    null,
+                    null
             );
 
             logger.info("ExtendedSearch completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions, {} active filters",
@@ -385,7 +389,9 @@ public class SearchTools implements McpToolProvider {
                     result.hasPreviousPage(),
                     Map.of(),
                     List.of(),
-                    result.embeddingDurationMs()
+                    result.embeddingDurationMs(),
+                    null,
+                    null
             );
 
             logger.info("SemanticSearch completed in {}ms: {} total hits (above threshold={})",
