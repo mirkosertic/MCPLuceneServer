@@ -52,6 +52,9 @@ public class SearchTools implements McpToolProvider {
                     - faceted fields: language, file_extension, file_type, author
                     - date fields (ISO-8601): created_date, modified_date, indexed_date
                     - numeric: file_size
+                    IMPORTANT: On an initial search, omit filters — valid field values are unknown until the index \
+                    returns results. Use the _actions.drillDown entries from the response to refine results with \
+                    pre-validated values from the actual index. Never guess filter values.
 
                     SORT: sortBy=_score (default), modified_date, created_date, file_size; sortOrder=desc/asc
 
@@ -67,7 +70,7 @@ public class SearchTools implements McpToolProvider {
 
                     SYNTAX: AND/OR/NOT, grouping (), phrases "...", wildcards *, ?, fuzzy~, proximity""~N, field:value
 
-                    FILTERS and SORT: same as simpleSearch
+                    FILTERS and SORT: same as simpleSearch (see simpleSearch for filter guidance)
 
                     RESPONSE: includes _search (current search state) and _actions (ready-to-use tool calls for \
                     prevPage/nextPage pagination, drillDown facet narrowing, and fetchContent for full document access). \
@@ -83,6 +86,10 @@ public class SearchTools implements McpToolProvider {
 
                     similarityThreshold (0.0–1.0, default 0.70): lower values return more results with broader semantic match; \
                     higher values return only closely matching documents.
+
+                    FILTERS: supports the same filter fields as simpleSearch. \
+                    IMPORTANT: On an initial search, omit filters — use the _actions entries from the response \
+                    for pre-validated filter values from the actual index. Never guess filter values.
 
                     RESPONSE: includes _search (current search state) and _actions with prevPage/nextPage for pagination \
                     and fetchContent per document for full document access. Pass action parameters directly to the named \
