@@ -47,34 +47,46 @@ public class SearchTools implements McpToolProvider {
             """
                     Search documents using plain text keywords. Special characters are treated as literals (no Lucene syntax). \
                     Supports filters, pagination, and sorting. Uses BM25 with stemming for German and English.
-                    
+
                     FILTERS: use 'filters' array with operators: eq, in, not, not_in, range
                     - faceted fields: language, file_extension, file_type, author
                     - date fields (ISO-8601): created_date, modified_date, indexed_date
                     - numeric: file_size
-                    
-                    SORT: sortBy=_score (default), modified_date, created_date, file_size; sortOrder=desc/asc""";
+
+                    SORT: sortBy=_score (default), modified_date, created_date, file_size; sortOrder=desc/asc
+
+                    RESPONSE: includes _search (current search state) and _actions (ready-to-use tool calls for \
+                    prevPage/nextPage pagination, drillDown facet narrowing, and fetchContent for full document access). \
+                    Pass action parameters directly to the named tool without modification.""";
 
     private static final String EXTENDED_SEARCH_DESCRIPTION =
             """
                     Search documents using full Lucene query syntax. Supports Boolean operators (AND, OR, NOT), \
                     wildcards (*word, word*, *word*), fuzzy (~), proximity ("phrase"~5), field-specific queries, \
                     and phrase matching. Uses BM25 with stemming.
-                    
+
                     SYNTAX: AND/OR/NOT, grouping (), phrases "...", wildcards *, ?, fuzzy~, proximity""~N, field:value
-                    
-                    FILTERS and SORT: same as simpleSearch""";
+
+                    FILTERS and SORT: same as simpleSearch
+
+                    RESPONSE: includes _search (current search state) and _actions (ready-to-use tool calls for \
+                    prevPage/nextPage pagination, drillDown facet narrowing, and fetchContent for full document access). \
+                    Pass action parameters directly to the named tool without modification.""";
 
     private static final String SEMANTIC_SEARCH_DESCRIPTION =
             """
                     Search documents using natural language semantic similarity (pure KNN embedding search). \
                     Finds documents that are semantically related to the query even when exact keywords don't match. \
                     Results are ordered by cosine similarity — no BM25, no sort options.
-                    
+
                     Requires VECTOR_MODEL to be configured.
-                    
+
                     similarityThreshold (0.0–1.0, default 0.70): lower values return more results with broader semantic match; \
-                    higher values return only closely matching documents.""";
+                    higher values return only closely matching documents.
+
+                    RESPONSE: includes _search (current search state) and _actions with prevPage/nextPage for pagination \
+                    and fetchContent per document for full document access. Pass action parameters directly to the named \
+                    tool without modification.""";
 
     private static final String PROFILE_SEMANTIC_SEARCH_DESCRIPTION =
             """

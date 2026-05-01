@@ -1348,9 +1348,66 @@ Search results are optimized for MCP responses (< 1 MB) and include:
       { "value": "John Doe", "count": 15 },
       { "value": "Jane Smith", "count": 10 }
     ]
-  }
+  },
+  "_search": {
+    "query": "contract",
+    "filters": [],
+    "page": 0,
+    "pageSize": 10
+  },
+  "_actions": [
+    {
+      "type": "nextPage",
+      "tool": "simpleSearch",
+      "parameters": { "query": "contract", "filters": [], "page": 1, "pageSize": 10 }
+    },
+    {
+      "type": "drillDown",
+      "tool": "simpleSearch",
+      "parameters": { "query": "contract", "filters": [{ "field": "language", "operator": "eq", "value": "en" }], "page": 0, "pageSize": 10 },
+      "hits": 25
+    }
+  ]
 }
 ```
+
+Each document in `documents[]` also carries its own `_actions` block:
+
+```json
+{
+  "score": 0.85,
+  "file_path": "/path/to/example.pdf",
+  "_actions": [
+    {
+      "type": "fetchContent",
+      "tool": "getDocumentDetails",
+      "parameters": { "filePath": "/path/to/example.pdf" }
+    }
+  ]
+}
+```
+
+**HATEOAS-Style `_actions` (LLM Chaining):**
+
+Every search response includes two pre-computed action blocks that enable an LLM to chain tool calls without reasoning about parameter mapping:
+
+- **`_search`** -- Captures the exact search state (query, filters, page, pageSize) used to produce this response. Useful for introspection and for constructing follow-up queries.
+
+- **Response-level `_actions`** -- Contains ready-to-use tool calls for navigating the result set:
+
+  | Action type | When present | Description |
+  |---|---|---|
+  | `prevPage` | page > 0 | Go to the previous result page. Pass `parameters` directly to the named `tool`. |
+  | `nextPage` | hasNextPage = true | Go to the next result page. Pass `parameters` directly to the named `tool`. |
+  | `drillDown` | facets available | Narrow results by adding a facet value as a filter. The `hits` field shows expected result count. Limited to the top 2 values per facet dimension; only values not already active as filters are included. |
+
+- **Document-level `_actions`** -- Each document in `documents[]` includes:
+
+  | Action type | Description |
+  |---|---|
+  | `fetchContent` | Fetch the full document text and metadata using `getDocumentDetails`. The `filePath` is pre-filled. |
+
+To use an action, call the `tool` named in the action with the `parameters` map passed as-is — no transformation required.
 
 **Key Features:**
 
