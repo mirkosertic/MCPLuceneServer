@@ -5,6 +5,7 @@ import de.mirkosertic.mcp.luceneserver.index.LuceneIndexService;
 import de.mirkosertic.mcp.luceneserver.index.QueryRuntimeStats;
 import de.mirkosertic.mcp.luceneserver.index.SemanticSearchResult;
 import de.mirkosertic.mcp.luceneserver.mcp.SchemaGenerator;
+import de.mirkosertic.mcp.luceneserver.mcp.SearchActionGenerator;
 import de.mirkosertic.mcp.luceneserver.mcp.ToolResultHelper;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ExtendedSearchRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.GetTopTermsRequest;
@@ -13,8 +14,11 @@ import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileQueryResponse;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileSemanticSearchRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.ProfileSemanticSearchResponse;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchAction;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchDocument;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchFilter;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchResponse;
+import de.mirkosertic.mcp.luceneserver.mcp.dto.SearchState;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SemanticSearchRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SimpleSearchRequest;
 import de.mirkosertic.mcp.luceneserver.mcp.dto.SuggestTermsRequest;
@@ -84,12 +88,14 @@ public class SearchTools implements McpToolProvider {
     private final LuceneIndexService indexService;
     private final QueryRuntimeStats queryRuntimeStats;
     private final ApplicationConfig config;
+    private final SearchActionGenerator actionGenerator;
 
     public SearchTools(final LuceneIndexService indexService, final QueryRuntimeStats queryRuntimeStats,
             final ApplicationConfig config) {
         this.indexService = indexService;
         this.queryRuntimeStats = queryRuntimeStats;
         this.config = config;
+        this.actionGenerator = new SearchActionGenerator();
     }
 
     @Override
@@ -251,8 +257,39 @@ public class SearchTools implements McpToolProvider {
                                     .collect(Collectors.toList())
                     ));
 
+            final SearchState state = new SearchState(
+                    request.query() != null ? request.query() : "",
+                    effectiveFilters,
+                    result.page(),
+                    result.pageSize()
+            );
+
+            final List<SearchAction> responseActions = actionGenerator.generateResponseActions(
+                    "simpleSearch", state, facets, result.hasNextPage(), result.hasPreviousPage());
+
+            final List<SearchDocument> enrichedDocuments = result.documents().stream()
+                    .map(doc -> SearchDocument.builder()
+                            .score(doc.score())
+                            .filePath(doc.filePath())
+                            .fileName(doc.fileName())
+                            .title(doc.title())
+                            .author(doc.author())
+                            .creator(doc.creator())
+                            .subject(doc.subject())
+                            .language(doc.language())
+                            .fileExtension(doc.fileExtension())
+                            .fileType(doc.fileType())
+                            .fileSize(doc.fileSize())
+                            .createdDate(doc.createdDate())
+                            .modifiedDate(doc.modifiedDate())
+                            .indexedDate(doc.indexedDate())
+                            .passages(doc.passages())
+                            .actions(actionGenerator.generateDocumentActions("simpleSearch", doc.filePath()))
+                            .build())
+                    .toList();
+
             final SearchResponse response = SearchResponse.success(
-                    result.documents(),
+                    enrichedDocuments,
                     result.totalHits(),
                     result.page(),
                     result.pageSize(),
@@ -262,8 +299,8 @@ public class SearchTools implements McpToolProvider {
                     facets,
                     result.activeFilters(),
                     durationMs,
-                    null,
-                    null
+                    state,
+                    responseActions
             );
 
             logger.info("SimpleSearch completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions, {} active filters",
@@ -326,8 +363,39 @@ public class SearchTools implements McpToolProvider {
                                     .collect(Collectors.toList())
                     ));
 
+            final SearchState state = new SearchState(
+                    request.query() != null ? request.query() : "",
+                    effectiveFilters,
+                    result.page(),
+                    result.pageSize()
+            );
+
+            final List<SearchAction> responseActions = actionGenerator.generateResponseActions(
+                    "extendedSearch", state, facets, result.hasNextPage(), result.hasPreviousPage());
+
+            final List<SearchDocument> enrichedDocuments = result.documents().stream()
+                    .map(doc -> SearchDocument.builder()
+                            .score(doc.score())
+                            .filePath(doc.filePath())
+                            .fileName(doc.fileName())
+                            .title(doc.title())
+                            .author(doc.author())
+                            .creator(doc.creator())
+                            .subject(doc.subject())
+                            .language(doc.language())
+                            .fileExtension(doc.fileExtension())
+                            .fileType(doc.fileType())
+                            .fileSize(doc.fileSize())
+                            .createdDate(doc.createdDate())
+                            .modifiedDate(doc.modifiedDate())
+                            .indexedDate(doc.indexedDate())
+                            .passages(doc.passages())
+                            .actions(actionGenerator.generateDocumentActions("extendedSearch", doc.filePath()))
+                            .build())
+                    .toList();
+
             final SearchResponse response = SearchResponse.success(
-                    result.documents(),
+                    enrichedDocuments,
                     result.totalHits(),
                     result.page(),
                     result.pageSize(),
@@ -337,8 +405,8 @@ public class SearchTools implements McpToolProvider {
                     facets,
                     result.activeFilters(),
                     durationMs,
-                    null,
-                    null
+                    state,
+                    responseActions
             );
 
             logger.info("ExtendedSearch completed in {}ms: {} total hits, returning page {} of {}, {} facet dimensions, {} active filters",
@@ -372,15 +440,47 @@ public class SearchTools implements McpToolProvider {
                 request.effectivePageSize(), request.effectiveSimilarityThreshold());
 
         try {
+            final List<SearchFilter> effectiveFilters = request.effectiveFilters();
             final SemanticSearchResult result = indexService.semanticSearch(
                     request.effectiveQuery() != null ? request.effectiveQuery() : "",
-                    request.effectiveFilters(),
+                    effectiveFilters,
                     request.effectivePage(),
                     request.effectivePageSize(),
                     request.effectiveSimilarityThreshold());
 
+            final SearchState state = new SearchState(
+                    request.query() != null ? request.query() : "",
+                    effectiveFilters,
+                    result.page(),
+                    result.pageSize()
+            );
+
+            final List<SearchAction> responseActions = actionGenerator.generateResponseActions(
+                    "semanticSearch", state, Map.of(), result.hasNextPage(), result.hasPreviousPage());
+
+            final List<SearchDocument> enrichedDocuments = result.documents().stream()
+                    .map(doc -> SearchDocument.builder()
+                            .score(doc.score())
+                            .filePath(doc.filePath())
+                            .fileName(doc.fileName())
+                            .title(doc.title())
+                            .author(doc.author())
+                            .creator(doc.creator())
+                            .subject(doc.subject())
+                            .language(doc.language())
+                            .fileExtension(doc.fileExtension())
+                            .fileType(doc.fileType())
+                            .fileSize(doc.fileSize())
+                            .createdDate(doc.createdDate())
+                            .modifiedDate(doc.modifiedDate())
+                            .indexedDate(doc.indexedDate())
+                            .passages(doc.passages())
+                            .actions(actionGenerator.generateDocumentActions("semanticSearch", doc.filePath()))
+                            .build())
+                    .toList();
+
             final SearchResponse response = SearchResponse.success(
-                    result.documents(),
+                    enrichedDocuments,
                     result.totalHits(),
                     result.page(),
                     result.pageSize(),
@@ -390,8 +490,8 @@ public class SearchTools implements McpToolProvider {
                     Map.of(),
                     List.of(),
                     result.embeddingDurationMs(),
-                    null,
-                    null
+                    state,
+                    responseActions
             );
 
             logger.info("SemanticSearch completed in {}ms: {} total hits (above threshold={})",
