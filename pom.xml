@@ -38,7 +38,7 @@
 		<snakeyaml.version>2.6</snakeyaml.version>
 		<jackson.version>2.21.3</jackson.version>
 		<jackson3.version>3.1.2</jackson3.version>
-		<opennlp.version>2.5.8</opennlp.version>
+		<opennlp.version>2.5.9</opennlp.version>
 		<opennlp.models.version>1.3.0</opennlp.models.version>
 		<jetty.version>12.1.8</jetty.version>
 		<junit.version>6.0.3</junit.version>
