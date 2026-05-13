@@ -10,7 +10,7 @@
     "@modelcontextprotocol/ext-apps": "^1.7.1"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
+    "@types/node": "^25.7.0",
     "cross-env": "^10.1.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.12",
