@@ -7,7 +7,7 @@
     "dev": "tsc --noEmit && cross-env INPUT=indexadmin-app.html vite dev"
   },
   "dependencies": {
-    "@modelcontextprotocol/ext-apps": "^1.7.4"
+    "@modelcontextprotocol/ext-apps": "^1.7.5"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
