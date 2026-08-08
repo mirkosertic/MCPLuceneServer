@@ -9,15 +9,18 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+      - "actions"
   - package-ecosystem: "maven" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
     labels:
       - "dependencies"
+      - "maven"
   - package-ecosystem: "npm" # See documentation for possible values
     directory: "src/apps/index-admin" # Location of package manifests
     schedule:
       interval: "daily"
     labels:
       - "dependencies"
+      - "node"
