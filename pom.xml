@@ -35,7 +35,7 @@
 		<tika.version>3.3.0</tika.version>
 		<logback.version>1.6.1</logback.version>
 		<slf4j.version>2.0.18</slf4j.version>
-		<snakeyaml.version>2.6</snakeyaml.version>
+		<snakeyaml.version>2.7</snakeyaml.version>
 		<jackson.version>2.22.1</jackson.version>
 		<jackson3.version>3.2.1</jackson3.version>
 		<opennlp.version>2.5.9</opennlp.version>
